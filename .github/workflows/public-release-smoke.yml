@@ -27,6 +27,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Linux graphics runtime
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1
       - name: Download the public package
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,6 +63,7 @@ jobs:
       - name: Start a clean Android emulator
         run: |
           set -euo pipefail
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
           sudo chmod a+rw /dev/kvm
           sdkmanager 'system-images;android-34;google_apis;x86_64' >/dev/null
           echo no | avdmanager create avd --force -n fulldex-public -k 'system-images;android-34;google_apis;x86_64'
@@ -73,6 +77,7 @@ jobs:
       - name: Install and launch the unmodified public APK
         run: |
           set -euo pipefail
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
           adb install downloads/pokemon-ds-wide-android.apk
           adb shell am start -n io.github.mamesj.pokemonds/.GameActivity
           sleep 10
