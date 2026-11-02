@@ -1,0 +1,89 @@
+name: Public release startup checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [hotfix/android-launcher-startup]
+    paths: [.github/workflows/public-release-smoke.yml, tools/tests/public_release_smoke.py]
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            asset: pokemon-ds-wide-pc-linux-x86_64.tar.gz
+          - os: windows-latest
+            asset: pokemon-ds-wide-pc-windows-x86_64.zip
+          - os: macos-15
+            asset: pokemon-ds-wide-pc-macos-arm64.zip
+          - os: macos-15-intel
+            asset: pokemon-ds-wide-pc-macos-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the public package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download pc-v1 -R "${{ github.repository }}" -p "${{ matrix.asset }}" -D downloads
+      - name: Launch with isolated data and an empty library
+        run: python tools/tests/public_release_smoke.py "downloads/${{ matrix.asset }}" result
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-startup-${{ matrix.os }}
+          path: |
+            result/result.json
+            result/launcher.bmp
+            result/process-output.log
+            result/**/game.log
+          if-no-files-found: warn
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the public APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p result
+          gh release download android-v1 -R "${{ github.repository }}" -p pokemon-ds-wide-android.apk -D downloads
+      - name: Start a clean Android emulator
+        run: |
+          set -euo pipefail
+          sudo chmod a+rw /dev/kvm
+          sdkmanager 'system-images;android-34;google_apis;x86_64' >/dev/null
+          echo no | avdmanager create avd --force -n fulldex-public -k 'system-images;android-34;google_apis;x86_64'
+          "$ANDROID_HOME/emulator/emulator" -avd fulldex-public -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >result/emulator.log 2>&1 &
+          adb wait-for-device
+          for i in $(seq 1 180); do
+            if [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Install and launch the unmodified public APK
+        run: |
+          set -euo pipefail
+          adb install downloads/pokemon-ds-wide-android.apk
+          adb shell am start -n io.github.mamesj.pokemonds/.GameActivity
+          sleep 10
+          adb shell pidof io.github.mamesj.pokemonds
+          adb exec-out screencap -p >result/launcher.png
+          adb logcat -d >result/logcat.txt
+          python -m pip install Pillow >/dev/null
+          python -c "from PIL import Image; im=Image.open('result/launcher.png').convert('RGB'); assert len(im.resize((120,200)).getcolors(24000) or []) > 4, 'Uniform/black launcher'"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-startup-android-clean
+          path: result/
+          if-no-files-found: warn
