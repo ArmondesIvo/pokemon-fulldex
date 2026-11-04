@@ -4742,6 +4742,7 @@ int main(int argc, char** argv)
         M_CDETAIL_TOGGLE, M_CINFO, M_BACKUPS, M_RESTORE_CONFIRM, M_LOAD_CONFIRM,
         M_MATCHUPS, M_TYPE1, M_TYPE2, M_SECOND_SCREEN,
         M_COMPANION, M_CPARTY, M_CBAG, M_CDEX, M_CLOCATION, M_CMAP, M_CENCOUNTERS, M_REFERENCE, M_REFERENCE_KIND, M_REFERENCE_QUERY, M_CPOCKET, M_CDEX_FILTER, M_CBATTLE, M_CGUIDE, M_CGUIDE_REVEAL, M_NUZLOCKE, M_RUN_ENABLED, M_RUN_RESET, M_RUN_RESET_CONFIRM, M_QUICK_ACTIONS, M_OPEN_PC, M_HUB_SAVE, M_HUB_LOAD, M_HUB_CHEATS, M_HUB_FAST, M_HUB_SETTINGS, M_HUB_QUIT,
+        M_QUIT_YES, M_RESET_YES, // (QUIT GAME / RESET GAME asked first: PAGE_QUIT_CONFIRM)
         M_EXTRAS, M_EXTRA0=92000, M_EXTRA_END=92006, M_PLAYBACK=93000, M_FAST_SPEED, M_SMART_FAST, M_SLOW_MOTION, M_REWIND_MB, M_REWIND, M_TURBO_A, M_SCREEN_FILTER, M_COMPANION_OVERLAY, M_PARTY_HUD,
         M_STATES, M_SLOT_SAVE, M_SLOT_LOAD, M_SLOT_PREVIOUS, M_UNDO_LOAD,
         M_CPARTY0=80000, M_CDEX0=81000, M_CITEM0=83000, M_RRESULT0=86000, M_SLOT0=90000, M_GUIDE0=91000,
@@ -4751,7 +4752,7 @@ int main(int argc, char** argv)
         M_CHEAT_ON = 49000, // ON NOW: every cheat that is on, from any folder
         M_CFOLDER0 = 50000  // (M_CFOLDER0 + i: folder i of the cheat database)
     };
-    enum { PAGE_MAIN, PAGE_KEYS, PAGE_DISPLAY, PAGE_GRAPHICS, PAGE_CONTROLS, PAGE_CHEATS, PAGE_RA, PAGE_SOUND, PAGE_RA_LIST, PAGE_RA_DETAIL, PAGE_CSEARCH, PAGE_CDETAIL, PAGE_CINFO, PAGE_BACKUPS, PAGE_RESTORE_CONFIRM, PAGE_LOAD_CONFIRM, PAGE_MATCHUPS, PAGE_COMPANION, PAGE_CPARTY, PAGE_CMON, PAGE_CBAG, PAGE_CDEX, PAGE_CDEXDETAIL, PAGE_CLOCATION, PAGE_PLAYBACK, PAGE_STATES, PAGE_SLOT, PAGE_CBATTLE, PAGE_CGUIDE, PAGE_CGUIDEENTRY, PAGE_NUZLOCKE, PAGE_RUN_CONFIRM, PAGE_QUICK_ACTIONS, PAGE_EXTRAS, PAGE_CITEM, PAGE_REFERENCE, PAGE_RSEARCH, PAGE_RDETAIL, PAGE_CMAP, PAGE_CENCOUNTERS, PAGE_HUB_SAVE, PAGE_HUB_LOAD, PAGE_HUB_CHEATS, PAGE_HUB_SETTINGS, PAGE_HUB_QUIT, PAGE_COUNT };
+    enum { PAGE_MAIN, PAGE_KEYS, PAGE_DISPLAY, PAGE_GRAPHICS, PAGE_CONTROLS, PAGE_CHEATS, PAGE_RA, PAGE_SOUND, PAGE_RA_LIST, PAGE_RA_DETAIL, PAGE_CSEARCH, PAGE_CDETAIL, PAGE_CINFO, PAGE_BACKUPS, PAGE_RESTORE_CONFIRM, PAGE_LOAD_CONFIRM, PAGE_MATCHUPS, PAGE_COMPANION, PAGE_CPARTY, PAGE_CMON, PAGE_CBAG, PAGE_CDEX, PAGE_CDEXDETAIL, PAGE_CLOCATION, PAGE_PLAYBACK, PAGE_STATES, PAGE_SLOT, PAGE_CBATTLE, PAGE_CGUIDE, PAGE_CGUIDEENTRY, PAGE_NUZLOCKE, PAGE_RUN_CONFIRM, PAGE_QUICK_ACTIONS, PAGE_EXTRAS, PAGE_CITEM, PAGE_REFERENCE, PAGE_RSEARCH, PAGE_RDETAIL, PAGE_CMAP, PAGE_CENCOUNTERS, PAGE_HUB_SAVE, PAGE_HUB_LOAD, PAGE_HUB_CHEATS, PAGE_HUB_SETTINGS, PAGE_HUB_QUIT, PAGE_QUIT_CONFIRM, PAGE_COUNT };
     int companionType1 = 0, companionType2 = CompanionTypes::None;
     // ACHIEVEMENTS (RETROACHIEVEMENTS' list): read from the set as the page opens.
     std::vector<Achievements::Row> achList;
@@ -4809,8 +4810,11 @@ int main(int argc, char** argv)
     bool saveEdge = false, loadEdge = false; // (SAVE STATE / LOAD STATE: the button just pressed)
     const int ctlRow0 = ctlHasKeyboard ? 1 : 0; // the first action's row
     const int ctlRowReset = ctlRow0 + Controls::COUNT, ctlRowBack = ctlRowReset + 1;
+    bool confirmReset = false; // PAGE_QUIT_CONFIRM asks about RESET GAME (else QUIT GAME)
     auto buildMenu = [&]() {
         menu.columns = menuPage == PAGE_MAIN ? 4 : 0; // (the first page: eight glass tiles)
+        menu.style = 0; // (a list; settings pages set 1 below)
+        menu.pageIcon = -1;
         if (menuPage == PAGE_KEYS)
         {
             menuIds.clear();
@@ -4842,9 +4846,9 @@ int main(int argc, char** argv)
         if (menuPage == PAGE_MAIN)
         {
             // Eight glass tiles (ui.h, Menu::DrawTiles). Everything the old list had is one step in:
-            // SAVE / LOAD (states, slots, backups), CHEATS (and other-version Pokemon), FAST FORWARD
-            // (PLAYBACK), SETTINGS (display, sound, graphics, controls, optional features, companion,
-            // type matchups) and QUIT GAME (quit, reset).
+            // RESUME, SAVE / LOAD (states, slots, backups), CHEATS (and other-version Pokemon), COMPANION
+            // (its own page), SETTINGS (display, graphics, playback with fast forward, sound, controls,
+            // optional features, quick actions, type matchups) and QUIT GAME (quit, reset).
             auto tile = [&](int id, const char* label, const std::string& value, int icon, bool off = false) {
                 add(id, label, value);
                 menu.items.back().icon = icon;
@@ -4854,7 +4858,7 @@ int main(int argc, char** argv)
             tile(M_HUB_SAVE, "SAVE", "", Glass::I_SAVE);
             tile(M_HUB_LOAD, "LOAD", "", Glass::I_LOAD);
             tile(M_HUB_CHEATS, "CHEATS", cheats.On() ? std::to_string(cheats.On()) + " ON" : "", Glass::I_CHEATS);
-            tile(M_HUB_FAST, "FAST FORWARD", fastLock ? "ON" : "", Glass::I_FAST);
+            tile(M_COMPANION, "COMPANION", "", Glass::I_POKEBALL);
             tile(M_RA, "ACHIEVEMENTS", Achievements::Available() && cfg.ra.on ? "ON" : "", Glass::I_TROPHY, !Achievements::Available());
             tile(M_HUB_SETTINGS, "SETTINGS", "", Glass::I_GEAR);
             tile(M_HUB_QUIT, "QUIT GAME", "", Glass::I_POWER);
@@ -4883,10 +4887,10 @@ int main(int argc, char** argv)
         {
             add(M_DISPLAY, "DISPLAY", "");
             add(M_GRAPHICS, "GRAPHICS", "");
+            add(M_PLAYBACK, "PLAYBACK", fastLock ? "FAST FORWARD ON" : "", true); // (fast forward, speed, slow motion, turbo, rewind)
             add(M_SOUND, "SOUND", "");
             add(M_CONTROLMENU, "CONTROLS", "");
             add(M_EXTRAS, "OPTIONAL FEATURES", "");
-            add(M_COMPANION, "COMPANION", "");
             if(cfg.quickActions&&pokeActions.Supported()&&!opt.lockstep)add(M_QUICK_ACTIONS,"QUICK ACTIONS","");
             add(M_MATCHUPS, "TYPE MATCHUPS", "");
             add(M_BACK, "BACK", "");
@@ -4896,6 +4900,12 @@ int main(int argc, char** argv)
             add(M_QUIT, "QUIT GAME", "");
             add(M_RESET, "RESET GAME", "");
             add(M_BACK, "BACK", "");
+        }
+        else if (menuPage == PAGE_QUIT_CONFIRM)
+        {
+            // (Asked first: either loses what was played since the last save in the game.)
+            add(confirmReset ? M_RESET_YES : M_QUIT_YES, confirmReset ? "RESET GAME" : "QUIT GAME", "");
+            add(M_BACK, "CANCEL", "");
         }
         else if(menuPage==PAGE_EXTRAS)
         {
@@ -4907,34 +4917,86 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_DISPLAY)
         {
+            // A settings page (ui_settings.h): Back in the header, the rows in two sections, and a
+            // preview of the chosen row with a picture of each choice made from the paused game.
+            menu.style = 1;
+            menu.pageIcon = Glass::I_MONITOR;
+            add(M_BACK, "BACK", "");
+            menu.items.back().kind = Menu::K_BACK;
+            auto section = [&](const char* label, int icon) {
+                add(M_NOTHING, label, "", true);
+                menu.items.back().kind = Menu::K_SECTION;
+                menu.items.back().icon = icon;
+            };
+            // (choices: as the preview names them; the value shown is the one on now.)
+            auto picker = [&](int id, const char* label, int icon, int preview, const std::vector<std::string>& choices, int choice,
+                              const char* desc, const char* tip, const std::vector<int>& art = {}) {
+                const bool known = choice >= 0 && choice < (int)choices.size();
+                add(id, label, known ? choices[choice] : std::string("-"));
+                MenuItem& it = menu.items.back();
+                it.kind = Menu::K_PICKER;
+                it.icon = icon;
+                it.preview = preview;
+                it.choices = choices;
+                it.choice = choice;
+                it.art = art;
+                it.desc = desc;
+                it.tip = tip;
+            };
+            auto toggle = [&](int id, const char* label, int icon, int preview, bool on, const char* desc, const char* tip) {
+                picker(id, label, icon, preview, { "OFF", "ON" }, on ? 1 : 0, desc, tip);
+                menu.items.back().kind = Menu::K_TOGGLE;
+            };
+            section("SCREEN & LAYOUT", Glass::I_MONITOR);
 #if defined(__ANDROID__) && defined(SSR_PC_LAUNCHER)
-            const int secondMode = DsDisplayState::Mode(secondDisplay.State());
-            add(M_SECOND_SCREEN, "SECOND SCREEN", DsDisplayState::ModeName(secondMode));
+            picker(M_SECOND_SCREEN, "SECOND SCREEN", Glass::I_SCREENS, Menu::P_SECOND,
+                   { "OFF", "EXTRA TOUCH", "DS SPLIT", "DS SWAPPED", "COMPANION" }, DsDisplayState::Mode(secondDisplay.State()),
+                   "What a second display shows, on dual-screen phones and handhelds.",
+                   "DS Split puts the bottom screen on the second display, like a real DS.");
 #endif
-            add(M_LANGUAGE, "LANGUAGE", UiLang::ChoiceName());
-            {
-                static const char* const aspects[] = { "AUTO", "16:9", "16:10", "3:2", "4:3" };
-                add(M_ASPECT, "ASPECT RATIO", aspects[std::clamp(cfg.aspect, 0, 4)]);
-            }
+            picker(M_LANGUAGE, "LANGUAGE", Glass::I_GLOBE, Menu::P_NONE, {}, -1,
+                   "The language of Fulldex's menus.", "The game's own text comes from your ROM and is not changed here.");
+            menu.items.back().value = UiLang::ChoiceName();
+            picker(M_ASPECT, "ASPECT RATIO", Glass::I_RATIO, Menu::P_ASPECT, { "AUTO", "16:9", "16:10", "3:2", "4:3" }, std::clamp(cfg.aspect, 0, 4),
+                   "The shape of the picture. Auto fills the screen; the others keep their shape.",
+                   "Narrower than your screen: bars at the sides.");
 #ifndef __SWITCH__
             // (The Switch always shows the one wide screen these layouts are built around.)
-            add(M_LAYOUT, "SCREEN LAYOUT", LayoutName(layout.mode));
-            add(M_LARGE, "LARGE SCREEN", large[focus.mode]);
+            picker(M_LAYOUT, "SCREEN LAYOUT", Glass::I_LAYOUT, Menu::P_LAYOUT, { "MERGED", "HYBRID", "SIDE", "VERTICAL", "TOP", "BOTTOM" }, (int)layout.mode,
+                   "How the DS's two screens are arranged.",
+                   "Merged is Fulldex's widescreen view: one screen with the other's parts drawn in.");
+            picker(M_LARGE, "LARGE SCREEN", Glass::I_EXPAND, Menu::P_LARGE, { "AUTO", "TOP", "BOTTOM" }, focus.mode,
+                   "Which screen is the large one, where the layout has a large and a small screen.",
+                   "Auto brings the touch screen forward while you use it.");
 #if !defined(SSR_PHONE)
             // (Always full screen on the Switch and phones. Borderless: a window the size of the
             // screen, so other windows come up at once.)
-            add(M_FULLSCREEN, "BORDERLESS FULLSCREEN", onOff(cfg.fullscreen));
+            toggle(M_FULLSCREEN, "BORDERLESS FULLSCREEN", Glass::I_FULLSCREEN, Menu::P_FULLSCREEN, cfg.fullscreen,
+                   "Fill the whole screen, with no window border.", "Borderless, so other windows still come up at once.");
 #endif
 #endif
-            add(M_SMOOTH, "SMOOTH SCALING", onOff(cfg.smooth));
+            toggle(M_SMOOTH, "SMOOTH SCALING", Glass::I_GRID, Menu::P_SMOOTH, cfg.smooth,
+                   "Soften the pixels when the picture is made larger.", "Off keeps every pixel sharp, as the DS drew it.");
+            section("OVERLAYS & INFORMATION", Glass::I_LAYERS);
             // (Black and Black 2; SoulSilver has a layout of its own. Black 2 has no STRIP.)
-            add(M_BATTLEBUTTONS, "BATTLE BUTTONS",
-                !funcWatchOn || pt.on ? "-" : cfg.battleButtons == 2 ? "PANEL" : cfg.battleButtons == 0 || !bw1.on ? "CORNER" : "STRIP");
-            add(M_SHOWFPS, "FPS COUNTER", onOff(cfg.showFps));
-            add(M_COMPANION_OVERLAY,"COMPANION WINDOW",onOff(cfg.companionOverlay));
-            add(M_PARTY_HUD,"PARTY HUD",onOff(cfg.partyHud));
-            add(M_SCREEN_FILTER,"SCREEN FILTER",cfg.screenFilter==2?"LCD GRID":cfg.screenFilter==1?"SCANLINES":"OFF");
-            add(M_BACK, "BACK", "");
+            {
+                const bool none = !funcWatchOn || pt.on;
+                const std::vector<std::string> names = bw1.on ? std::vector<std::string>{ "CORNER", "STRIP", "PANEL" } : std::vector<std::string>{ "CORNER", "PANEL" };
+                const std::vector<int> art = bw1.on ? std::vector<int>{ 0, 1, 2 } : std::vector<int>{ 0, 2 };
+                const int on = cfg.battleButtons == 2 ? (int)names.size() - 1 : cfg.battleButtons == 0 || !bw1.on ? 0 : 1;
+                picker(M_BATTLEBUTTONS, "BATTLE BUTTONS", Glass::I_PAD, Menu::P_BATTLE, names, none ? -1 : on,
+                       none ? "Where the on-screen battle buttons go. This game keeps its own." : "Where the on-screen battle buttons go in Black, White, Black 2 and White 2.",
+                       "Platinum, HeartGold and SoulSilver keep their own buttons.", art);
+                menu.items.back().disabled = none;
+            }
+            toggle(M_SHOWFPS, "FPS COUNTER", Glass::I_GAUGE, Menu::P_FPS, cfg.showFps,
+                   "Show the frames per second in a corner of the screen.", "Handy for checking the game runs at full speed.");
+            toggle(M_COMPANION_OVERLAY, "COMPANION WINDOW", Glass::I_WINDOW, Menu::P_COMPANION, cfg.companionOverlay,
+                   "Show the Companion panel over the game: party, Pokédex and location.", "The Party HUD is hidden while this is on.");
+            toggle(M_PARTY_HUD, "PARTY HUD", Glass::I_PEOPLE, Menu::P_PARTY, cfg.partyHud,
+                   "Show your party's HP in a corner while you play.", "Hidden while the Companion Window is on.");
+            picker(M_SCREEN_FILTER, "SCREEN FILTER", Glass::I_SPARKLE, Menu::P_FILTER, { "OFF", "SCANLINES", "LCD GRID" }, std::clamp(cfg.screenFilter, 0, 2),
+                   "A retro look over the picture.", "LCD Grid looks like the DS's own screen up close.");
         }
         else if (menuPage == PAGE_SOUND)
         {
@@ -5450,8 +5512,8 @@ int main(int argc, char** argv)
         case M_LOADSTATE: return PAGE_HUB_LOAD;
         case M_STATES: case M_BACKUPS: return hubPage == PAGE_HUB_LOAD ? PAGE_HUB_LOAD : PAGE_HUB_SAVE;
         case M_CHEATS: case M_BOTHVER: return PAGE_HUB_CHEATS;
-        case M_DISPLAY: case M_GRAPHICS: case M_SOUND: case M_CONTROLMENU: case M_EXTRAS:
-        case M_COMPANION: case M_QUICK_ACTIONS: case M_MATCHUPS: return PAGE_HUB_SETTINGS;
+        case M_DISPLAY: case M_GRAPHICS: case M_PLAYBACK: case M_FAST: case M_SOUND: case M_CONTROLMENU: case M_EXTRAS:
+        case M_QUICK_ACTIONS: case M_MATCHUPS: return PAGE_HUB_SETTINGS;
         case M_QUIT: case M_RESET: return PAGE_HUB_QUIT;
         }
         return -1;
@@ -5459,8 +5521,8 @@ int main(int argc, char** argv)
     auto goPage = [&](int page, int select) {
         if (page == PAGE_MAIN)
         {
-            if (select == M_PLAYBACK || select == M_FAST) select = M_HUB_FAST;
-            else if (hubFor(select) >= 0) page = hubFor(select);
+            if (select == M_FAST) select = M_PLAYBACK; // (PLAYBACK's first row: back to PLAYBACK in SETTINGS)
+            if (hubFor(select) >= 0) page = hubFor(select);
         }
         if (page >= PAGE_HUB_SAVE && page <= PAGE_HUB_QUIT) hubPage = page;
         menuPage = page;
@@ -5468,6 +5530,8 @@ int main(int argc, char** argv)
         menu.selected = 0;
         for (size_t i = 0; i < menuIds.size(); i++)
             if (menuIds[i] == select) menu.selected = (int)i;
+        // (A settings page opens on its first row, not its back button or a heading.)
+        if (menu.style == 1 && (select < 0 || menu.items[menu.selected].kind == Menu::K_SECTION)) menu.selected = menu.FirstRow();
     };
     buildMenu();
     // RETROACHIEVEMENTS' LOG IN: on from the user name to the password, and the login; or not.
@@ -5892,16 +5956,24 @@ int main(int argc, char** argv)
             }
         }
         // Frosted glass: the game as it is when the menu opens, read once (it is paused) and blurred.
-        if (menu.open && canvas.backdrop.empty() && j.outW > 0 && j.outH > 0)
+        // (Again if the window changed size while the menu was open: BORDERLESS FULLSCREEN.)
+        const bool backdropStale = canvas.backdrop.size() > 1 && canvas.backdrop.size() != (size_t)j.outW * j.outH;
+        if (menu.open && (canvas.backdrop.empty() || backdropStale) && j.outW > 0 && j.outH > 0)
         {
             std::vector<uint32_t> shot((size_t)j.outW * j.outH);
             if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, shot.data(), j.outW * 4) == 0)
+            {
                 Glass::MakeBackdrop(canvas.backdrop, shot.data(), j.outW, j.outH);
+                canvas.sharp = std::move(shot); // (unblurred: the settings pages' preview pictures)
+            }
             else
                 canvas.backdrop.assign(1, 0); // (not readable: the menu keeps the plain darkened game)
         }
         else if (!menu.open && !canvas.backdrop.empty())
+        {
             canvas.backdrop.clear();
+            canvas.sharp.clear();
+        }
         if (j.overlayUsed)
         {
             if (!overlayTex || overlayTexW != j.outW || overlayTexH != j.outH)
@@ -7097,6 +7169,7 @@ int main(int argc, char** argv)
                     const int tileId=menuPage==PAGE_HUB_SAVE?M_HUB_SAVE:menuPage==PAGE_HUB_LOAD?M_HUB_LOAD:menuPage==PAGE_HUB_CHEATS?M_HUB_CHEATS:menuPage==PAGE_HUB_SETTINGS?M_HUB_SETTINGS:M_HUB_QUIT;
                     hubPage=-1;goPage(PAGE_MAIN,tileId);hit=-1;break;
                 }
+                if(menuPage==PAGE_QUIT_CONFIRM){goPage(PAGE_HUB_QUIT,confirmReset?M_RESET:M_QUIT);hit=-1;break;}
                 if(menuPage==PAGE_CMAP){goPage(PAGE_CLOCATION,M_CMAP);hit=-1;break;}
                 if(menuPage==PAGE_CENCOUNTERS){goPage(PAGE_CLOCATION,M_CENCOUNTERS);hit=-1;break;}
                 if(menuPage==PAGE_RSEARCH){SDL_StopTextInput();goPage(PAGE_REFERENCE,M_REFERENCE_QUERY);hit=-1;break;}
@@ -7307,13 +7380,19 @@ int main(int argc, char** argv)
                 break;
             case M_LOADSTATE:
                 loadQuick();hit=-1;break;
+            case M_QUIT:
             case M_RESET:
+                confirmReset = id == M_RESET;
+                goPage(PAGE_QUIT_CONFIRM, M_BACK);
+                hit = -1;
+                break;
+            case M_RESET_YES:
                 resetGame();
                 say("GAME RESET");
                 menu.open = false;
                 swallowMenuButtons = true;
                 break;
-            case M_QUIT:
+            case M_QUIT_YES:
 #ifdef __SWITCH__
                 // A game chosen from the game list goes back to the list (the program starts
                 // again once this one has saved and closed); + there goes to the Homebrew Menu.
@@ -8830,6 +8909,18 @@ int main(int argc, char** argv)
             }
             overlayUsed=true;
         }
+        // The DS's two screens as the menu opens (the game is paused): the settings pages' previews.
+        if (menu.open && canvas.dsTop.empty() && nds)
+        {
+            const int topIndex = singleView() ? 1 : 0;
+            canvas.dsTop.assign(nds->GPU.Framebuffer[nds->GPU.FrontBuffer][topIndex].get(), nds->GPU.Framebuffer[nds->GPU.FrontBuffer][topIndex].get() + 256 * 192);
+            canvas.dsBottom.assign(nds->GPU.Framebuffer[nds->GPU.FrontBuffer][1 - topIndex].get(), nds->GPU.Framebuffer[nds->GPU.FrontBuffer][1 - topIndex].get() + 256 * 192);
+        }
+        else if (!menu.open && !canvas.dsTop.empty())
+        {
+            canvas.dsTop.clear();
+            canvas.dsBottom.clear();
+        }
         if (menu.open)
         {
             // The buttons named as the controller in use has them (PlayStation's CROSS and CIRCLE,
@@ -8843,7 +8934,7 @@ int main(int argc, char** argv)
             std::string hint = touchPadUsed && touchPad.visible ? "TAP: CHOOSE   OUTSIDE: BACK"
                                : btn(Controls::A) + ": SELECT   " + btn(Controls::B) + ": BACK";
             const int selId = menu.selected >= 0 && menu.selected < (int)menuIds.size() ? menuIds[menu.selected] : -1;
-            static const char* pageTitle[] = { "", "KEYS AND BUTTONS", "DISPLAY", "GRAPHICS", "CONTROLS", "CHEATS", "RETROACHIEVEMENTS", "SOUND", "ACHIEVEMENTS", "ACHIEVEMENT", "SEARCH CHEATS", "CHEAT DETAILS", "DATABASE INFO", "SAVE BACKUPS", "RESTORE SAVE", "LOAD STATE", "TYPE MATCHUPS", "COMPANION", "PARTY", "POKEMON", "BAG", "POKEDEX", "POKEDEX ENTRY", "LOCATION", "PLAYBACK", "STATE SLOTS", "STATE SLOT", "BATTLE INFO", "GUIDE", "GUIDE HINT", "NUZLOCKE TRACKER", "RESET TRACKER", "QUICK ACTIONS", "OPTIONAL FEATURES", "ITEM DETAILS", "SEARCH REFERENCE", "SEARCH REFERENCE", "REFERENCE ENTRY", "REFERENCE MAP", "ENCOUNTERS HERE" , "SAVE", "LOAD", "CHEATS", "SETTINGS", "QUIT GAME" };
+            static const char* pageTitle[] = { "", "KEYS AND BUTTONS", "DISPLAY", "GRAPHICS", "CONTROLS", "CHEATS", "RETROACHIEVEMENTS", "SOUND", "ACHIEVEMENTS", "ACHIEVEMENT", "SEARCH CHEATS", "CHEAT DETAILS", "DATABASE INFO", "SAVE BACKUPS", "RESTORE SAVE", "LOAD STATE", "TYPE MATCHUPS", "COMPANION", "PARTY", "POKEMON", "BAG", "POKEDEX", "POKEDEX ENTRY", "LOCATION", "PLAYBACK", "STATE SLOTS", "STATE SLOT", "BATTLE INFO", "GUIDE", "GUIDE HINT", "NUZLOCKE TRACKER", "RESET TRACKER", "QUICK ACTIONS", "OPTIONAL FEATURES", "ITEM DETAILS", "SEARCH REFERENCE", "SEARCH REFERENCE", "REFERENCE ENTRY", "REFERENCE MAP", "ENCOUNTERS HERE" , "SAVE", "LOAD", "CHEATS", "SETTINGS", "QUIT GAME", "QUIT GAME" };
             static_assert(sizeof(pageTitle)/sizeof(pageTitle[0])==PAGE_COUNT,"Every menu page needs a title");
             if (menuPage == PAGE_KEYS)
             {
@@ -8943,7 +9034,18 @@ int main(int argc, char** argv)
                 note="YOUR CARTRIDGE SAVE IS KEPT. SAVING IN-GAME AFTER LOADING AN OLD STATE CAN STILL REPLACE NEWER PROGRESS.";
             if(menuPage == PAGE_MATCHUPS)
                 note.clear();
-            const bool wideMenu=menuPage==PAGE_CENCOUNTERS || menuPage==PAGE_REFERENCE || menuPage==PAGE_RSEARCH || menuPage==PAGE_RDETAIL || menuPage==PAGE_CITEM || menuPage==PAGE_EXTRAS || menuPage==PAGE_QUICK_ACTIONS || menuPage==PAGE_NUZLOCKE || menuPage==PAGE_RUN_CONFIRM || menuPage==PAGE_CGUIDE || menuPage==PAGE_CGUIDEENTRY || menuPage==PAGE_CBATTLE || menuPage==PAGE_STATES || menuPage==PAGE_SLOT || (menuPage>=PAGE_COMPANION&&menuPage<=PAGE_CLOCATION) || menuPage==PAGE_MATCHUPS || menuPage==PAGE_CHEATS || menuPage==PAGE_CDETAIL || menuPage==PAGE_CINFO || menuPage==PAGE_CSEARCH || menuPage==PAGE_BACKUPS || menuPage==PAGE_RESTORE_CONFIRM || menuPage==PAGE_LOAD_CONFIRM;
+            if(menuPage == PAGE_QUIT_CONFIRM)
+            {
+                title = confirmReset ? "RESET GAME" : "QUIT GAME";
+                note = "Progress since your last save in the game will be lost.";
+            }
+            // (The tiles: B goes back to the game, there being no RESUME tile.)
+            if (menuPage == PAGE_MAIN)
+                hint = touchPadUsed && touchPad.visible ? "TAP: CHOOSE   OUTSIDE: RESUME" : btn(Controls::A) + ": SELECT   " + btn(Controls::B) + ": RESUME";
+            // (Settings pages explain the chosen row in their preview: the hint is the buttons only.)
+            if (menu.style == 1)
+                hint = touchPadUsed && touchPad.visible ? "TAP: CHOOSE   OUTSIDE: BACK" : btn(Controls::A) + ": SELECT   " + btn(Controls::B) + ": BACK";
+            const bool wideMenu=menuPage==PAGE_CENCOUNTERS || menuPage==PAGE_REFERENCE || menuPage==PAGE_RSEARCH || menuPage==PAGE_RDETAIL || menuPage==PAGE_CITEM || menuPage==PAGE_EXTRAS || menuPage==PAGE_QUICK_ACTIONS || menuPage==PAGE_NUZLOCKE || menuPage==PAGE_RUN_CONFIRM || menuPage==PAGE_CGUIDE || menuPage==PAGE_CGUIDEENTRY || menuPage==PAGE_CBATTLE || menuPage==PAGE_STATES || menuPage==PAGE_SLOT || (menuPage>=PAGE_COMPANION&&menuPage<=PAGE_CLOCATION) || menuPage==PAGE_MATCHUPS || menuPage==PAGE_CHEATS || menuPage==PAGE_CDETAIL || menuPage==PAGE_CINFO || menuPage==PAGE_CSEARCH || menuPage==PAGE_BACKUPS || menuPage==PAGE_RESTORE_CONFIRM || menuPage==PAGE_LOAD_CONFIRM || menuPage==PAGE_QUIT_CONFIRM;
             menu.Draw(canvas, title, hint, note, wideMenu ? 260 : 0);
             if(menuPage==PAGE_CMAP)
             {

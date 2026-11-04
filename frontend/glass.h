@@ -116,6 +116,50 @@ inline bool Backdrop(Canvas& c)
     return false;
 }
 
+// Frosted glass: the blurred game under a panel made lighter and more colourful, with a fine grain
+// and a soft sheen at the top, rather than a grey tint laid over it. Works on the opaque backdrop
+// (Backdrop true), inside a rounded rectangle; elsewhere it does nothing.
+inline void Frost(Canvas& c, int x, int y, int w, int h, float r)
+{
+    if (w <= 0 || h <= 0) return;
+    Mark(c, x, y, x + w, y + h);
+    const float hx = w * 0.5f, hy = h * 0.5f, cx = x + hx, cy = y + hy;
+    r = std::min(r, std::min(hx, hy));
+    for (int py = std::max(0, y); py < std::min(c.h, y + h); py++)
+    {
+        uint32_t* row = &c.px[(size_t)py * c.w];
+        const float qy = std::fabs(py + 0.5f - cy) - (hy - r);
+        const float t = (py - y) / (float)h;
+        const float sheen = t < 0.45f ? (0.45f - t) / 0.45f * 8.0f : 0.0f; // (lighter towards the top)
+        for (int px = std::max(0, x); px < std::min(c.w, x + w); px++)
+        {
+            const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
+            float cover = 1.0f;
+            if (qx > 0 && qy > 0) cover = std::clamp(r - std::hypot(qx, qy) + 0.5f, 0.0f, 1.0f); // (the round corners)
+            if (cover <= 0) continue;
+            uint32_t& p = row[px];
+            const float rr = (float)(p >> 16 & 255), gg = (float)(p >> 8 & 255), bb = (float)(p & 255);
+            const float l = 0.3f * rr + 0.59f * gg + 0.11f * bb;
+            // (A fixed grain from the pixel's place, so it does not shimmer from frame to frame.)
+            uint32_t hsh = (uint32_t)px * 374761393u + (uint32_t)py * 668265263u;
+            hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
+            const float grain = (float)((hsh >> 24) & 7) - 3.5f;
+            uint32_t out = 0xFF000000u;
+            const float ch[3] = { rr, gg, bb };
+            for (int k = 0; k < 3; k++)
+            {
+                // (More colour than the backdrop, the darks lifted a little and the brights held down,
+                // so white text reads over any part of the game.)
+                float v = (l + (ch[k] - l) * 1.35f) * 0.9f + 16.0f;
+                if (v > 112.0f) v = 112.0f + (v - 112.0f) * 0.3f;
+                v += sheen + grain;
+                out |= (uint32_t)std::clamp((int)v, 0, 255) << (16 - 8 * k);
+            }
+            p = cover >= 1.0f ? out : Over(p, out, (int)(cover * 255));
+        }
+    }
+}
+
 // Text and anything else drawn with partial alpha made solid, over the opaque blurred game.
 inline void Opaque(Canvas& c)
 {
@@ -157,6 +201,18 @@ inline void Round(Canvas& c, int x, int y, int w, int h, float r, uint32_t fill,
     }
 }
 
+// A soft white glow round a box (whatever is chosen: a tile, a row, a card, a button). k: the size of
+// one design pixel.
+inline void Glow(Canvas& c, int x, int y, int w, int h, float r, float k)
+{
+    for (int g = 3; g >= 1; g--)
+    {
+        const float e = g * 2.4f * k;
+        const uint32_t a = (uint32_t)(0x14 * (4 - g)) << 24;
+        Round(c, (int)(x - e), (int)(y - e), (int)(w + 2 * e), (int)(h + 2 * e), r + e, 0, a | 0xFFFFFF, 2.4f * k);
+    }
+}
+
 // Signed distances for the icons (in the icon's own units: -1 to 1 across it).
 inline float Circle(float u, float v, float cx, float cy, float r) { return std::hypot(u - cx, v - cy) - r; }
 inline float Box(float u, float v, float cx, float cy, float hx, float hy, float r)
@@ -179,7 +235,19 @@ inline float Play(float u, float v, float x0, float x1, float cy, float hh)
     return std::max(std::max(x0 - u, top), bot);
 }
 
-enum Icon { I_PLAY, I_SAVE, I_LOAD, I_CHEATS, I_FAST, I_TROPHY, I_GEAR, I_POWER, I_COUNT };
+// The tiles' icons, then the settings pages' (ui_settings.h): header, row and section icons.
+enum Icon
+{
+    I_PLAY, I_SAVE, I_LOAD, I_CHEATS, I_FAST, I_TROPHY, I_GEAR, I_POWER,
+    I_BACK, I_MONITOR, I_SCREENS, I_GLOBE, I_RATIO, I_LAYOUT, I_EXPAND, I_FULLSCREEN, I_GRID, I_LAYERS,
+    I_PAD, I_GAUGE, I_WINDOW, I_PEOPLE, I_SPARKLE, I_INFO, I_CHEVRON_L, I_CHEVRON_R, I_POKEBALL,
+    I_COUNT
+};
+// A rhombus centred on (cx, cy), half width a and half height b (close to a true distance).
+inline float Rhombus(float u, float v, float cx, float cy, float a, float b)
+{
+    return (std::fabs(u - cx) / a + std::fabs(v - cy) / b - 1.0f) * (a * b / std::hypot(a, b));
+}
 
 // One of the icons, centred at (cx, cy), size pixels from its centre to its edge.
 inline void DrawIcon(Canvas& c, int icon, float cx, float cy, float size, uint32_t argb)
@@ -236,6 +304,105 @@ inline void DrawIcon(Canvas& c, int icon, float cx, float cy, float size, uint32
             const float gap = Box(u, v, 0, -0.5f, 0.26f, 0.32f, 0.0f);
             const float line = Segment(u, v, 0, -0.78f, 0, -0.06f, t / 2);
             return std::min(std::max(ring, -gap), line);
+        }
+
+        case I_BACK:
+            return std::min(Segment(u, v, -0.7f, 0, 0.72f, 0, t / 2),
+                            std::min(Segment(u, v, -0.7f, 0, -0.16f, -0.54f, t / 2), Segment(u, v, -0.7f, 0, -0.16f, 0.54f, t / 2)));
+        case I_MONITOR:
+        {
+            const float screen = std::fabs(Box(u, v, 0, -0.16f, 0.82f, 0.54f, 0.1f)) - t / 2;
+            return std::min(screen, std::min(Segment(u, v, 0, 0.38f, 0, 0.66f, t / 2), Segment(u, v, -0.36f, 0.68f, 0.36f, 0.68f, t / 2)));
+        }
+        case I_SCREENS:
+            return std::min(std::fabs(Box(u, v, 0, -0.42f, 0.74f, 0.32f, 0.08f)), std::fabs(Box(u, v, 0, 0.42f, 0.74f, 0.32f, 0.08f))) - t / 2;
+        case I_GLOBE:
+        {
+            const float ring = std::fabs(Circle(u, v, 0, 0, 0.8f)) - t / 2;
+            const float meridian = std::fabs((std::hypot(u / 0.36f, v / 0.8f) - 1.0f) * 0.36f) - t / 2;
+            float lines = std::min(Segment(u, v, -0.8f, 0, 0.8f, 0, t / 2),
+                                   std::min(Segment(u, v, -0.7f, -0.4f, 0.7f, -0.4f, t / 2), Segment(u, v, -0.7f, 0.4f, 0.7f, 0.4f, t / 2)));
+            lines = std::max(lines, Circle(u, v, 0, 0, 0.8f));
+            return std::min(ring, std::min(meridian, lines));
+        }
+        case I_RATIO:
+        {
+            const float frame = std::fabs(Box(u, v, 0, 0, 0.84f, 0.58f, 0.1f)) - t / 2;
+            return std::min(frame, Box(u, v, 0, 0, 0.42f, 0.34f, 0.05f));
+        }
+        case I_LAYOUT:
+        {
+            const float frame = std::fabs(Box(u, v, 0, 0, 0.8f, 0.68f, 0.1f)) - t / 2;
+            return std::min(frame, std::min(Segment(u, v, -0.24f, -0.68f, -0.24f, 0.68f, t / 2), Segment(u, v, -0.8f, -0.06f, -0.24f, -0.06f, t / 2)));
+        }
+        case I_EXPAND:
+        case I_FULLSCREEN:
+        {
+            const float e = icon == I_EXPAND ? 0.78f : 0.46f, l = icon == I_EXPAND ? 0.36f : 0.24f;
+            float d = 1.0f;
+            for (int sx = -1; sx <= 1; sx += 2)
+                for (int sy = -1; sy <= 1; sy += 2)
+                    d = std::min(d, std::min(Segment(u, v, sx * e, sy * e, sx * (e - l), sy * e, t / 2), Segment(u, v, sx * e, sy * e, sx * e, sy * (e - l), t / 2)));
+            if (icon == I_FULLSCREEN) d = std::min(d, std::fabs(Box(u, v, 0, 0, 0.84f, 0.74f, 0.1f)) - t / 2);
+            return d;
+        }
+        case I_GRID:
+        {
+            float d = 1.0f;
+            for (int gx = -1; gx <= 1; gx++)
+                for (int gy = -1; gy <= 1; gy++) d = std::min(d, Box(u, v, gx * 0.56f, gy * 0.56f, 0.17f, 0.17f, 0.04f));
+            return d;
+        }
+        case I_LAYERS:
+        {
+            const float top = std::fabs(Rhombus(u, v, 0, -0.34f, 0.8f, 0.36f)) - t / 2;
+            float d = top;
+            for (float cy : { 0.06f, 0.42f })
+                d = std::min(d, std::min(Segment(u, v, -0.8f, cy, 0, cy + 0.36f, t / 2), Segment(u, v, 0, cy + 0.36f, 0.8f, cy, t / 2)));
+            return d;
+        }
+        case I_PAD:
+        {
+            const float body = std::fabs(Box(u, v, 0, 0.04f, 0.86f, 0.46f, 0.32f)) - t / 2;
+            const float cross = std::min(Segment(u, v, -0.56f, 0.04f, -0.2f, 0.04f, t / 2), Segment(u, v, -0.38f, -0.14f, -0.38f, 0.22f, t / 2));
+            return std::min(body, std::min(cross, std::min(Circle(u, v, 0.3f, 0.12f, 0.08f), Circle(u, v, 0.5f, -0.06f, 0.08f))));
+        }
+        case I_GAUGE:
+        {
+            const float arc = std::max(std::fabs(Circle(u, v, 0, 0.16f, 0.74f)) - t / 2, v - 0.5f);
+            return std::min(arc, std::min(Segment(u, v, 0, 0.16f, 0.36f, -0.24f, t / 2), Circle(u, v, 0, 0.16f, 0.11f)));
+        }
+        case I_WINDOW:
+        {
+            const float frame = std::fabs(Box(u, v, 0, 0, 0.82f, 0.64f, 0.1f)) - t / 2;
+            return std::min(frame, std::min(Segment(u, v, -0.82f, -0.28f, 0.82f, -0.28f, t / 2), Box(u, v, -0.36f, 0.2f, 0.28f, 0.2f, 0.04f)));
+        }
+        case I_PEOPLE:
+        {
+            const float head1 = std::fabs(Circle(u, v, -0.24f, -0.34f, 0.24f)) - t / 2;
+            const float body1 = std::max(std::fabs(Circle(u, v, -0.24f, 0.62f, 0.5f)) - t / 2, v - 0.62f);
+            const float head2 = std::max(std::fabs(Circle(u, v, 0.42f, -0.26f, 0.2f)) - t / 2, -Circle(u, v, -0.24f, -0.34f, 0.36f));
+            const float body2 = std::max(std::max(std::fabs(Circle(u, v, 0.46f, 0.62f, 0.4f)) - t / 2, v - 0.62f), 0.1f - u);
+            return std::min(std::min(head1, body1), std::min(head2, body2));
+        }
+        case I_SPARKLE:
+        {
+            const float big = std::min(Rhombus(u, v, -0.14f, 0.12f, 0.16f, 0.72f), Rhombus(u, v, -0.14f, 0.12f, 0.62f, 0.16f));
+            const float small = std::min(Rhombus(u, v, 0.56f, -0.52f, 0.08f, 0.32f), Rhombus(u, v, 0.56f, -0.52f, 0.3f, 0.08f));
+            return std::min(big, small);
+        }
+        case I_INFO:
+        {
+            const float ring = std::fabs(Circle(u, v, 0, 0, 0.82f)) - t / 2;
+            return std::min(ring, std::min(Circle(u, v, 0, -0.38f, 0.1f), Segment(u, v, 0, -0.08f, 0, 0.44f, t / 2)));
+        }
+        case I_CHEVRON_L: return std::min(Segment(u, v, 0.26f, -0.56f, -0.24f, 0, t * 0.6f), Segment(u, v, -0.24f, 0, 0.26f, 0.56f, t * 0.6f));
+        case I_CHEVRON_R: return std::min(Segment(u, v, -0.26f, -0.56f, 0.24f, 0, t * 0.6f), Segment(u, v, 0.24f, 0, -0.26f, 0.56f, t * 0.6f));
+        case I_POKEBALL:
+        {
+            const float ring = std::fabs(Circle(u, v, 0, 0, 0.8f)) - t / 2;
+            const float band = std::max(Segment(u, v, -0.8f, 0, 0.8f, 0, t / 2), -Circle(u, v, 0, 0, 0.3f));
+            return std::min(ring, std::min(band, std::fabs(Circle(u, v, 0, 0, 0.22f)) - t / 2));
         }
         }
         return 1.0f;

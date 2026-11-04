@@ -16,6 +16,10 @@ struct Canvas
     std::vector<uint32_t> px; // ARGB; alpha 0 means "show the game underneath"
     // The paused game blurred (glass.h, Glass::MakeBackdrop) while the menu is open; empty otherwise.
     std::vector<uint32_t> backdrop;
+    // The same moment unblurred (w x h), and the DS's two screens (256 x 192 each, top then bottom):
+    // the pictures in a settings page's preview (ui_settings.h) are made from them. Empty when
+    // there is nothing to read (the preview then draws plain shapes).
+    std::vector<uint32_t> sharp, dsTop, dsBottom;
 
     void Resize(int nw, int nh)
     {
@@ -168,6 +172,15 @@ struct MenuItem
     int slider = -1;   // 0 to 10: also drawn as a bar of ten blocks, that many lit (VOLUME)
     int icon = -1;     // Glass::Icon, for a tile (Menu::columns)
     bool disabled = false; // shown greyed; choosing it does nothing (this game or engine has no such thing)
+    // Settings pages (Menu::style 1, ui_settings.h): what the row is (Menu::K_*), its choices as the
+    // preview names them and which is on now, the picture drawn for each (Menu::P_*, art: the
+    // picture's variant for each choice), and the preview's description and tip.
+    int kind = 0;
+    std::vector<std::string> choices;
+    std::vector<int> art;
+    int choice = -1;
+    int preview = -1;
+    std::string desc, tip;
 };
 
 struct Menu
@@ -176,8 +189,16 @@ struct Menu
     int selected = 0;
     std::vector<MenuItem> items;
     // 0: a list (every page but one). More: the items are tiles in rows of that many (the pause
-    // menu's first page: eight glass tiles, four to a row).
+    // menu's first page: eight glass tiles, four to a row; two to a row on a portrait screen).
     int columns = 0;
+    mutable int drawnColumns = 0; // (as last drawn: Update moves up and down by this many)
+    // 1: a settings page (ui_settings.h): a header with a back button, the page's icon and title,
+    // rows in sections on the left and a preview of the chosen row on the right.
+    int style = 0;
+    int pageIcon = -1;
+    enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK };
+    // A preview's pictures (MenuItem::preview), one per choice (its art: which variant).
+    enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER };
 
     // CLEAN text (on: Noto Sans, ui_clean_font.h, in title case) or the pixel font (the Retro look).
     // Japanese and Korean menus keep the pixel font, which has their letters.
@@ -207,8 +228,10 @@ struct Menu
         dir = 0;
         if (!open || items.empty()) return -1;
         int n = (int)items.size();
+        if (style == 1) return UpdateSettings(in, dir);
         if (columns > 0)
         {
+            const int columns = drawnColumns > 0 ? drawnColumns : this->columns;
             if (in.left) selected = (selected + n - 1) % n;
             if (in.right) selected = (selected + 1) % n;
             if (in.up) selected = (selected + n - columns % n) % n;
@@ -254,6 +277,7 @@ struct Menu
     // -1 for a point in the box but on no row, -2 for a point outside the box.
     int ItemAt(int x, int y) const
     {
+        if (style == 1) return SettingsItemAt(x, y);
         if (drawnW <= 0 || x < drawnX || x >= drawnX + drawnW || y < drawnY || y >= drawnY + drawnH) return -2;
         if (columns > 0)
         {
@@ -271,6 +295,7 @@ struct Menu
     void Tap(int x,int y,MenuInput& input,int& sliderValue)
     {
         const int item=ItemAt(x,y);
+        if(style==1){SettingsTap(item,x,input);return;}
         if(item==-2)input.back=true;
         else if(item>=0)
         {
@@ -296,6 +321,15 @@ struct Menu
     // Lists: a little shade under the glass so white text reads over bright parts of the game,
     // and the chosen row an outline with a faint fill (a bright fill hid its text).
     static constexpr uint32_t GlassShade = 0x4D000000, GlassRow = 0x1FFFFFFF;
+    // Frosted glass (Glass::Frost, the blurred game made lighter and more colourful) with a faint
+    // white over it and a bright edge; the old grey shade where there is no blurred game to frost.
+    static constexpr uint32_t FrostTint = 0x0FFFFFFF, FrostEdge = 0x5CFFFFFF, FrostChosen = 0x2EFFFFFF;
+    static void FrostBox(Canvas& c, bool solid, int x, int y, int w, int h, float r, bool chosen = false, float edge = 1.0f)
+    {
+        if (solid) Glass::Frost(c, x, y, w, h, r);
+        else Glass::Round(c, x, y, w, h, r, GlassShade);
+        Glass::Round(c, x, y, w, h, r, chosen ? FrostChosen : FrostTint, chosen ? GlassChosenEdge : FrostEdge, edge);
+    }
 
     // The first page's tiles (columns > 0): rows of glass squares, each an icon over its name,
     // centred on the blurred game with no panel round them; "FULLDEX" and "PAUSED" above.
@@ -304,8 +338,11 @@ struct Menu
         const bool solid = Glass::Backdrop(c);
         int scale = std::min(c.w, c.h) / 240;
         if (scale < 1) scale = 1;
-        const int n = (int)items.size(), cols = columns, rows = (n + cols - 1) / cols;
-        const float avW = c.w * 0.86f, avH = c.h * 0.6f;
+        // (Two to a row on a portrait screen, so the tiles stay large enough to tap.)
+        const int cols = c.h > c.w ? std::min(2, columns) : columns;
+        drawnColumns = cols;
+        const int n = (int)items.size(), rows = (n + cols - 1) / cols;
+        const float avW = c.w * 0.86f, avH = c.h * (c.h > c.w ? 0.7f : 0.6f);
         const int s = (int)std::min(avW / (cols + 0.1f * (cols - 1)), avH / (rows + 0.1f * (rows - 1)));
         const int gap = s / 10;
         const int gridW = cols * s + (cols - 1) * gap, gridH = rows * s + (rows - 1) * gap;
@@ -314,19 +351,21 @@ struct Menu
         drawnX = gx - gap; drawnY = gy - gap; drawnW = gridW + 2 * gap; drawnH = gridH + 2 * gap;
         drawnLineH = 0; drawnFirstY = 0; scroll = 0;
         const int headY = gy - 9 * scale - gap;
-        TXRaw(c, gx, headY, "FULLDEX", scale, GlassText);
+        TXRaw(c, gx, headY, "Fulldex", scale, GlassText);
+        // (One size for every tile's name: the largest at which the longest still fits.)
+        int ls = scale;
+        for (int i = 0; i < n; i++)
+            while (ls > 1 && TW(items[i].label, ls, true) > s * 0.88f) ls--;
         TX(c, gx + gridW - TW("PAUSED", scale), headY, "PAUSED", scale, GlassHint);
         for (int i = 0; i < n; i++)
         {
             const int x = gx + (i % cols) * (s + gap), y = gy + (i / cols) * (s + gap);
             tileX[i] = x; tileY[i] = y;
             const bool sel = i == selected, off = items[i].disabled;
-            Glass::Round(c, x, y, s, s, s * 0.09f, sel ? GlassChosen : GlassPanel, sel ? GlassChosenEdge : GlassEdge,
-                         sel ? (float)std::max(2, scale) : 1.0f);
+            if (sel) Glass::Glow(c, x, y, s, s, s * 0.09f, s / 200.0f);
+            FrostBox(c, solid, x, y, s, s, s * 0.09f, sel, sel ? (float)std::max(2, scale) : 1.0f);
             const uint32_t ink = off ? GlassOff : GlassText;
             if (items[i].icon >= 0) Glass::DrawIcon(c, items[i].icon, x + s * 0.5f, y + s * 0.4f, s * 0.19f, ink);
-            int ls = scale;
-            while (ls > 1 && TW(items[i].label, ls, true) > s * 0.88f) ls--;
             TX(c, x + (s - TW(items[i].label, ls, true)) / 2, y + (int)(s * 0.72f), items[i].label, ls, ink, true);
             if (!items[i].value.empty())
             {
@@ -342,6 +381,7 @@ struct Menu
     // code's name (32 letters) fits beside "< OFF >".
     void Draw(Canvas& c, const std::string& title, const std::string& hint, const std::string& note = "", int boxUnits = 0) const
     {
+        if (style == 1) { DrawSettings(c, title, hint); return; }
         if (columns > 0) { DrawTiles(c, hint); return; }
         int scale = std::min(c.w, c.h) / 240;
         if (scale < 1) scale = 1;
@@ -386,8 +426,7 @@ struct Menu
 
         const bool solid = Glass::Backdrop(c);
         const float radius = 5.0f * scale;
-        Glass::Round(c, bx, by, boxW, boxH, radius, GlassShade);
-        Glass::Round(c, bx, by, boxW, boxH, radius, GlassPanel, GlassEdge);
+        FrostBox(c, solid, bx, by, boxW, boxH, radius);
         if (hasTitle) TX(c, bx + (boxW - TW(title, scale, true)) / 2, by + 3 * scale, title, scale, GlassText, true);
 
         int y = by + (hasTitle ? lineH : 0) + 5 * scale;
@@ -422,11 +461,24 @@ struct Menu
         if (!noteLines.empty())
         {
             const int ny = by + boxH + 3 * scale;
-            Glass::Round(c, bx, ny, boxW, noteH, radius, GlassShade);
-            Glass::Round(c, bx, ny, boxW, noteH, radius, GlassPanel, GlassEdge);
+            FrostBox(c, solid, bx, ny, boxW, noteH, radius);
             for (size_t i = 0; i < noteLines.size(); i++)
                 TXRaw(c, bx + 6 * scale, ny + 4 * scale + (int)i * UiLang::LineUnits() * scale, noteLines[i], scale, GlassText);
         }
         if (solid) Glass::Opaque(c);
     }
+
+    // Settings pages (style 1): ui_settings.h.
+    int UpdateSettings(const MenuInput& in, int& dir);
+    int SettingsItemAt(int x, int y) const;
+    void SettingsTap(int item, int x, MenuInput& input);
+    void DrawSettings(Canvas& c, const std::string& title, const std::string& hint) const;
+    int FirstRow() const; // the first row that can be chosen (not a section's heading or the back button)
+    // Where the settings page was last drawn: each item's row (y, -1 when not shown), the rows' x
+    // and size, the controls' box on the right of them, and the back button.
+    mutable std::vector<int> rowY;
+    mutable int rowX = 0, rowW = 0, rowH = 0, ctlX = 0, ctlW = 0, backX = 0, backY = 0, backS = 0, scrollPx = 0;
 };
+
+#include "ui_settings.h"
+
