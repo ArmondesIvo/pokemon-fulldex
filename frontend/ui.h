@@ -14,6 +14,8 @@ struct Canvas
 {
     int w = 0, h = 0;
     std::vector<uint32_t> px; // ARGB; alpha 0 means "show the game underneath"
+    // The paused game blurred (glass.h, Glass::MakeBackdrop) while the menu is open; empty otherwise.
+    std::vector<uint32_t> backdrop;
 
     void Resize(int nw, int nh)
     {
@@ -149,6 +151,8 @@ inline uint32_t AccentNamed(const std::string& name)
     return colours[0].argb;
 }
 
+#include "glass.h"
+
 // Button presses the menu understands, edge-triggered.
 struct MenuInput
 {
@@ -161,6 +165,8 @@ struct MenuItem
     std::string value; // shown right-aligned; empty for plain actions
     bool info = false; // the value is only shown (no < > around it): nothing to change here
     int slider = -1;   // 0 to 10: also drawn as a bar of ten blocks, that many lit (VOLUME)
+    int icon = -1;     // Glass::Icon, for a tile (Menu::columns)
+    bool disabled = false; // shown greyed; choosing it does nothing (this game or engine has no such thing)
 };
 
 struct Menu
@@ -168,6 +174,9 @@ struct Menu
     bool open = false;
     int selected = 0;
     std::vector<MenuItem> items;
+    // 0: a list (every page but one). More: the items are tiles in rows of that many (the pause
+    // menu's first page: eight glass tiles, four to a row).
+    int columns = 0;
 
     // Returns the index of an item that was activated this frame, or -1.
     // dir is -1/+1 when left/right was used on it, 0 for accept.
@@ -176,15 +185,23 @@ struct Menu
         dir = 0;
         if (!open || items.empty()) return -1;
         int n = (int)items.size();
+        if (columns > 0)
+        {
+            if (in.left) selected = (selected + n - 1) % n;
+            if (in.right) selected = (selected + 1) % n;
+            if (in.up) selected = (selected + n - columns % n) % n;
+            if (in.down) selected = (selected + columns) % n;
+            return in.accept && !items[selected].disabled ? selected : -1;
+        }
         if (in.up) selected = (selected + n - 1) % n;
         if (in.down) selected = (selected + 1) % n;
-        if (in.accept) return selected;
-        if (in.left && !items[selected].value.empty())
+        if (in.accept) return items[selected].disabled ? -1 : selected;
+        if (in.left && !items[selected].value.empty() && !items[selected].disabled)
         {
             dir = -1;
             return selected;
         }
-        if (in.right && !items[selected].value.empty())
+        if (in.right && !items[selected].value.empty() && !items[selected].disabled)
         {
             dir = 1;
             return selected;
@@ -198,6 +215,9 @@ struct Menu
     mutable int scroll = 0;
     // Where a slider's bar was drawn (the same on every row): its left edge and one block's step.
     mutable int barX = 0, barStep = 0;
+    // Where each tile was drawn (columns > 0): x, y, size.
+    mutable std::vector<int> tileX, tileY;
+    mutable int tileSize = 0;
 
     // The value a tap at x on a slider's row stands for (0 to 10: the block tapped and those
     // before it; left of the bar, 0), or -1 for a tap beside the bar.
@@ -208,11 +228,17 @@ struct Menu
         return std::min(10, (x - barX) / barStep + 1);
     }
 
-    // The row at (x, y) of the canvas the menu was drawn on (touch screens): its index, -1 for
-    // a point in the box but on no row, -2 for a point outside the box.
+    // The row (or tile) at (x, y) of the canvas the menu was drawn on (touch screens): its index,
+    // -1 for a point in the box but on no row, -2 for a point outside the box.
     int ItemAt(int x, int y) const
     {
         if (drawnW <= 0 || x < drawnX || x >= drawnX + drawnW || y < drawnY || y >= drawnY + drawnH) return -2;
+        if (columns > 0)
+        {
+            for (size_t i = 0; i < tileX.size() && i < items.size(); i++)
+                if (x >= tileX[i] && x < tileX[i] + tileSize && y >= tileY[i] && y < tileY[i] + tileSize) return (int)i;
+            return -1;
+        }
         if (drawnLineH <= 0 || y < drawnFirstY) return -1;
         const int i = scroll + (y - drawnFirstY) / drawnLineH;
         return i < (int)items.size() ? i : -1;
@@ -227,7 +253,8 @@ struct Menu
         else if(item>=0)
         {
             selected=item;
-            if(items[item].slider>=0 && SliderAt(x)>=0){sliderValue=SliderAt(x);input.accept=true;}
+            if(columns>0)input.accept=true;
+            else if(items[item].slider>=0 && SliderAt(x)>=0){sliderValue=SliderAt(x);input.accept=true;}
             else if(items[item].value.empty()||items[item].info)input.accept=true;
             else if(x<drawnX+drawnW/3)input.left=true;
             else input.right=true;
@@ -236,25 +263,64 @@ struct Menu
 
     // note: a few lines of text in a strip under the box (CHEATS: what the database says about
     // the chosen cheat), wrapped to the box's width.
-    // The chosen row's colour (COLOUR, AccentNamed); the box, text and bars are shaded from it.
+    // The accent (COLOUR, AccentNamed): kept for the game list; the glass menu is white on the game.
     static inline uint32_t Accent = 0xFFE0242C;
+
+    // The glass colours (glass.h): panels a little lighter than the blurred game, the chosen row
+    // or tile lighter still with a bright edge, text white, hints a soft grey.
+    static constexpr uint32_t GlassPanel = 0x2BFFFFFF, GlassEdge = 0x3DFFFFFF;
+    static constexpr uint32_t GlassChosen = 0x4AFFFFFF, GlassChosenEdge = 0xF2FFFFFF;
+    static constexpr uint32_t GlassText = 0xFFF2F5F9, GlassHint = 0xFFB9C3CF, GlassOff = 0xFF7E8894;
+    // Lists: a little shade under the glass so white text reads over bright parts of the game,
+    // and the chosen row an outline with a faint fill (a bright fill hid its text).
+    static constexpr uint32_t GlassShade = 0x4D000000, GlassRow = 0x1FFFFFFF;
+
+    // The first page's tiles (columns > 0): rows of glass squares, each an icon over its name,
+    // centred on the blurred game with no panel round them; "FULLDEX" and "PAUSED" above.
+    void DrawTiles(Canvas& c, const std::string& hint) const
+    {
+        const bool solid = Glass::Backdrop(c);
+        int scale = std::min(c.w, c.h) / 240;
+        if (scale < 1) scale = 1;
+        const int n = (int)items.size(), cols = columns, rows = (n + cols - 1) / cols;
+        const float avW = c.w * 0.86f, avH = c.h * 0.6f;
+        const int s = (int)std::min(avW / (cols + 0.1f * (cols - 1)), avH / (rows + 0.1f * (rows - 1)));
+        const int gap = s / 10;
+        const int gridW = cols * s + (cols - 1) * gap, gridH = rows * s + (rows - 1) * gap;
+        const int gx = (c.w - gridW) / 2, gy = (c.h - gridH) / 2;
+        tileX.assign(n, 0); tileY.assign(n, 0); tileSize = s;
+        drawnX = gx - gap; drawnY = gy - gap; drawnW = gridW + 2 * gap; drawnH = gridH + 2 * gap;
+        drawnLineH = 0; drawnFirstY = 0; scroll = 0;
+        const int headY = gy - 9 * scale - gap;
+        c.TextRaw(gx, headY, "FULLDEX", scale, GlassText);
+        c.Text(gx + gridW - Canvas::TextWidth("PAUSED", scale), headY, "PAUSED", scale, GlassHint);
+        for (int i = 0; i < n; i++)
+        {
+            const int x = gx + (i % cols) * (s + gap), y = gy + (i / cols) * (s + gap);
+            tileX[i] = x; tileY[i] = y;
+            const bool sel = i == selected, off = items[i].disabled;
+            Glass::Round(c, x, y, s, s, s * 0.09f, sel ? GlassChosen : GlassPanel, sel ? GlassChosenEdge : GlassEdge,
+                         sel ? (float)std::max(2, scale) : 1.0f);
+            const uint32_t ink = off ? GlassOff : GlassText;
+            if (items[i].icon >= 0) Glass::DrawIcon(c, items[i].icon, x + s * 0.5f, y + s * 0.4f, s * 0.19f, ink);
+            int ls = scale;
+            while (ls > 1 && Canvas::TextWidth(items[i].label, ls) > s * 0.88f) ls--;
+            c.Text(x + (s - Canvas::TextWidth(items[i].label, ls)) / 2, y + (int)(s * 0.72f), items[i].label, ls, ink);
+            if (!items[i].value.empty())
+            {
+                const int vs = std::max(1, ls - 1);
+                c.Text(x + s - Canvas::TextWidth(items[i].value, vs) - s / 14, y + s / 14, items[i].value, vs, off ? GlassOff : GlassHint);
+            }
+        }
+        c.Text((c.w - Canvas::TextWidth(hint, scale)) / 2, gy + gridH + gap + 2 * scale, hint, scale, GlassHint);
+        if (solid) Glass::Opaque(c);
+    }
 
     // boxUnits: the box's width at scale 1 (0: 190, as the other pages). CHEATS passes 260 so a
     // code's name (32 letters) fits beside "< OFF >".
     void Draw(Canvas& c, const std::string& title, const std::string& hint, const std::string& note = "", int boxUnits = 0) const
     {
-        // (Each channel of the accent c: f(c) per part. With blue, 0xFF3D6FD1, it is the menu as
-        // it was: the box 0x1C2A44, the text 0xC8D0E0, the hints 0x8FA0C0.)
-        auto shade = [](uint32_t a, auto f) {
-            const int r = f((int)(a >> 16 & 0xFF)), g = f((int)(a >> 8 & 0xFF)), b = f((int)(a & 0xFF));
-            return 0xFF000000u | (uint32_t)std::clamp(r, 0, 255) << 16 | (uint32_t)std::clamp(g, 0, 255) << 8 | (uint32_t)std::clamp(b, 0, 255);
-        };
-        const uint32_t boxCol = shade(Accent, [](int v) { return v * 30 / 100; });
-        const uint32_t noteBox = shade(Accent, [](int v) { return v * 22 / 100; });
-        const uint32_t textCol = shade(Accent, [](int v) { return 180 + v * 17 / 100; });
-        const uint32_t hintCol = shade(Accent, [](int v) { return 110 + v * 35 / 100; });
-        const uint32_t barOffSel = shade(Accent, [](int v) { return v + (255 - v) * 3 / 10; });
-        const uint32_t barOff = shade(Accent, [](int v) { return v / 2; });
+        if (columns > 0) { DrawTiles(c, hint); return; }
         int scale = std::min(c.w, c.h) / 240;
         if (scale < 1) scale = 1;
         int lineH = (UiLang::Tall() ? 16 : 11) * scale;
@@ -296,20 +362,21 @@ struct Menu
         drawnLineH = lineH;
         drawnFirstY = by + (hasTitle ? lineH : 0) + 5 * scale - 2 * scale;
 
-        c.Fill(0, 0, c.w, c.h, 0xA0000000);
-        c.Fill(bx - scale, by - scale, boxW + 2 * scale, boxH + 2 * scale, 0xFFE8E8E8);
-        c.Fill(bx, by, boxW, boxH, boxCol);
-        if (hasTitle) c.Text(bx + (boxW - Canvas::TextWidth(title, scale)) / 2, by + 3 * scale, title, scale, 0xFFFFD75E);
+        const bool solid = Glass::Backdrop(c);
+        const float radius = 5.0f * scale;
+        Glass::Round(c, bx, by, boxW, boxH, radius, GlassShade);
+        Glass::Round(c, bx, by, boxW, boxH, radius, GlassPanel, GlassEdge);
+        if (hasTitle) c.Text(bx + (boxW - Canvas::TextWidth(title, scale)) / 2, by + 3 * scale, title, scale, GlassText);
 
         int y = by + (hasTitle ? lineH : 0) + 5 * scale;
         // (Marks at the box's right edge where rows are scrolled out of view, above or below.)
-        if (scroll > 0) c.Text(bx + boxW - 8 * scale, y - lineH + 2 * scale, "+", scale, hintCol);
-        if (scroll + shown < (int)items.size()) c.Text(bx + boxW - 8 * scale, y + shown * lineH - 2 * scale, "+", scale, hintCol);
+        if (scroll > 0) c.Text(bx + boxW - 8 * scale, y - lineH + 2 * scale, "+", scale, GlassHint);
+        if (scroll + shown < (int)items.size()) c.Text(bx + boxW - 8 * scale, y + shown * lineH - 2 * scale, "+", scale, GlassHint);
         for (int i = scroll; i < scroll + shown; i++)
         {
             bool sel = i == selected;
-            if (sel) c.Fill(bx + 2 * scale, y - 2 * scale, boxW - 4 * scale, lineH, Accent);
-            uint32_t col = sel ? 0xFFFFFFFF : textCol;
+            if (sel) Glass::Round(c, bx + 2 * scale, y - 2 * scale, boxW - 4 * scale, lineH, 3.0f * scale, GlassRow, GlassChosenEdge, (float)std::max(1, scale / 2));
+            uint32_t col = items[i].disabled ? GlassOff : sel ? 0xFFFFFFFF : GlassText;
             c.Text(bx + 6 * scale, y, items[i].label, scale, col);
             if (!items[i].value.empty())
             {
@@ -324,19 +391,20 @@ struct Menu
                     barX = vx - 4 * scale - 10 * barStep;
                     for (int k = 0; k < 10; k++)
                         c.Fill(barX + k * barStep, y, 4 * scale, 7 * scale,
-                               k < items[i].slider ? (sel ? 0xFFFFFFFF : textCol) : (sel ? barOffSel : barOff));
+                               k < items[i].slider ? 0xFFFFFFFF : (sel ? 0xFF9AA5B1 : 0xFF5C6672));
                 }
             }
             y += lineH;
         }
-        c.Text(bx + (boxW - Canvas::TextWidth(hint, scale)) / 2, y + 4 * scale, hint, scale, hintCol);
+        c.Text(bx + (boxW - Canvas::TextWidth(hint, scale)) / 2, y + 4 * scale, hint, scale, GlassHint);
         if (!noteLines.empty())
         {
             const int ny = by + boxH + 3 * scale;
-            c.Fill(bx - scale, ny - scale, boxW + 2 * scale, noteH + 2 * scale, 0xFFE8E8E8);
-            c.Fill(bx, ny, boxW, noteH, noteBox);
+            Glass::Round(c, bx, ny, boxW, noteH, radius, GlassShade);
+            Glass::Round(c, bx, ny, boxW, noteH, radius, GlassPanel, GlassEdge);
             for (size_t i = 0; i < noteLines.size(); i++)
-                c.TextRaw(bx + 6 * scale, ny + 4 * scale + (int)i * UiLang::LineUnits() * scale, noteLines[i], scale, textCol);
+                c.TextRaw(bx + 6 * scale, ny + 4 * scale + (int)i * UiLang::LineUnits() * scale, noteLines[i], scale, GlassText);
         }
+        if (solid) Glass::Opaque(c);
     }
 };

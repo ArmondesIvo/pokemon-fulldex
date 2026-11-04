@@ -4741,7 +4741,7 @@ int main(int argc, char** argv)
         M_CSEARCH, M_SEARCH_LETTER, M_SEARCH_DELETE, M_SEARCH_SPACE, M_SEARCH_CLEAR, M_SEARCH_DONE,
         M_CDETAIL_TOGGLE, M_CINFO, M_BACKUPS, M_RESTORE_CONFIRM, M_LOAD_CONFIRM,
         M_MATCHUPS, M_TYPE1, M_TYPE2, M_SECOND_SCREEN,
-        M_COMPANION, M_CPARTY, M_CBAG, M_CDEX, M_CLOCATION, M_CMAP, M_CENCOUNTERS, M_REFERENCE, M_REFERENCE_KIND, M_REFERENCE_QUERY, M_CPOCKET, M_CDEX_FILTER, M_CBATTLE, M_CGUIDE, M_CGUIDE_REVEAL, M_NUZLOCKE, M_RUN_ENABLED, M_RUN_RESET, M_RUN_RESET_CONFIRM, M_QUICK_ACTIONS, M_OPEN_PC,
+        M_COMPANION, M_CPARTY, M_CBAG, M_CDEX, M_CLOCATION, M_CMAP, M_CENCOUNTERS, M_REFERENCE, M_REFERENCE_KIND, M_REFERENCE_QUERY, M_CPOCKET, M_CDEX_FILTER, M_CBATTLE, M_CGUIDE, M_CGUIDE_REVEAL, M_NUZLOCKE, M_RUN_ENABLED, M_RUN_RESET, M_RUN_RESET_CONFIRM, M_QUICK_ACTIONS, M_OPEN_PC, M_HUB_SAVE, M_HUB_LOAD, M_HUB_CHEATS, M_HUB_FAST, M_HUB_SETTINGS, M_HUB_QUIT,
         M_EXTRAS, M_EXTRA0=92000, M_EXTRA_END=92006, M_PLAYBACK=93000, M_FAST_SPEED, M_SMART_FAST, M_SLOW_MOTION, M_REWIND_MB, M_REWIND, M_TURBO_A, M_SCREEN_FILTER, M_COMPANION_OVERLAY, M_PARTY_HUD,
         M_STATES, M_SLOT_SAVE, M_SLOT_LOAD, M_SLOT_PREVIOUS, M_UNDO_LOAD,
         M_CPARTY0=80000, M_CDEX0=81000, M_CITEM0=83000, M_RRESULT0=86000, M_SLOT0=90000, M_GUIDE0=91000,
@@ -4751,7 +4751,7 @@ int main(int argc, char** argv)
         M_CHEAT_ON = 49000, // ON NOW: every cheat that is on, from any folder
         M_CFOLDER0 = 50000  // (M_CFOLDER0 + i: folder i of the cheat database)
     };
-    enum { PAGE_MAIN, PAGE_KEYS, PAGE_DISPLAY, PAGE_GRAPHICS, PAGE_CONTROLS, PAGE_CHEATS, PAGE_RA, PAGE_SOUND, PAGE_RA_LIST, PAGE_RA_DETAIL, PAGE_CSEARCH, PAGE_CDETAIL, PAGE_CINFO, PAGE_BACKUPS, PAGE_RESTORE_CONFIRM, PAGE_LOAD_CONFIRM, PAGE_MATCHUPS, PAGE_COMPANION, PAGE_CPARTY, PAGE_CMON, PAGE_CBAG, PAGE_CDEX, PAGE_CDEXDETAIL, PAGE_CLOCATION, PAGE_PLAYBACK, PAGE_STATES, PAGE_SLOT, PAGE_CBATTLE, PAGE_CGUIDE, PAGE_CGUIDEENTRY, PAGE_NUZLOCKE, PAGE_RUN_CONFIRM, PAGE_QUICK_ACTIONS, PAGE_EXTRAS, PAGE_CITEM, PAGE_REFERENCE, PAGE_RSEARCH, PAGE_RDETAIL, PAGE_CMAP, PAGE_CENCOUNTERS, PAGE_COUNT };
+    enum { PAGE_MAIN, PAGE_KEYS, PAGE_DISPLAY, PAGE_GRAPHICS, PAGE_CONTROLS, PAGE_CHEATS, PAGE_RA, PAGE_SOUND, PAGE_RA_LIST, PAGE_RA_DETAIL, PAGE_CSEARCH, PAGE_CDETAIL, PAGE_CINFO, PAGE_BACKUPS, PAGE_RESTORE_CONFIRM, PAGE_LOAD_CONFIRM, PAGE_MATCHUPS, PAGE_COMPANION, PAGE_CPARTY, PAGE_CMON, PAGE_CBAG, PAGE_CDEX, PAGE_CDEXDETAIL, PAGE_CLOCATION, PAGE_PLAYBACK, PAGE_STATES, PAGE_SLOT, PAGE_CBATTLE, PAGE_CGUIDE, PAGE_CGUIDEENTRY, PAGE_NUZLOCKE, PAGE_RUN_CONFIRM, PAGE_QUICK_ACTIONS, PAGE_EXTRAS, PAGE_CITEM, PAGE_REFERENCE, PAGE_RSEARCH, PAGE_RDETAIL, PAGE_CMAP, PAGE_CENCOUNTERS, PAGE_HUB_SAVE, PAGE_HUB_LOAD, PAGE_HUB_CHEATS, PAGE_HUB_SETTINGS, PAGE_HUB_QUIT, PAGE_COUNT };
     int companionType1 = 0, companionType2 = CompanionTypes::None;
     // ACHIEVEMENTS (RETROACHIEVEMENTS' list): read from the set as the page opens.
     std::vector<Achievements::Row> achList;
@@ -4810,6 +4810,7 @@ int main(int argc, char** argv)
     const int ctlRow0 = ctlHasKeyboard ? 1 : 0; // the first action's row
     const int ctlRowReset = ctlRow0 + Controls::COUNT, ctlRowBack = ctlRowReset + 1;
     auto buildMenu = [&]() {
+        menu.columns = menuPage == PAGE_MAIN ? 4 : 0; // (the first page: eight glass tiles)
         if (menuPage == PAGE_KEYS)
         {
             menuIds.clear();
@@ -4840,26 +4841,61 @@ int main(int argc, char** argv)
         auto onOff = [](bool on) { return std::string(on ? "ON" : "OFF"); };
         if (menuPage == PAGE_MAIN)
         {
-            add(M_RESUME, "RESUME", "");
-            add(M_SAVESTATE, "SAVE STATE", "");
-            add(M_LOADSTATE, "LOAD STATE", "");
-            add(M_STATES,"STATE SLOTS","");
+            // Eight glass tiles (ui.h, Menu::DrawTiles). Everything the old list had is one step in:
+            // SAVE / LOAD (states, slots, backups), CHEATS (and other-version Pokemon), FAST FORWARD
+            // (PLAYBACK), SETTINGS (display, sound, graphics, controls, optional features, companion,
+            // type matchups) and QUIT GAME (quit, reset).
+            auto tile = [&](int id, const char* label, const std::string& value, int icon, bool off = false) {
+                add(id, label, value);
+                menu.items.back().icon = icon;
+                menu.items.back().disabled = off;
+            };
+            tile(M_RESUME, "RESUME", "", Glass::I_PLAY);
+            tile(M_HUB_SAVE, "SAVE", "", Glass::I_SAVE);
+            tile(M_HUB_LOAD, "LOAD", "", Glass::I_LOAD);
+            tile(M_HUB_CHEATS, "CHEATS", cheats.On() ? std::to_string(cheats.On()) + " ON" : "", Glass::I_CHEATS);
+            tile(M_HUB_FAST, "FAST FORWARD", fastLock ? "ON" : "", Glass::I_FAST);
+            tile(M_RA, "ACHIEVEMENTS", Achievements::Available() && cfg.ra.on ? "ON" : "", Glass::I_TROPHY, !Achievements::Available());
+            tile(M_HUB_SETTINGS, "SETTINGS", "", Glass::I_GEAR);
+            tile(M_HUB_QUIT, "QUIT GAME", "", Glass::I_POWER);
+        }
+        else if (menuPage == PAGE_HUB_SAVE)
+        {
+            add(M_SAVESTATE, "QUICK SAVE", "");
+            add(M_STATES, "STATE SLOTS", "");
             if (!opt.noSave) add(M_BACKUPS, "SAVE BACKUPS", "");
-            add(M_FAST, "FAST FORWARD", onOff(fastLock));
-            add(M_PLAYBACK,"PLAYBACK","");
+            add(M_BACK, "BACK", "");
+        }
+        else if (menuPage == PAGE_HUB_LOAD)
+        {
+            add(M_LOADSTATE, "QUICK LOAD", "");
+            add(M_STATES, "STATE SLOTS", "");
+            if (!opt.noSave) add(M_BACKUPS, "SAVE BACKUPS", "");
+            add(M_BACK, "BACK", "");
+        }
+        else if (menuPage == PAGE_HUB_CHEATS)
+        {
+            add(M_CHEATS, "CHEATS", cheats.On() ? std::to_string(cheats.On()) + " ON" : "");
+            if (exclusives.Supported()) add(M_BOTHVER, "OTHER VERSION POKEMON", onOff(exclusives.on));
+            add(M_BACK, "BACK", "");
+        }
+        else if (menuPage == PAGE_HUB_SETTINGS)
+        {
             add(M_DISPLAY, "DISPLAY", "");
-            add(M_SOUND, "SOUND", "");
             add(M_GRAPHICS, "GRAPHICS", "");
+            add(M_SOUND, "SOUND", "");
             add(M_CONTROLMENU, "CONTROLS", "");
-            add(M_EXTRAS,"OPTIONAL FEATURES","");
+            add(M_EXTRAS, "OPTIONAL FEATURES", "");
             add(M_COMPANION, "COMPANION", "");
             if(cfg.quickActions&&pokeActions.Supported()&&!opt.lockstep)add(M_QUICK_ACTIONS,"QUICK ACTIONS","");
             add(M_MATCHUPS, "TYPE MATCHUPS", "");
-            add(M_CHEATS, "CHEATS", cheats.On() ? std::to_string(cheats.On()) + " ON" : "");
-            if (exclusives.Supported()) add(M_BOTHVER, "OTHER VERSION POKEMON", onOff(exclusives.on));
-            if (Achievements::Available()) add(M_RA, "RETROACHIEVEMENTS", onOff(cfg.ra.on));
+            add(M_BACK, "BACK", "");
+        }
+        else if (menuPage == PAGE_HUB_QUIT)
+        {
+            add(M_QUIT, "QUIT GAME", "");
             add(M_RESET, "RESET GAME", "");
-            add(M_QUIT, "QUIT", "");
+            add(M_BACK, "BACK", "");
         }
         else if(menuPage==PAGE_EXTRAS)
         {
@@ -4979,6 +5015,7 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_PLAYBACK)
         {
+            add(M_FAST, "FAST FORWARD", onOff(fastLock));
             add(M_FAST_SPEED,"FAST SPEED",std::to_string(cfg.fastSpeed)+"X");
             add(M_SMART_FAST,"SMART FAST",onOff(cfg.smartFast));
             add(M_SLOW_MOTION,"SLOW MOTION",cfg.slowDivisor==1?"OFF":cfg.slowDivisor==2?"1/2":"1/4");
@@ -5405,7 +5442,27 @@ int main(int argc, char** argv)
         }
     };
     // To another page of the pause menu, on the row of item `select` (its first row: -1).
+    int hubPage = -1; // the hub page last opened from a tile (SAVE and LOAD share their items)
+    auto hubFor = [&](int id) -> int {
+        switch (id)
+        {
+        case M_SAVESTATE: return PAGE_HUB_SAVE;
+        case M_LOADSTATE: return PAGE_HUB_LOAD;
+        case M_STATES: case M_BACKUPS: return hubPage == PAGE_HUB_LOAD ? PAGE_HUB_LOAD : PAGE_HUB_SAVE;
+        case M_CHEATS: case M_BOTHVER: return PAGE_HUB_CHEATS;
+        case M_DISPLAY: case M_GRAPHICS: case M_SOUND: case M_CONTROLMENU: case M_EXTRAS:
+        case M_COMPANION: case M_QUICK_ACTIONS: case M_MATCHUPS: return PAGE_HUB_SETTINGS;
+        case M_QUIT: case M_RESET: return PAGE_HUB_QUIT;
+        }
+        return -1;
+    };
     auto goPage = [&](int page, int select) {
+        if (page == PAGE_MAIN)
+        {
+            if (select == M_PLAYBACK || select == M_FAST) select = M_HUB_FAST;
+            else if (hubFor(select) >= 0) page = hubFor(select);
+        }
+        if (page >= PAGE_HUB_SAVE && page <= PAGE_HUB_QUIT) hubPage = page;
         menuPage = page;
         buildMenu();
         menu.selected = 0;
@@ -5834,6 +5891,17 @@ int main(int argc, char** argv)
                 SDL_RenderCopy(renderer,companionTexture,nullptr,&destination);
             }
         }
+        // Frosted glass: the game as it is when the menu opens, read once (it is paused) and blurred.
+        if (menu.open && canvas.backdrop.empty() && j.outW > 0 && j.outH > 0)
+        {
+            std::vector<uint32_t> shot((size_t)j.outW * j.outH);
+            if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, shot.data(), j.outW * 4) == 0)
+                Glass::MakeBackdrop(canvas.backdrop, shot.data(), j.outW, j.outH);
+            else
+                canvas.backdrop.assign(1, 0); // (not readable: the menu keeps the plain darkened game)
+        }
+        else if (!menu.open && !canvas.backdrop.empty())
+            canvas.backdrop.clear();
         if (j.overlayUsed)
         {
             if (!overlayTex || overlayTexW != j.outW || overlayTexH != j.outH)
@@ -6933,6 +7001,12 @@ int main(int argc, char** argv)
                 }
                 break;
             }
+            case M_HUB_SAVE: goPage(PAGE_HUB_SAVE, M_STATES); hit = -1; break;
+            case M_HUB_LOAD: goPage(PAGE_HUB_LOAD, M_STATES); hit = -1; break;
+            case M_HUB_CHEATS: goPage(PAGE_HUB_CHEATS, M_CHEATS); hit = -1; break;
+            case M_HUB_FAST: goPage(PAGE_PLAYBACK, M_FAST); hit = -1; break;
+            case M_HUB_SETTINGS: goPage(PAGE_HUB_SETTINGS, M_DISPLAY); hit = -1; break;
+            case M_HUB_QUIT: goPage(PAGE_HUB_QUIT, M_QUIT); hit = -1; break;
             case M_STATES:goPage(PAGE_STATES,M_SLOT0);hit=-1;break;
             case M_SLOT_SAVE:saveAt(StateSlots::Path(quickState,stateSlot));break;
             case M_SLOT_LOAD:pendingState=StateSlots::Path(quickState,stateSlot);goPage(PAGE_LOAD_CONFIRM,M_BACK);hit=-1;break;
@@ -7018,6 +7092,11 @@ int main(int argc, char** argv)
                 hit = -1;
                 break;
             case M_BACK:
+                if(menuPage>=PAGE_HUB_SAVE&&menuPage<=PAGE_HUB_QUIT)
+                {
+                    const int tileId=menuPage==PAGE_HUB_SAVE?M_HUB_SAVE:menuPage==PAGE_HUB_LOAD?M_HUB_LOAD:menuPage==PAGE_HUB_CHEATS?M_HUB_CHEATS:menuPage==PAGE_HUB_SETTINGS?M_HUB_SETTINGS:M_HUB_QUIT;
+                    hubPage=-1;goPage(PAGE_MAIN,tileId);hit=-1;break;
+                }
                 if(menuPage==PAGE_CMAP){goPage(PAGE_CLOCATION,M_CMAP);hit=-1;break;}
                 if(menuPage==PAGE_CENCOUNTERS){goPage(PAGE_CLOCATION,M_CENCOUNTERS);hit=-1;break;}
                 if(menuPage==PAGE_RSEARCH){SDL_StopTextInput();goPage(PAGE_REFERENCE,M_REFERENCE_QUERY);hit=-1;break;}
@@ -8764,7 +8843,7 @@ int main(int argc, char** argv)
             std::string hint = touchPadUsed && touchPad.visible ? "TAP: CHOOSE   OUTSIDE: BACK"
                                : btn(Controls::A) + ": SELECT   " + btn(Controls::B) + ": BACK";
             const int selId = menu.selected >= 0 && menu.selected < (int)menuIds.size() ? menuIds[menu.selected] : -1;
-            static const char* pageTitle[] = { "", "KEYS AND BUTTONS", "DISPLAY", "GRAPHICS", "CONTROLS", "CHEATS", "RETROACHIEVEMENTS", "SOUND", "ACHIEVEMENTS", "ACHIEVEMENT", "SEARCH CHEATS", "CHEAT DETAILS", "DATABASE INFO", "SAVE BACKUPS", "RESTORE SAVE", "LOAD STATE", "TYPE MATCHUPS", "COMPANION", "PARTY", "POKEMON", "BAG", "POKEDEX", "POKEDEX ENTRY", "LOCATION", "PLAYBACK", "STATE SLOTS", "STATE SLOT", "BATTLE INFO", "GUIDE", "GUIDE HINT", "NUZLOCKE TRACKER", "RESET TRACKER", "QUICK ACTIONS", "OPTIONAL FEATURES", "ITEM DETAILS", "SEARCH REFERENCE", "SEARCH REFERENCE", "REFERENCE ENTRY", "REFERENCE MAP", "ENCOUNTERS HERE" };
+            static const char* pageTitle[] = { "", "KEYS AND BUTTONS", "DISPLAY", "GRAPHICS", "CONTROLS", "CHEATS", "RETROACHIEVEMENTS", "SOUND", "ACHIEVEMENTS", "ACHIEVEMENT", "SEARCH CHEATS", "CHEAT DETAILS", "DATABASE INFO", "SAVE BACKUPS", "RESTORE SAVE", "LOAD STATE", "TYPE MATCHUPS", "COMPANION", "PARTY", "POKEMON", "BAG", "POKEDEX", "POKEDEX ENTRY", "LOCATION", "PLAYBACK", "STATE SLOTS", "STATE SLOT", "BATTLE INFO", "GUIDE", "GUIDE HINT", "NUZLOCKE TRACKER", "RESET TRACKER", "QUICK ACTIONS", "OPTIONAL FEATURES", "ITEM DETAILS", "SEARCH REFERENCE", "SEARCH REFERENCE", "REFERENCE ENTRY", "REFERENCE MAP", "ENCOUNTERS HERE" , "SAVE", "LOAD", "CHEATS", "SETTINGS", "QUIT GAME" };
             static_assert(sizeof(pageTitle)/sizeof(pageTitle[0])==PAGE_COUNT,"Every menu page needs a title");
             if (menuPage == PAGE_KEYS)
             {
