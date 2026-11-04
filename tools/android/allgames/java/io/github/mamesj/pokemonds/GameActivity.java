@@ -35,7 +35,8 @@ public class GameActivity extends SDLActivity {
     private static final String TAG = "PokemonDS";
     private static final int PICK_FOLDER = 4201;
     private static final int ASK_FILES = 4202;
-    private static GameActivity self;
+    private static volatile GameActivity self;
+    private SecondScreen secondScreen;
     // True from chooseFolder() until the picker (and the access question before it) is done.
     private static volatile boolean picking;
     private boolean waitingForAccess;
@@ -50,6 +51,7 @@ public class GameActivity extends SDLActivity {
         startupTrace("Activity created", true);
         getContentResolver().registerContentObserver(Settings.System.getUriFor(
             Settings.System.ACCELEROMETER_ROTATION), false, rotationObserver);
+        secondScreen = new SecondScreen(this);
         applyScreenOrientation();
     }
 
@@ -101,6 +103,7 @@ public class GameActivity extends SDLActivity {
 
     public static void showLauncherOrientation() {
         playingGame = false;
+        setDsRunning(false);
         if (self != null) self.applyScreenOrientation();
     }
 
@@ -187,13 +190,44 @@ public class GameActivity extends SDLActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (secondScreen != null) secondScreen.resumed(true);
         applyScreenOrientation();
         // Back from Android's "All files access" page.
         if (picking && waitingForAccess) nextStep();
     }
 
     @Override
+    public void onConfigurationChanged(android.content.res.Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        if (secondScreen != null) secondScreen.refresh();
+    }
+
+    @Override
+    protected void onPause() {
+        if (secondScreen != null) secondScreen.resumed(false);
+        super.onPause();
+    }
+
+    public static long secondScreenState() {
+        GameActivity activity = self;
+        return activity == null || activity.secondScreen == null ? 0 : activity.secondScreen.state();
+    }
+    public static void setSecondScreenMode(int mode) {
+        GameActivity activity = self;
+        if (activity != null && activity.secondScreen != null) activity.secondScreen.setMode(mode);
+    }
+    public static void setDsRunning(boolean running) {
+        GameActivity activity = self;
+        if (activity != null && activity.secondScreen != null) activity.secondScreen.running(running);
+    }
+    public static void submitDsFrame(int[] pixels,int width,int height) {
+        GameActivity activity = self;
+        if (activity != null && activity.secondScreen != null) activity.secondScreen.submit(pixels,width,height);
+    }
+
+    @Override
     protected void onDestroy() {
+        if (secondScreen != null) secondScreen.close();
         getContentResolver().unregisterContentObserver(rotationObserver);
         if (self == this) self = null;
         super.onDestroy();

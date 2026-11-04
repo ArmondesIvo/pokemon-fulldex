@@ -446,3 +446,6 @@ if(SSR_GPU3D)
     endif()
     target_compile_definitions(ssrecomp PRIVATE SSR_GPU3D)
 endif()
+
+# PokeDaisy's guarded DS field-action recipes. These extend the frontend, not either core.
+target_sources(ssrecomp PRIVATE frontend/pokedaisy/pk_nds_field.cpp frontend/pokedaisy/pk_nds_call.cpp)

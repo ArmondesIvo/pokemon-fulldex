@@ -58,6 +58,20 @@
 #include "host.h"
 #include "layout.h"
 #include "ui.h"
+#include "companion_types.h"
+#include "companion_rom.h"
+#include "companion_guides.h"
+#include "companion_panel.h"
+#include "companion_battle.h"
+#include "optional_features.h"
+#include "nuzlocke_tracker.h"
+#include "pokedaisy_actions.h"
+#include <bitset>
+#include "state_slots.h"
+#include "rewind_history.h"
+#include "screen_effect.h"
+#include "state_preview.h"
+#include "android_second_screen.h"
 #include "merged.h"
 #include "audiostretch.h"
 #include "gpucompose.h"
@@ -1530,7 +1544,7 @@ static uint32_t PadKeys(const PadState& p, bool byLabel)
 }
 
 // Settings that persist between runs.
-struct Settings
+struct Settings : OptionalFeatures
 {
     std::string layout = "merged";
     int focusMode = 0;
@@ -1565,6 +1579,10 @@ struct Settings
     // second, so a faster fast forward where drawing it is the limit). Off on a PC (the PC
     // defaults below), where it is a setting: FAST FORWARD LOW RES.
     bool ffLowRes = true;
+    int fastSpeed = 4, slowDivisor = 1, rewindMb = 0;
+    bool smartFast = false, turboA = false;
+    int screenFilter=0;
+    bool companionOverlay=false,partyHud=false;
     // VOLUME: the game's sound and music, 0 (off) to 100 in tens.
     int volume = 100;
     // ASPECT RATIO: 0 AUTO (the screen's own shape), 1 16:9, 2 16:10, 3 3:2, 4 4:3.
@@ -1573,7 +1591,7 @@ struct Settings
     bool ultraNoticeSeen = false;
     // FAST FORWARD SOUND: off plays silence while fast forwarding (GitHub #45).
     bool ffMute = false;
-    std::string listColour, listBackground, listLang; // (GAME LIST: COLOUR, BACKGROUND; LANGUAGE)
+    std::string listColour, listBackground, listLang, listSort; // (GAME LIST: COLOUR, BACKGROUND; LANGUAGE)
     bool cpuBoost = true; // Switch only: the processor's boost mode (see SwitchPlatform)
     bool jit = true;      // Switch, games that are not recompiled: melonDS's JIT (read at start-up)
     bool fastMem = true;  // ... and its fast memory (also read at start-up)
@@ -1628,7 +1646,7 @@ struct Settings
             size_t eq = line.find('=');
             if (eq == std::string::npos) return;
             std::string k = line.substr(0, eq), v = line.substr(eq + 1);
-            if (controls.Apply(k, v)) return;
+            if (controls.Apply(k, v) || ApplyExtra(k,v)) return;
             // "view" replaced the older "layout" key when the merged view became the default.
             if (k == "view") layout = v;
             else if (k == "large_screen") focusMode = v == "top" ? 1 : v == "bottom" ? 2 : 0;
@@ -1650,8 +1668,17 @@ struct Settings
             // pause menu's colour too.)
             else if (k == "list_colour") { listColour = v; Menu::Accent = AccentNamed(v); }
             else if (k == "list_background") listBackground = v;
+            else if (k == "list_sort") listSort = v;
             else if (k == "list_lang" || k == "language") { listLang = v; UiLang::Set(v); }
             else if (k == "ff_low_res") ffLowRes = v == "1";
+            else if (k == "fast_speed") fastSpeed = std::clamp(atoi(v.c_str()),2,8);
+            else if (k == "slow_divisor") slowDivisor = v=="4"?4:v=="2"?2:1;
+            else if (k == "rewind_mb") rewindMb = v=="128"?128:v=="64"?64:0;
+            else if (k == "companion_overlay") companionOverlay=v=="1";
+            else if (k == "party_hud") partyHud=v=="1";
+            else if (k == "screen_filter") screenFilter=std::clamp(atoi(v.c_str()),0,2);
+            else if (k == "smart_fast") smartFast = v=="1";
+            else if (k == "turbo_a") turboA = v=="1";
             else if (k == "start_button") startMenu = v != "ds";
             else if (k == "cpu_boost") cpuBoost = v == "1";
             else if (k == "jit") jit = v == "1";
@@ -1698,11 +1725,21 @@ struct Settings
         f << "pad_touch=" << (padTouch ? 1 : 0) << "\n";
         f << "show_fps=" << (showFps ? 1 : 0) << "\n";
         f << "ff_low_res=" << (ffLowRes ? 1 : 0) << "\n";
+        f << "fast_speed=" << fastSpeed << "\n";
+        f << "slow_divisor=" << slowDivisor << "\n";
+        f << "rewind_mb=" << rewindMb << "\n";
+        f << "companion_overlay=" << companionOverlay << "\n";
+        f << "party_hud=" << partyHud << "\n";
+        f << "screen_filter=" << screenFilter << "\n";
+        SaveExtras(f);
+        f << "smart_fast=" << smartFast << "\n";
+        f << "turbo_a=" << turboA << "\n";
         f << "volume=" << volume << "\n";
         f << "ultrawide_notice=" << (ultraNoticeSeen ? 1 : 0) << "\n";
         f << "aspect=" << (aspect == 1 ? "16:9" : aspect == 2 ? "16:10" : aspect == 3 ? "3:2" : aspect == 4 ? "4:3" : "auto") << "\n";
         f << "ff_mute=" << (ffMute ? 1 : 0) << "\n";
         if (!listColour.empty()) f << "list_colour=" << listColour << "\n";
+        if (!listSort.empty()) f << "list_sort=" << listSort << "\n";
         if (!listBackground.empty()) f << "list_background=" << listBackground << "\n";
         if (!listLang.empty()) f << "list_lang=" << listLang << "\n";
         f << "start_button=" << (startMenu ? "menu" : "ds") << "\n";
@@ -1772,10 +1809,9 @@ static bool WriteSnapshot(NDS& nds, const std::string& path, uint32_t frame)
     st.Finish();
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) return false;
-    fwrite(&frame, 4, 1, f);
-    fwrite(st.Buffer(), 1, st.Length(), f);
-    fclose(f);
-    return true;
+    const bool wrote = fwrite(&frame, 4, 1, f)==1 && fwrite(st.Buffer(), 1, st.Length(), f)==st.Length();
+    const bool closed = fclose(f)==0;
+    return wrote && closed;
 }
 
 // Snapshot file: 4-byte frame number, then the core's savestate.
@@ -1784,9 +1820,10 @@ static bool ReadSnapshot(NDS& nds, const std::string& path, uint32_t* frame)
     std::vector<uint8_t> blob = ReadFile(path);
     if (blob.size() <= 4) return false;
     Savestate st(blob.data() + 4, (u32)blob.size() - 4, false);
-    if (st.Error || !nds.DoSavestate(&st)) return false;
+    if (st.Error || !nds.DoSavestate(&st) || st.Error) return false;
     if (frame) memcpy(frame, blob.data(), 4);
     rc_reset();
+    pk_nds_call_reset();
     return true;
 }
 
@@ -1926,6 +1963,10 @@ int main(int argc, char** argv)
     // (RETROACHIEVEMENTS finds the game's set by the ROM's fingerprint: taken while the ROM is here.)
     const std::string romFingerprint = !opt.headless && !opt.lockstep ? Achievements::Fingerprint(rom) : std::string();
     // The cartridge has its own copy now; Black 2's ROM is about 300 MB, which counts on the Switch.
+    const int companionRevision=rom.size()>0x1E?rom[0x1E]:-1;
+    const Companion::Profile companionProfile=Companion::ProfileFor(gameCode,companionRevision);
+    Companion::Metadata companionMetadata;
+    companionMetadata.Load(rom,gameCode,companionProfile);
     rom.clear();
     rom.shrink_to_fit();
 
@@ -2040,6 +2081,13 @@ int main(int argc, char** argv)
     std::string dir = slash == std::string::npos ? "." : opt.save.substr(0, slash);
     if (opt.config.empty()) opt.config = dir + "/ssrecomp.cfg";
     const std::string quickState = opt.save + ".state";
+    std::string pendingState = quickState;
+    const std::string undoLoadState = quickState + ".undo-load";
+    RewindHistory rewindHistory;
+    ScreenEffect screenEffect;
+    StatePreview statePreview;
+    int stateSlot=0;
+    bool lastFieldForSpeed=false;
     if (!opt.noSave) BackupSave(opt.save);
 
     Settings cfg;
@@ -2201,6 +2249,7 @@ int main(int argc, char** argv)
     SDL_AudioDeviceID audio = 0;
     Pads pads;
     Layout layout = LayoutFromName(cfg.layout);
+    AndroidSecondScreen secondDisplay(!opt.headless);
     const uint8_t* singleScreenFlag = nullptr; // set by the ROM: nonzero while a scene needs both screens
     LayoutMode preSingleLayout = LayoutMode::Merged;
     uint32_t singleFieldFrame = 0; // the last frame the overworld ran in a single-screen build
@@ -4638,6 +4687,44 @@ int main(int argc, char** argv)
     };
     uint32_t scriptClock = frame; // equals frame unless --battle-mash holds it during battles
 
+    PokeDsActions pokeActions(nds.get(),gameCode,companionRevision);
+    int pokeActionJob=0;
+    NuzlockeTracker nuzlocke;nuzlocke.Load(opt.save+".nuzlocke");
+    bool nuzlockeWriteFailed=false;
+    Companion::Snapshot companionSnapshot;
+    CompanionPanel companionPanel,mapPanel;
+    bool companionFingerDown=false;
+    bool overlayFinger=false,overlayMouse=false;
+    SDL_FingerID overlayFingerId=0;
+    SDL_Texture* companionTexture=nullptr;
+    int companionDiagnosticReady=-1,companionDiagnosticCount=-1;
+    auto liveCompanionWanted = [&]() {return cfg.liveCompanion||cfg.companionOverlay||cfg.partyHud||nuzlocke.Enabled()||DsDisplayState::Mode(secondDisplay.State())==4;};
+    auto readCompanion = [&](bool requested=false) {
+        if(!requested&&!liveCompanionWanted())
+        {
+            companionSnapshot={};companionSnapshot.supported=companionProfile.supported;
+            companionSnapshot.message="OPEN COMPANION TO READ DATA, OR ENABLE LIVE COMPANION IN OPTIONAL FEATURES.";
+            return;
+        }
+        companionSnapshot = Companion::Read(companionProfile, [&](uint32_t at, void* out, size_t count) {
+            if (!Companion::MainRange(at,count) || !nds->MainRAM) return false;
+            // Called between emulated frames, before the worker is kicked. Do not sample on the UI thread.
+            const size_t offset = at - 0x02000000;
+            if (offset + count > (size_t)nds->MainRAMMask + 1) return false;
+            memcpy(out, nds->MainRAM + offset, count);
+            return true;
+        });
+        if(!opt.noSave && !nuzlocke.Observe(companionSnapshot))nuzlockeWriteFailed=true;
+        if(getenv("SSR_COMPANION_DIAGNOSTICS") && (companionDiagnosticReady!=(int)companionSnapshot.ready || companionDiagnosticCount!=(int)companionSnapshot.party.size()))
+        {
+            companionDiagnosticReady=companionSnapshot.ready;companionDiagnosticCount=(int)companionSnapshot.party.size();
+            fprintf(stderr,"[companion] ready=%d party=%zu invalid=%d bag=%zu dex=%d\n",companionDiagnosticReady,companionSnapshot.party.size(),companionSnapshot.invalidSlots,companionSnapshot.items.size(),companionSnapshot.dexReady);
+        }
+    };
+    const auto companionGuide=Companion::GuideFor(gameCode);
+    int companionGuideChoice=0;bool companionGuideReveal=false;
+    readCompanion();
+    int companionMon=0, companionSpecies=1, companionPocket=-1, companionDexFilter=0, companionItem=0;
     Canvas canvas;
     Menu menu;
     // The pause menu's items (menuIds: the item in each row) and its pages (menuPage): the menu
@@ -4653,13 +4740,19 @@ int main(int argc, char** argv)
         M_RA_LIST, M_ACH_POINTS, M_ACH_STATUS, M_ACH_RARITY,
         M_CSEARCH, M_SEARCH_LETTER, M_SEARCH_DELETE, M_SEARCH_SPACE, M_SEARCH_CLEAR, M_SEARCH_DONE,
         M_CDETAIL_TOGGLE, M_CINFO, M_BACKUPS, M_RESTORE_CONFIRM, M_LOAD_CONFIRM,
+        M_MATCHUPS, M_TYPE1, M_TYPE2, M_SECOND_SCREEN,
+        M_COMPANION, M_CPARTY, M_CBAG, M_CDEX, M_CLOCATION, M_CMAP, M_CENCOUNTERS, M_REFERENCE, M_REFERENCE_KIND, M_REFERENCE_QUERY, M_CPOCKET, M_CDEX_FILTER, M_CBATTLE, M_CGUIDE, M_CGUIDE_REVEAL, M_NUZLOCKE, M_RUN_ENABLED, M_RUN_RESET, M_RUN_RESET_CONFIRM, M_QUICK_ACTIONS, M_OPEN_PC,
+        M_EXTRAS, M_EXTRA0=92000, M_EXTRA_END=92006, M_PLAYBACK=93000, M_FAST_SPEED, M_SMART_FAST, M_SLOW_MOTION, M_REWIND_MB, M_REWIND, M_TURBO_A, M_SCREEN_FILTER, M_COMPANION_OVERLAY, M_PARTY_HUD,
+        M_STATES, M_SLOT_SAVE, M_SLOT_LOAD, M_SLOT_PREVIOUS, M_UNDO_LOAD,
+        M_CPARTY0=80000, M_CDEX0=81000, M_CITEM0=83000, M_RRESULT0=86000, M_SLOT0=90000, M_GUIDE0=91000,
         M_BACKUP0 = 70000,
         M_CHEAT0 = 1000, // (M_CHEAT0 + i: cheat i, CHEATS)
         M_ACH0 = 30000,  // (M_ACH0 + i: achievement i, ACHIEVEMENTS)
         M_CHEAT_ON = 49000, // ON NOW: every cheat that is on, from any folder
         M_CFOLDER0 = 50000  // (M_CFOLDER0 + i: folder i of the cheat database)
     };
-    enum { PAGE_MAIN, PAGE_KEYS, PAGE_DISPLAY, PAGE_GRAPHICS, PAGE_CONTROLS, PAGE_CHEATS, PAGE_RA, PAGE_SOUND, PAGE_RA_LIST, PAGE_RA_DETAIL, PAGE_CSEARCH, PAGE_CDETAIL, PAGE_CINFO, PAGE_BACKUPS, PAGE_RESTORE_CONFIRM, PAGE_LOAD_CONFIRM };
+    enum { PAGE_MAIN, PAGE_KEYS, PAGE_DISPLAY, PAGE_GRAPHICS, PAGE_CONTROLS, PAGE_CHEATS, PAGE_RA, PAGE_SOUND, PAGE_RA_LIST, PAGE_RA_DETAIL, PAGE_CSEARCH, PAGE_CDETAIL, PAGE_CINFO, PAGE_BACKUPS, PAGE_RESTORE_CONFIRM, PAGE_LOAD_CONFIRM, PAGE_MATCHUPS, PAGE_COMPANION, PAGE_CPARTY, PAGE_CMON, PAGE_CBAG, PAGE_CDEX, PAGE_CDEXDETAIL, PAGE_CLOCATION, PAGE_PLAYBACK, PAGE_STATES, PAGE_SLOT, PAGE_CBATTLE, PAGE_CGUIDE, PAGE_CGUIDEENTRY, PAGE_NUZLOCKE, PAGE_RUN_CONFIRM, PAGE_QUICK_ACTIONS, PAGE_EXTRAS, PAGE_CITEM, PAGE_REFERENCE, PAGE_RSEARCH, PAGE_RDETAIL, PAGE_CMAP, PAGE_CENCOUNTERS, PAGE_COUNT };
+    int companionType1 = 0, companionType2 = CompanionTypes::None;
     // ACHIEVEMENTS (RETROACHIEVEMENTS' list): read from the set as the page opens.
     std::vector<Achievements::Row> achList;
     int achDetail = -1; // the one ACHIEVEMENTS' details are shown for (A on it)
@@ -4688,7 +4781,9 @@ int main(int argc, char** argv)
     // CHEATS. -2: the folders (or every code, when there is no folder to open). -3: ON NOW.
     // 0 and up: that folder of the database, so its codes are listed on their own.
     int cheatWhere = -2; // -4: search results across all folders
-    std::string cheatQuery;
+    std::string cheatQuery,companionQuery;
+    int companionReferenceKind=0,companionReferenceId=0;
+    bool companionReferenceReturn=false;
     int searchLetter = 0, cheatDetail = -1;
     const std::string searchLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     std::vector<SaveBackups::Entry> saveBackups;
@@ -4748,20 +4843,38 @@ int main(int argc, char** argv)
             add(M_RESUME, "RESUME", "");
             add(M_SAVESTATE, "SAVE STATE", "");
             add(M_LOADSTATE, "LOAD STATE", "");
+            add(M_STATES,"STATE SLOTS","");
             if (!opt.noSave) add(M_BACKUPS, "SAVE BACKUPS", "");
             add(M_FAST, "FAST FORWARD", onOff(fastLock));
+            add(M_PLAYBACK,"PLAYBACK","");
             add(M_DISPLAY, "DISPLAY", "");
             add(M_SOUND, "SOUND", "");
             add(M_GRAPHICS, "GRAPHICS", "");
             add(M_CONTROLMENU, "CONTROLS", "");
+            add(M_EXTRAS,"OPTIONAL FEATURES","");
+            add(M_COMPANION, "COMPANION", "");
+            if(cfg.quickActions&&pokeActions.Supported()&&!opt.lockstep)add(M_QUICK_ACTIONS,"QUICK ACTIONS","");
+            add(M_MATCHUPS, "TYPE MATCHUPS", "");
             add(M_CHEATS, "CHEATS", cheats.On() ? std::to_string(cheats.On()) + " ON" : "");
             if (exclusives.Supported()) add(M_BOTHVER, "OTHER VERSION POKEMON", onOff(exclusives.on));
             if (Achievements::Available()) add(M_RA, "RETROACHIEVEMENTS", onOff(cfg.ra.on));
             add(M_RESET, "RESET GAME", "");
             add(M_QUIT, "QUIT", "");
         }
+        else if(menuPage==PAGE_EXTRAS)
+        {
+            size_t count;const auto* options=OptionalFeatures::Options(count);
+            for(size_t i=0;i<count;i++)add(M_EXTRA0+(int)i,options[i].name,onOff(cfg.*options[i].value));
+            add(M_NOTHING,"HUD / WINDOW / FILTERS: DISPLAY","",true);
+            add(M_NOTHING,"SPEED / REWIND / TURBO: PLAYBACK","",true);
+            add(M_BACK,"BACK","");
+        }
         else if (menuPage == PAGE_DISPLAY)
         {
+#if defined(__ANDROID__) && defined(SSR_PC_LAUNCHER)
+            const int secondMode = DsDisplayState::Mode(secondDisplay.State());
+            add(M_SECOND_SCREEN, "SECOND SCREEN", DsDisplayState::ModeName(secondMode));
+#endif
             add(M_LANGUAGE, "LANGUAGE", UiLang::ChoiceName());
             {
                 static const char* const aspects[] = { "AUTO", "16:9", "16:10", "3:2", "4:3" };
@@ -4782,6 +4895,9 @@ int main(int argc, char** argv)
             add(M_BATTLEBUTTONS, "BATTLE BUTTONS",
                 !funcWatchOn || pt.on ? "-" : cfg.battleButtons == 2 ? "PANEL" : cfg.battleButtons == 0 || !bw1.on ? "CORNER" : "STRIP");
             add(M_SHOWFPS, "FPS COUNTER", onOff(cfg.showFps));
+            add(M_COMPANION_OVERLAY,"COMPANION WINDOW",onOff(cfg.companionOverlay));
+            add(M_PARTY_HUD,"PARTY HUD",onOff(cfg.partyHud));
+            add(M_SCREEN_FILTER,"SCREEN FILTER",cfg.screenFilter==2?"LCD GRID":cfg.screenFilter==1?"SCANLINES":"OFF");
             add(M_BACK, "BACK", "");
         }
         else if (menuPage == PAGE_SOUND)
@@ -4835,6 +4951,279 @@ int main(int argc, char** argv)
             add(M_EMULATION, "EMULATION", std::string(!cfg.jit ? "INTERPRETER" : cfg.fastMem ? "FAST JIT" : "JIT")
                 + (cfg.jit != UseJit || (cfg.jit && cfg.fastMem != UseFastMem) ? " (NEXT START)" : ""));
 #endif
+            add(M_BACK, "BACK", "");
+        }
+        else if(menuPage==PAGE_QUICK_ACTIONS)
+        {
+            add(M_OPEN_PC,"OPEN PC","");
+            add(M_NOTHING,"ONLY WHILE THE FIELD IS FREE","",true);
+            add(M_NOTHING,"OTHER ACTIONS NEED FURTHER MAPPING","",true);
+            add(M_BACK,"BACK","");
+        }
+        else if(menuPage==PAGE_NUZLOCKE)
+        {
+            add(M_RUN_ENABLED,"TRACKING",onOff(nuzlocke.Enabled()));
+            add(M_NOTHING,"OBSERVED FAINTS",std::to_string(nuzlocke.Deaths().size()),true);
+            for(auto entry:nuzlocke.Deaths())add(M_NOTHING,Cheats::Fit(companionMetadata.Species(entry.second),30).c_str(),"OUT",true);
+            add(M_NOTHING,"FIRST WILD ENCOUNTERS",std::to_string(nuzlocke.Encounters().size()),true);
+            for(auto entry:nuzlocke.Encounters())add(M_NOTHING,("MAP "+std::to_string(entry.first)).c_str(),Cheats::Fit(companionMetadata.Species(entry.second),22),true);
+            add(M_NOTHING,"TRACKER ONLY - RULES ARE NOT ENFORCED","",true);
+            add(M_NOTHING,"HISTORY IS NOT REWOUND BY SAVE STATES","",true);
+            if(nuzlockeWriteFailed)add(M_NOTHING,"HISTORY COULD NOT BE SAVED","",true);
+            add(M_RUN_RESET,"RESET RUN","");add(M_BACK,"BACK","");
+        }
+        else if(menuPage==PAGE_RUN_CONFIRM)
+        {
+            add(M_NOTHING,"RESET ONLY THE TRACKER HISTORY?","",true);
+            add(M_BACK,"CANCEL","");add(M_RUN_RESET_CONFIRM,"RESET TRACKER","");
+        }
+        else if (menuPage == PAGE_PLAYBACK)
+        {
+            add(M_FAST_SPEED,"FAST SPEED",std::to_string(cfg.fastSpeed)+"X");
+            add(M_SMART_FAST,"SMART FAST",onOff(cfg.smartFast));
+            add(M_SLOW_MOTION,"SLOW MOTION",cfg.slowDivisor==1?"OFF":cfg.slowDivisor==2?"1/2":"1/4");
+            add(M_TURBO_A,"TURBO A",onOff(cfg.turboA));
+            add(M_REWIND_MB,"REWIND MEMORY",cfg.rewindMb?std::to_string(cfg.rewindMb)+" MB":"OFF");
+            if(rewindHistory.Size())add(M_REWIND,"REWIND",std::to_string(rewindHistory.Size())+" SNAPSHOTS",true);
+            add(M_BACK,"BACK","");
+        }
+        else if (menuPage == PAGE_STATES)
+        {
+            for(int slot=0;slot<10;slot++)add(M_SLOT0+slot,("SLOT "+std::to_string(slot+1)).c_str(),StateSlots::Date(StateSlots::Path(quickState,slot)),true);
+            if(StateSlots::Exists(undoLoadState))add(M_UNDO_LOAD,"UNDO LAST LOAD","");
+            add(M_BACK,"BACK","");
+        }
+        else if (menuPage == PAGE_SLOT)
+        {
+            const std::string path=StateSlots::Path(quickState,stateSlot);
+            add(M_NOTHING,("SLOT "+std::to_string(stateSlot+1)).c_str(),StateSlots::Date(path),true);
+            add(M_SLOT_SAVE,"SAVE HERE",StateSlots::Exists(path)?"REPLACES SLOT":"");
+            if(StateSlots::Exists(path))add(M_SLOT_LOAD,"LOAD","");
+            if(StateSlots::Exists(path+".previous"))add(M_SLOT_PREVIOUS,"LOAD PREVIOUS","");
+            add(M_BACK,"BACK","");
+        }
+        else if ((menuPage >= PAGE_COMPANION && menuPage <= PAGE_CLOCATION) || menuPage==PAGE_CBATTLE || menuPage==PAGE_CGUIDE || menuPage==PAGE_CGUIDEENTRY || menuPage==PAGE_CITEM || menuPage==PAGE_REFERENCE || menuPage==PAGE_RDETAIL || menuPage==PAGE_CMAP || menuPage==PAGE_CENCOUNTERS)
+        {
+            auto info = [&](const std::string& text) {
+                for (const auto& line : Cheats::Lines(text,38)) add(M_NOTHING,line.c_str(),"",true);
+            };
+            auto species = [&](int id) { return companionMetadata.Species(id); };
+            if (menuPage == PAGE_COMPANION)
+            {
+                info(companionSnapshot.message);
+                if (companionSnapshot.ready)
+                {
+                    add(M_CPARTY,"PARTY",std::to_string(companionSnapshot.party.size()),true);
+                    add(M_CBAG,"BAG",std::to_string(companionSnapshot.items.size())+" STACKS",true);
+                    add(M_CDEX,"POKEDEX",companionSnapshot.dexReady?"SEEN / CAUGHT":"NOT READY",true);
+                    add(M_CLOCATION,"LOCATION","");
+                    add(M_REFERENCE,"SEARCH REFERENCE","");
+                    add(M_CBATTLE,"BATTLE INFO","");
+                    add(M_NUZLOCKE,"NUZLOCKE TRACKER",onOff(nuzlocke.Enabled()));
+                    if(!companionGuide.empty())add(M_CGUIDE,"GUIDE","");
+                }
+                info("Based on PokeDaisy by Lidor Itzhari - https://github.com/lidor30/pokedaisy");
+            }
+            else if(menuPage==PAGE_REFERENCE)
+            {
+                static const char* kinds[]={"POKEMON","ITEMS","MOVES","PLACES","TRAINER TEAMS"};
+                add(M_REFERENCE_KIND,"LOOK IN",kinds[companionReferenceKind]);
+                add(M_REFERENCE_QUERY,"SEARCH",companionQuery.empty()?"ALL":Cheats::Fit(companionQuery,18),true);
+                auto entries=companionMetadata.ReferenceEntries(companionReferenceKind,companionQuery);
+                info(std::to_string(entries.size())+" RESULTS. GAME REFERENCE, INCLUDING UNSEEN ENTRIES.");
+                for(const auto& entry:entries)add(M_RRESULT0+entry.first,Cheats::Fit(entry.second,32).c_str(),std::to_string(entry.first),true);
+                if(entries.empty())info("NO MATCHES. CHANGE OR CLEAR THE SEARCH.");
+            }
+            else if(menuPage==PAGE_RDETAIL)
+            {
+                if(companionReferenceKind==2)
+                {
+                    info(companionMetadata.Move(companionReferenceId));
+                    auto move=companionMetadata.MoveData(companionReferenceId);
+                    if(move.ready)
+                    {
+                        info(CompanionTypes::Name(move.type));
+                        info(move.category==0?"PHYSICAL":move.category==1?"SPECIAL":"STATUS");
+                        info("BASE POWER: "+std::to_string(move.power)+"  BASE PP: "+std::to_string(move.pp));
+                        info(move.accuracy?"ACCURACY: "+std::to_string(move.accuracy)+"%":"ACCURACY: SPECIAL / NO NORMAL CHECK");
+                        info("REFERENCE VALUES. BATTLE EFFECTS CAN CHANGE THEM.");
+                    }
+                    else info("NO VERIFIED MOVE RECORD AVAILABLE.");
+                }
+                else if(companionReferenceKind==4)
+                {
+                    info(Companion::Metadata::Name(companionMetadata.trainerNames,companionReferenceId,"TRAINER"));
+                    info("FULL REFERENCE TEAM. NOT LIVE BATTLE / STORY PROGRESS.");
+                    auto team=companionMetadata.TrainerTeam(companionReferenceId);
+                    if(team.empty())info("NO VERIFIED TEAM RECORD AVAILABLE.");
+                    for(const auto& mon:team)
+                    {
+                        info(companionMetadata.Species(mon.species)+" L"+std::to_string(mon.level));
+                        if(mon.form)info("FORM: "+std::to_string(mon.form));
+                        if(mon.item)info("ITEM: "+companionMetadata.ItemName(mon.item));
+                        info(mon.customMoves?"CUSTOM MOVE SET":"LEVEL-UP MOVE SET (REFERENCE)");
+                        for(int move:mon.moves)if(move)info(companionMetadata.Move(move));
+                    }
+                }
+                else
+                {
+                    info(Companion::Metadata::Name(companionMetadata.places,companionReferenceId,"PLACE"));
+                    for(size_t map=0;map<companionMetadata.mapPlaces.size();map++)if(companionMetadata.mapPlaces[map]==companionReferenceId)info("MAP "+std::to_string(map));
+                    std::set<int> shownSets;
+                    for(size_t map=0;map<companionMetadata.mapRecords.size();map++)
+                    {
+                        const auto& record=companionMetadata.mapRecords[map];
+                        if(record.place!=companionReferenceId||record.encounter<0||!shownSets.insert(record.encounter).second)continue;
+                        info("ENCOUNTER REFERENCE - MAP "+std::to_string(map));
+                        for(const auto& entry:companionMetadata.EncounterLines(map))info(entry);
+                    }
+                    info("REFERENCE PLACE. OPEN LOCATION FOR YOUR CURRENT POSITION.");
+                }
+            }
+            else if (menuPage == PAGE_CPARTY)
+            {
+                for(size_t i=0;i<companionSnapshot.party.size();i++)
+                {
+                    const auto& mon=companionSnapshot.party[i];
+                    add(M_CPARTY0+(int)i,Cheats::Fit(species(mon.species),20).c_str(),"L"+std::to_string(mon.level)+" "+std::to_string(mon.hp)+"/"+std::to_string(mon.maxHp),true);
+                }
+                if(companionSnapshot.party.empty())info("NO POKEMON IN THE PARTY YET");
+                if(companionSnapshot.invalidSlots)info("UNVERIFIED SLOTS ARE OMITTED");
+            }
+            else if (menuPage == PAGE_CMON && companionMon>=0 && companionMon<(int)companionSnapshot.party.size())
+            {
+                const auto& mon=companionSnapshot.party[companionMon];
+                info(species(mon.species)+(mon.egg?" - EGG":""));
+                if(!mon.nickname.empty())info("NICKNAME: "+mon.nickname);
+                info("LEVEL "+std::to_string(mon.level)+"   HP "+std::to_string(mon.hp)+"/"+std::to_string(mon.maxHp)+"   "+Companion::Status(mon.status));
+                info("ITEM: "+companionMetadata.ItemName(mon.item));
+                const int t1=companionMetadata.Type(mon.species,0),t2=companionMetadata.Type(mon.species,1);
+                if(CompanionTypes::Valid(t1))info(std::string("TYPE: ")+CompanionTypes::Name(t1)+(t2!=t1?std::string(" / ")+CompanionTypes::Name(t2):""));
+                static const char* statNames[]={"HP","ATTACK","DEFENCE","SPEED","SP ATTACK","SP DEFENCE"};
+                info("STAT / IV / EV");
+                for(int i=0;i<6;i++)add(M_NOTHING,statNames[i],std::to_string(mon.stats[i])+" / "+std::to_string(mon.iv[i])+" / "+std::to_string(mon.ev[i]),true);
+                for(int i=0;i<4;i++)if(mon.moves[i])info(companionMetadata.Move(mon.moves[i])+" - PP "+std::to_string(mon.pp[i]));
+                info("UPCOMING LEVEL-UP MOVES");
+                for(const auto& entry:companionMetadata.Upcoming(mon))info("L"+std::to_string(entry.level)+" "+companionMetadata.Move(entry.move));
+                if(CompanionTypes::Valid(t1))for(int atk=0;atk<18;atk++)if(CompanionTypes::Valid(atk))
+                {
+                    int pct=CompanionTypes::Multiplier(atk,t1,t2);
+                    if(pct!=100)info(std::string(CompanionTypes::Name(atk))+": "+CompanionTypes::Label(pct));
+                }
+            }
+            else if(menuPage == PAGE_CBAG)
+            {
+                add(M_CPOCKET,"POCKET",Companion::PocketName(companionProfile,companionPocket));
+                int count=0;
+                for(const auto& item:companionSnapshot.items)if(companionPocket<0||item.pocket==companionPocket)
+                {add(M_CITEM0+item.id,Cheats::Fit(companionMetadata.ItemName(item.id),28).c_str(),std::to_string(item.quantity),true);count++;}
+                if(!count)info("THIS POCKET IS EMPTY");
+                info("VIEW ONLY. USE ITEMS THROUGH THE GAME.");
+            }
+            else if(menuPage == PAGE_CITEM)
+            {
+                info(companionMetadata.ItemName(companionItem));
+                info(companionMetadata.ItemDescription(companionItem));
+                int quantity=0;for(const auto& item:companionSnapshot.items)if(item.id==companionItem)quantity+=item.quantity;
+                info("IN BAG: "+std::to_string(quantity));
+                for(const auto& mon:companionSnapshot.party)if(mon.item==companionItem)info("HELD BY: "+companionMetadata.Species(mon.species));
+                info("VIEW ONLY. USE ITEMS THROUGH THE GAME.");
+            }
+            else if(menuPage == PAGE_CDEX)
+            {
+                static const char* filters[]={"ALL","SEEN","CAUGHT"};
+                add(M_CDEX_FILTER,"SHOW",filters[companionDexFilter]);
+                if(companionSnapshot.dexReady)
+                {
+                    int seen=std::count(companionSnapshot.seen.begin(),companionSnapshot.seen.end(),true);
+                    int caught=std::count(companionSnapshot.caught.begin(),companionSnapshot.caught.end(),true);
+                    info("SEEN "+std::to_string(seen)+"   CAUGHT "+std::to_string(caught));
+                }
+                for(int id=1;id<=companionProfile.maxSpecies;id++)
+                {
+                    bool seen=companionSnapshot.dexReady&&companionSnapshot.seen[id],caught=companionSnapshot.dexReady&&companionSnapshot.caught[id];
+                    if(companionDexFilter==1&&!seen)continue;if(companionDexFilter==2&&!caught)continue;
+                    add(M_CDEX0+id,Cheats::Fit(std::to_string(id)+" "+species(id),27).c_str(),caught?"CAUGHT":seen?"SEEN":"",true);
+                }
+            }
+            else if(menuPage == PAGE_CDEXDETAIL)
+            {
+                const int id=companionSpecies;
+                info(species(id));
+                const int t1=companionMetadata.Type(id,0),t2=companionMetadata.Type(id,1);
+                if(CompanionTypes::Valid(t1))info(std::string(CompanionTypes::Name(t1))+(t2!=t1?std::string(" / ")+CompanionTypes::Name(t2):""));
+                if(id<(int)companionMetadata.descriptions.size())info(companionMetadata.descriptions[id]);
+                if(id<(int)companionMetadata.personal.size()&&companionMetadata.personal[id].size()>=24)
+                {
+                    const auto& p=companionMetadata.personal[id];
+                    info("BASE HP / ATK / DEF / SPEED / SPA / SPD");
+                    std::string values;for(int i=0;i<6;i++){if(i)values+=" / ";values+=std::to_string(p[i]);}info(values);
+                }
+                for(const auto& detail:companionMetadata.AbilityDetails(id))info(detail);
+                for(const auto& detail:companionMetadata.EvolutionDetails(id))info(detail);
+                info("LEVEL-UP MOVES");
+                for(auto move:companionMetadata.LearnedMoves(id))info("L"+std::to_string(move.level)+" "+companionMetadata.Move(move.move));
+            }
+            else if(menuPage == PAGE_CBATTLE)
+            {
+                if(companionSnapshot.battlers.size()<2 || !companionSnapshot.battlers[1].species)
+                    info("NO MAPPED LIVE BATTLE DATA FOR THIS SCENE / VERSION");
+                else
+                {
+                    const auto& foe=companionSnapshot.battlers[1];
+                    info("FOE: "+species(foe.species)+" L"+std::to_string(foe.level));
+                    info("HP "+std::to_string(foe.hp)+"/"+std::to_string(foe.maxHp));
+                    info(std::string(CompanionTypes::Name(foe.type1))+" / "+CompanionTypes::Name(foe.type2));
+                    for(const auto& line:CompanionBattle::Lines(companionSnapshot,companionMetadata))info(line);
+                }
+            }
+            else if(menuPage == PAGE_CGUIDE)
+            {
+                info("OPEN AN ENTRY FOR A HINT. ANSWERS REQUIRE REVEAL.");
+                info("BADGES: "+std::to_string(std::bitset<16>(companionSnapshot.badges).count()));
+                for(size_t i=0;i<companionGuide.size();i++)add(M_GUIDE0+(int)i,Cheats::Fit(companionGuide[i].title,36).c_str(),"");
+            }
+            else if(menuPage == PAGE_CGUIDEENTRY && companionGuideChoice<(int)companionGuide.size())
+            {
+                const auto& entry=companionGuide[companionGuideChoice];
+                info(entry.title);
+                info(companionGuideReveal?entry.answer:entry.hint);
+                add(M_CGUIDE_REVEAL,companionGuideReveal?"HIDE ANSWER":"REVEAL ANSWER","");
+            }
+            else if(menuPage==PAGE_CENCOUNTERS)
+            {
+                info(companionMetadata.PlaceName(companionSnapshot.map));
+                info("REFERENCE TABLES: ALL TIMES / SEASONS. NO SLOT ODDS.");
+                auto entries=companionMetadata.EncounterLines(companionSnapshot.map);
+                if(entries.empty())info("NO VERIFIED REGULAR ENCOUNTER TABLE FOR THIS MAP.");
+                for(const auto& entry:entries)info(entry);
+                info("SCRIPTED / SPECIAL EVENT ENCOUNTERS ARE NOT INCLUDED.");
+            }
+            else if(menuPage == PAGE_CLOCATION)
+            {
+                info(companionSnapshot.locationLive?"LIVE POSITION":"LAST WARP LOCATION");
+                info(companionMetadata.PlaceName(companionSnapshot.map)+"  X "+std::to_string(companionSnapshot.x)+"  Y "+std::to_string(companionSnapshot.y));
+                info("REPEL STEPS: "+std::to_string(companionSnapshot.repel));
+                if(companionMetadata.regionMap.Ready())add(M_CMAP,"SHOW FULL REFERENCE MAP","");
+                add(M_CENCOUNTERS,"ENCOUNTERS HERE","");
+                info("FULL MAP INCLUDES UNVISITED PLACES. UNLOCKS ARE NOT FILTERED.");
+            }
+            add(M_BACK,"BACK","");
+        }
+        else if (menuPage == PAGE_MATCHUPS)
+        {
+            add(M_NOTHING, "MANUAL TYPE CHART - GEN 3-5", "", true);
+            add(M_NOTHING, "NO ABILITIES / ITEMS / MOVE EXCEPTIONS", "", true);
+            add(M_TYPE1, "DEFENDER TYPE 1", CompanionTypes::Name(companionType1));
+            add(M_TYPE2, "DEFENDER TYPE 2", CompanionTypes::Name(companionType2));
+            for (int attack = 0; attack < 18; ++attack)
+            {
+                if (!CompanionTypes::Valid(attack)) continue;
+                add(M_NOTHING, CompanionTypes::Name(attack),
+                    CompanionTypes::Label(CompanionTypes::Multiplier(attack, companionType1, companionType2)), true);
+            }
+            add(M_NOTHING, "BASED ON POKEDAISY", "", true);
+            add(M_NOTHING, "BY LIDOR ITZHARI", "", true);
             add(M_BACK, "BACK", "");
         }
         else if (menuPage == PAGE_CHEATS)
@@ -4895,7 +5284,7 @@ int main(int argc, char** argv)
             if (menu.selected >= (int)menu.items.size())
                 menu.selected = (int)menu.items.size() - 1;
         }
-        else if (menuPage == PAGE_CSEARCH)
+        else if (menuPage == PAGE_CSEARCH || menuPage == PAGE_RSEARCH)
         {
             add(M_SEARCH_DONE, "SHOW RESULTS", "");
             add(M_SEARCH_LETTER, "LETTER: LEFT / RIGHT", std::string(1, searchLetters[searchLetter]));
@@ -5065,9 +5454,19 @@ int main(int argc, char** argv)
         toastUntil = frame + 120;
     };
     // The quick slot (SAVE STATE / LOAD STATE in the pause menu, and their keys and buttons).
-    auto saveQuick = [&]() {
-        say(WriteSnapshot(*nds, quickState, frame) ? "STATE SAVED" : "SAVE STATE FAILED");
+    auto saveAt = [&](const std::string& path) {
+        const bool saved=StateSlots::Save(path,[&](const std::string& temporary){return WriteSnapshot(*nds,temporary,frame);});
+        if(saved && cfg.statePreviews)
+        {
+            statePreview.Clear();
+            uint32_t pixels[256*384];
+            for(int i=0;i<2;i++)memcpy(pixels+i*256*192,nds->GPU.Framebuffer[nds->GPU.FrontBuffer][i].get(),256*192*4);
+            SDL_Surface* image=SDL_CreateRGBSurfaceWithFormatFrom(pixels,256,384,32,256*4,SDL_PIXELFORMAT_ARGB8888);
+            if(image){SDL_SaveBMP(image,(path+".bmp").c_str());SDL_FreeSurface(image);}
+        }
+        say(saved?"STATE SAVED":"SAVE STATE FAILED - PREVIOUS STATE KEPT");
     };
+    auto saveQuick = [&]() {saveAt(quickState);};
     auto loadQuickNow = [&]() {
         // LOAD STATE: back where the state was made, the in-game save kept as it is. A state
         // carries the save as it was then, which would otherwise replace the newer one on the
@@ -5075,21 +5474,36 @@ int main(int argc, char** argv)
         std::vector<u8> keep;
         if (const u8* cur = nds->GetNDSSave(); cur && nds->GetNDSSaveLength())
             keep.assign(cur, cur + nds->GetNDSSaveLength());
-        if (!ReadSnapshot(*nds, quickState, nullptr))
+        if(!StateSlots::Exists(pendingState)) {say("NO STATE TO LOAD");return;}
+        if(pendingState!=undoLoadState && !StateSlots::Save(undoLoadState,[&](const std::string& temporary){return WriteSnapshot(*nds,temporary,frame);}))
+        {say("LOAD CANCELLED - COULD NOT KEEP UNDO STATE");return;}
+        Savestate beforeLoad;
+        if(!nds->DoSavestate(&beforeLoad)||beforeLoad.Error){say("LOAD CANCELLED - COULD NOT KEEP RECOVERY STATE");return;}
+        beforeLoad.Finish();
+        if (!ReadSnapshot(*nds, pendingState, nullptr))
         {
-            say("NO STATE TO LOAD");
+            Savestate recover(beforeLoad.Buffer(),beforeLoad.Length(),false);
+            const bool recovered=!recover.Error && nds->DoSavestate(&recover) && !recover.Error;
+            if(!keep.empty())nds->SetNDSSave(keep.data(),(u32)keep.size());
+            rc_reset();pk_nds_call_reset();
+            say(recovered?"INVALID STATE - PREVIOUS GAME RESTORED":"STATE LOAD FAILED - RECOVERY REQUIRED");
             return;
         }
         if (!keep.empty()) nds->SetNDSSave(keep.data(), (u32)keep.size());
+        rewindHistory.Clear();
+        pendingState=quickState;
         say("STATE LOADED");
         Achievements::Reset();
         SetClock(*nds, false);
     };
     auto loadQuick = [&]() {
+        pendingState=quickState;
         menu.open = true;
         goPage(PAGE_LOAD_CONFIRM, M_BACK);
     };
     auto resetGame = [&]() {
+        rewindHistory.Clear();
+        pk_nds_call_reset();
         nds->Reset(); nds->SetupDirectBoot("game.nds"); nds->Start();
         rc_reset(); Achievements::Reset(); SetClock(*nds, false);
     };
@@ -5309,6 +5723,7 @@ int main(int argc, char** argv)
             rc_frame++;
             if (funcWatchOn) funcWatch.NextFrame();
             nds->RunFrame();
+            pokeActions.Frame();
             Achievements::DoFrame(); // (on this thread: it reads the game's memory)
             exclusives.DoFrame();
             const int avail = nds->SPU.GetOutputSize();
@@ -5338,6 +5753,12 @@ int main(int argc, char** argv)
     // Showing a frame in two steps: drawn (renderFrame), then handed to the screen
     // (presentFrame), which with `ahead` happens at the frame's own time, a while after.
     auto renderFrame = [&](DrawJob& j) {
+        if(DsDisplayState::Mode(secondDisplay.State())==4)
+        {
+            const auto& panel=companionPanel.Draw(companionSnapshot,companionMetadata,companionProfile,companionGuide);
+            secondDisplay.Submit(panel.px.data(),640,480);
+        }
+        else secondDisplay.Submit(DsDisplayState::Swapped(secondDisplay.State()) ? j.top : j.bot);
         // (The widened battle picture, from what was grabbed after the frame: made here, beside
         // the next frame's emulation.)
         if (j.battleRender)
@@ -5400,6 +5821,19 @@ int main(int argc, char** argv)
                 if (j.rects[i].w > 0) SDL_RenderCopy(renderer, tex[i], nullptr, &j.rects[i]);
             }
         }
+        screenEffect.Draw(renderer,j.outW,j.outH,cfg.screenFilter);
+        if(cfg.companionOverlay&&!menu.open)
+        {
+            const auto& panel=companionPanel.Draw(companionSnapshot,companionMetadata,companionProfile,companionGuide);
+            if(!companionTexture)companionTexture=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,640,480);
+            if(companionTexture)
+            {
+                SDL_UpdateTexture(companionTexture,nullptr,panel.px.data(),640*4);
+                const auto view=CompanionPanel::Overlay(j.outW,j.outH);
+                SDL_Rect destination{view.x,view.y,view.w,view.h};
+                SDL_RenderCopy(renderer,companionTexture,nullptr,&destination);
+            }
+        }
         if (j.overlayUsed)
         {
             if (!overlayTex || overlayTexW != j.outW || overlayTexH != j.outH)
@@ -5418,6 +5852,8 @@ int main(int argc, char** argv)
             }
         }
         // In a window, screenshots are read back from the renderer: exactly what is shown.
+        if(cfg.statePreviews && menu.open && menuPage==PAGE_SLOT && StateSlots::PreviewCurrent(StateSlots::Path(quickState,stateSlot)))
+            statePreview.Draw(renderer,StateSlots::Path(quickState,stateSlot)+".bmp",j.outW,j.outH,menu.drawnX,menu.drawnY);
         if (j.wantShot)
         {
             std::vector<uint32_t> back((size_t)j.outW * j.outH);
@@ -5428,8 +5864,9 @@ int main(int argc, char** argv)
                 WritePNG(opt.shotDir + name, back.data(), j.outW, j.outH);
             }
         }
-        if (touchPadUsed && touchPad.visible)
+        if (touchPadUsed && touchPad.visible && !menu.open)
         {
+            // Native menu rows must remain visible and receive taps above the game controls.
             // Lit by what the fingers hold (by label, as drawn).
             bool held[PAD_COUNT] = {};
             bool menuHeld = false;
@@ -5740,21 +6177,8 @@ int main(int argc, char** argv)
             // changes: the left part of the box back, the rest forward); a tap beside the box
             // closes the menu.
             auto menuTap = [&](float fx, float fy) {
-                const int item = menu.ItemAt((int)fx, (int)fy);
-                if (item == -2) nav.back = true;
-                else if (item >= 0)
-                {
-                    menu.selected = item;
-                    // (A slider's bar: the volume tapped, straight away.)
-                    if (menu.items[item].slider >= 0 && menu.SliderAt((int)fx) >= 0)
-                    {
-                        sliderTap = menu.SliderAt((int)fx);
-                        nav.accept = true;
-                    }
-                    else if (menu.items[item].value.empty()) nav.accept = true;
-                    else if (fx < menu.drawnX + menu.drawnW / 3) nav.left = true;
-                    else nav.right = true;
-                }
+                if(menuPage==PAGE_CMAP){nav.back=true;return;}
+                menu.Tap((int)fx,(int)fy,nav,sliderTap);
             };
             while (SDL_PollEvent(&ev))
             {
@@ -5787,10 +6211,11 @@ int main(int argc, char** argv)
                 }
                 else if (ev.type == SDL_FINGERUP && ev.tfinger.fingerId == dexSwipe.id) dexSwipe.down = false;
                 if (ev.type == SDL_QUIT) running = false;
-                else if (ev.type == SDL_TEXTINPUT && menu.open && menuPage == PAGE_CSEARCH)
+                else if (ev.type == SDL_TEXTINPUT && menu.open && (menuPage == PAGE_CSEARCH || menuPage == PAGE_RSEARCH))
                 {
+                    auto& query=menuPage==PAGE_RSEARCH?companionQuery:cheatQuery;
                     for (const unsigned char c:std::string(ev.text.text))
-                        if (cheatQuery.size()<48 && (std::isalnum(c) || c==' ')) cheatQuery+=(char)std::toupper(c);
+                        if (query.size()<48 && (std::isalnum(c) || c==' ')) query+=(char)std::toupper(c);
                     buildMenu();
                 }
                 else if (ev.type == SDL_TEXTINPUT && menu.open && raTyping)
@@ -5846,10 +6271,21 @@ int main(int argc, char** argv)
                     SDL_GetRendererOutputSize(renderer, &ow, &oh);
                     touchPad.Layout(ow, oh);
                     float fx = ev.tfinger.x * ow, fy = ev.tfinger.y * oh;
+                    if(overlayFinger && ev.tfinger.fingerId==overlayFingerId)
+                    {
+                        if(ev.type==SDL_FINGERUP)overlayFinger=false;
+                        continue;
+                    }
+                    if(cfg.companionOverlay&&!menu.open&&ev.type==SDL_FINGERDOWN)
+                    {
+                        int x=0,y=0;
+                        if(CompanionPanel::OverlayTouch(ow,oh,fx,fy,x,y))
+                        {overlayFinger=true;overlayFingerId=ev.tfinger.fingerId;companionPanel.Touch(x,y);continue;}
+                    }
                     // The pause menu takes taps on itself: a row is chosen and used at once (a
                     // setting changes: the left part of the box back, the rest forward); a tap
                     // beside the box, away from the buttons, closes the menu.
-                    if (menu.open && ev.type == SDL_FINGERDOWN && (!touchPad.visible || touchPad.HitButton(fx, fy) == TouchPad::NONE))
+                    if (menu.open && ev.type == SDL_FINGERDOWN)
                     {
                         menuTap(fx, fy);
                         continue;
@@ -5870,12 +6306,13 @@ int main(int argc, char** argv)
                     const int sc = ev.key.keysym.scancode;
                     // (The action CONTROLS gives this key, if any: those keys do that and nothing else.)
                     const int act = cfg.controls.ActionOfKey(sc);
-                    if (menu.open && menuPage == PAGE_CSEARCH && (k == SDLK_BACKSPACE || k == SDLK_RETURN || k == SDLK_KP_ENTER))
+                    if (menu.open && (menuPage == PAGE_CSEARCH || menuPage == PAGE_RSEARCH) && (k == SDLK_BACKSPACE || k == SDLK_RETURN || k == SDLK_KP_ENTER))
                     {
-                        if (k == SDLK_BACKSPACE) {if(!cheatQuery.empty())cheatQuery.pop_back();buildMenu();}
-                        else {SDL_StopTextInput();cheatWhere=-4;goPage(PAGE_CHEATS,M_CSEARCH);}
+                        auto& query=menuPage==PAGE_RSEARCH?companionQuery:cheatQuery;
+                        if (k == SDLK_BACKSPACE) {if(!query.empty())query.pop_back();buildMenu();}
+                        else {SDL_StopTextInput();if(menuPage==PAGE_RSEARCH)goPage(PAGE_REFERENCE,M_REFERENCE_QUERY);else{cheatWhere=-4;goPage(PAGE_CHEATS,M_CSEARCH);}}
                     }
-                    else if (menu.open && menuPage == PAGE_CSEARCH && k >= 32 && k < 127) {}
+                    else if (menu.open && (menuPage == PAGE_CSEARCH || menuPage == PAGE_RSEARCH) && k >= 32 && k < 127) {}
                     else if (menu.open && raTyping)
                     {
                         // LOG IN: typing (SDL_TEXTINPUT, above); ENTER goes on, ESC leaves it.
@@ -5943,11 +6380,18 @@ int main(int argc, char** argv)
                     cfg.windowH = ev.window.data2;
                 }
 #endif
-                // A quick click can go down and up between two frames, and the game, which reads the
-                // touch screen once a frame, never saw it (the Pokeathlon's START did nothing): a
-                // click lasts at least 4 frames.
-                else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) { mouseDown = true; mouseTapHold = 4; }
-                else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) mouseDown = false;
+                else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT)
+                {
+                    int x=0,y=0,ow=0,oh=0,ww=0,wh=0;SDL_GetRendererOutputSize(renderer,&ow,&oh);SDL_GetWindowSize(window,&ww,&wh);
+                    if(cfg.companionOverlay&&!menu.open&&ww>0&&wh>0&&CompanionPanel::OverlayTouch(ow,oh,(float)ev.button.x*ow/ww,(float)ev.button.y*oh/wh,x,y))
+                    {overlayMouse=true;companionPanel.Touch(x,y);}
+                    // A quick click can go down and up between two frames, and the game, which reads the
+                    // touch screen once a frame, never saw it (the Pokeathlon's START did nothing): a
+                    // click lasts at least 4 frames.
+                    else { mouseDown = true; mouseTapHold = 4; }
+                }
+                else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT)
+                {overlayMouse=false;mouseDown=false;}
                 // (Every joystick is announced by SDL_JOYDEVICEADDED, game controllers also
                 // by SDL_CONTROLLERDEVICEADDED; Open takes each once.)
                 else if (ev.type == SDL_JOYDEVICEADDED || ev.type == SDL_CONTROLLERDEVICEADDED)
@@ -6272,7 +6716,7 @@ int main(int argc, char** argv)
 
         if (toggleMenu)
         {
-            if(menuPage == PAGE_CSEARCH) SDL_StopTextInput();
+            if(menuPage == PAGE_CSEARCH || menuPage == PAGE_RSEARCH) SDL_StopTextInput();
             menu.open = !menu.open;
             menuPage = 0;
             capturing = -1;
@@ -6327,7 +6771,7 @@ int main(int argc, char** argv)
             if (nav.back && menuPage != PAGE_MAIN)
             {
                 backTo = menuPage == PAGE_DISPLAY ? M_DISPLAY : menuPage == PAGE_SOUND ? M_SOUND : menuPage == PAGE_GRAPHICS ? M_GRAPHICS
-                       : menuPage == PAGE_CHEATS ? M_CHEATS : menuPage == PAGE_RA ? M_RA : M_CONTROLMENU;
+                       : menuPage == PAGE_MATCHUPS ? M_MATCHUPS : menuPage == PAGE_CHEATS ? M_CHEATS : menuPage == PAGE_RA ? M_RA : M_CONTROLMENU;
                 nav = MenuInput();
             }
             else if (nav.back)
@@ -6339,6 +6783,30 @@ int main(int argc, char** argv)
             int hit = menu.Update(nav, dir);
             const int id = backTo >= 0 ? M_BACK : hit >= 0 && hit < (int)menuIds.size() ? menuIds[hit] : -1;
             if (backTo >= 0) hit = 0;
+            if(id>=M_GUIDE0 && id<M_GUIDE0+(int)companionGuide.size() && dir==0)
+            {companionGuideChoice=id-M_GUIDE0;companionGuideReveal=false;goPage(PAGE_CGUIDEENTRY,-1);hit=-1;}
+            if(id>=M_SLOT0&&id<M_SLOT0+10&&dir==0)
+            {stateSlot=id-M_SLOT0;goPage(PAGE_SLOT,M_SLOT_SAVE);hit=-1;}
+            if(id>=M_CPARTY0 && id<M_CPARTY0+6 && dir==0)
+            {companionMon=id-M_CPARTY0;goPage(PAGE_CMON,-1);hit=-1;}
+            if(id>M_CDEX0 && id<=M_CDEX0+649 && dir==0)
+            {companionSpecies=id-M_CDEX0;goPage(PAGE_CDEXDETAIL,-1);hit=-1;}
+            if(id>M_CITEM0 && id<M_CITEM0+2048 && dir==0)
+            {companionItem=id-M_CITEM0;goPage(PAGE_CITEM,-1);hit=-1;}
+            if(id>=M_RRESULT0 && id<M_RRESULT0+4096 && menuPage==PAGE_REFERENCE && dir==0)
+            {
+                companionReferenceId=id-M_RRESULT0;companionReferenceReturn=true;
+                if(companionReferenceKind==0){companionSpecies=companionReferenceId;goPage(PAGE_CDEXDETAIL,-1);}
+                else if(companionReferenceKind==1){companionItem=companionReferenceId;goPage(PAGE_CITEM,-1);}
+                else goPage(PAGE_RDETAIL,-1);
+                hit=-1;
+            }
+            if(id>=M_EXTRA0&&id<M_EXTRA_END)
+            {
+                size_t count;const auto* options=OptionalFeatures::Options(count);const int option=id-M_EXTRA0;
+                if(option<(int)count){cfg.*options[option].value=!(cfg.*options[option].value);cfg.Save(opt.config);readCompanion();buildMenu();}
+                hit=-1;
+            }
             // A cheat: on or off at once, for the game as it runs (cheats.h).
             // An achievement in ACHIEVEMENTS: its details.
             if (id >= M_ACH0 && id - M_ACH0 < (int)achList.size() && dir == 0)
@@ -6373,19 +6841,23 @@ int main(int argc, char** argv)
             {
                 restoreChoice=id-M_BACKUP0;goPage(PAGE_RESTORE_CONFIRM,M_BACK);hit=-1;
             }
+            auto& activeQuery=menuPage==PAGE_RSEARCH?companionQuery:cheatQuery;
             switch (id)
             {
             case M_CSEARCH:
                 goPage(PAGE_CSEARCH,M_SEARCH_DONE);SDL_StartTextInput();hit=-1;break;
+            case M_REFERENCE:companionReferenceReturn=false;goPage(PAGE_REFERENCE,M_REFERENCE_QUERY);hit=-1;break;
+            case M_REFERENCE_KIND:companionReferenceKind=(companionReferenceKind+(dir<0?4:1))%5;break;
+            case M_REFERENCE_QUERY:goPage(PAGE_RSEARCH,M_SEARCH_DONE);SDL_StartTextInput();hit=-1;break;
             case M_SEARCH_LETTER:
                 if(dir)searchLetter=(searchLetter+(dir<0 ? (int)searchLetters.size()-1 : 1))%(int)searchLetters.size();
-                else if(cheatQuery.size()<48)cheatQuery+=searchLetters[searchLetter];
+                else if(activeQuery.size()<48)activeQuery+=searchLetters[searchLetter];
                 break;
-            case M_SEARCH_SPACE: if(cheatQuery.size()<48)cheatQuery+=' ';break;
-            case M_SEARCH_DELETE: if(!cheatQuery.empty())cheatQuery.pop_back();break;
-            case M_SEARCH_CLEAR: cheatQuery.clear();break;
+            case M_SEARCH_SPACE: if(activeQuery.size()<48)activeQuery+=' ';break;
+            case M_SEARCH_DELETE: if(!activeQuery.empty())activeQuery.pop_back();break;
+            case M_SEARCH_CLEAR: activeQuery.clear();break;
             case M_SEARCH_DONE:
-                SDL_StopTextInput();cheatWhere=-4;goPage(PAGE_CHEATS,M_CSEARCH);hit=-1;break;
+                SDL_StopTextInput();if(menuPage==PAGE_RSEARCH)goPage(PAGE_REFERENCE,M_REFERENCE_QUERY);else{cheatWhere=-4;goPage(PAGE_CHEATS,M_CSEARCH);}hit=-1;break;
             case M_CINFO: goPage(PAGE_CINFO,-1);hit=-1;break;
             case M_CDETAIL_TOGGLE:
                 if(cheatDetail>=0 && cheatDetail<(int)cheats.items.size())
@@ -6418,6 +6890,81 @@ int main(int argc, char** argv)
                 // version's Pokemon are for the other version's players.)
                 exclusives.on = cfg.bothVersions = !exclusives.on;
                 Achievements::SetCheats(cheats.On() > 0 || exclusives.on);
+                break;
+            case M_EXTRAS:goPage(PAGE_EXTRAS,M_EXTRA0);hit=-1;break;
+            case M_QUICK_ACTIONS:goPage(PAGE_QUICK_ACTIONS,M_OPEN_PC);hit=-1;break;
+            case M_OPEN_PC:
+                pokeActionJob=pokeActions.OpenPc();
+                say(pokeActionJob?"OPENING PC":"PC UNAVAILABLE - CLOSE MENUS OR LEAVE THIS SCENE");
+                if(pokeActionJob){menu.open=false;swallowMenuButtons=true;hit=-1;}
+                break;
+            case M_NUZLOCKE:goPage(PAGE_NUZLOCKE,M_RUN_ENABLED);hit=-1;break;
+            case M_RUN_ENABLED:nuzlockeWriteFailed=!nuzlocke.SetEnabled(!nuzlocke.Enabled());break;
+            case M_RUN_RESET:goPage(PAGE_RUN_CONFIRM,M_BACK);hit=-1;break;
+            case M_RUN_RESET_CONFIRM:nuzlockeWriteFailed=!nuzlocke.Reset();goPage(PAGE_NUZLOCKE,M_RUN_ENABLED);hit=-1;break;
+            case M_COMPANION_OVERLAY:cfg.companionOverlay=!cfg.companionOverlay;cfg.Save(opt.config);break;
+            case M_PARTY_HUD:cfg.partyHud=!cfg.partyHud;cfg.Save(opt.config);break;
+            case M_SCREEN_FILTER:cfg.screenFilter=(cfg.screenFilter+(dir<0?2:1))%3;cfg.Save(opt.config);break;
+            case M_PLAYBACK:goPage(PAGE_PLAYBACK,M_FAST_SPEED);hit=-1;break;
+            case M_FAST_SPEED:
+            {
+                static const int speeds[]={2,3,4,8};int i=0;while(i<3&&speeds[i]<cfg.fastSpeed)i++;
+                cfg.fastSpeed=speeds[(i+(dir<0?3:1))%4];cfg.Save(opt.config);break;
+            }
+            case M_SMART_FAST:cfg.smartFast=!cfg.smartFast;cfg.Save(opt.config);break;
+            case M_SLOW_MOTION:cfg.slowDivisor=cfg.slowDivisor==1?2:cfg.slowDivisor==2?4:1;cfg.Save(opt.config);break;
+            case M_TURBO_A:cfg.turboA=!cfg.turboA;cfg.Save(opt.config);break;
+            case M_REWIND_MB:
+                cfg.rewindMb=cfg.rewindMb==0?64:cfg.rewindMb==64?128:0;
+                rewindHistory.Limit((size_t)cfg.rewindMb*1024*1024);cfg.Save(opt.config);break;
+            case M_REWIND:
+            {
+                auto bytes=rewindHistory.Pop();
+                if(!bytes.empty())
+                {
+                    std::vector<u8> keep;
+                    if(const u8* cur=nds->GetNDSSave();cur&&nds->GetNDSSaveLength())keep.assign(cur,cur+nds->GetNDSSaveLength());
+                    Savestate state(bytes.data(),(u32)bytes.size(),false);
+                    bool restored=!state.Error&&nds->DoSavestate(&state)&&!state.Error;
+                    if(!keep.empty())nds->SetNDSSave(keep.data(),(u32)keep.size());
+                    if(restored){rc_reset();pk_nds_call_reset();Achievements::Reset();SetClock(*nds,false);say("REWOUND TO PREVIOUS SNAPSHOT");}
+                    else say("REWIND FAILED");
+                    menu.open=false;swallowMenuButtons=true;hit=-1;
+                }
+                break;
+            }
+            case M_STATES:goPage(PAGE_STATES,M_SLOT0);hit=-1;break;
+            case M_SLOT_SAVE:saveAt(StateSlots::Path(quickState,stateSlot));break;
+            case M_SLOT_LOAD:pendingState=StateSlots::Path(quickState,stateSlot);goPage(PAGE_LOAD_CONFIRM,M_BACK);hit=-1;break;
+            case M_SLOT_PREVIOUS:pendingState=StateSlots::Path(quickState,stateSlot)+".previous";goPage(PAGE_LOAD_CONFIRM,M_BACK);hit=-1;break;
+            case M_UNDO_LOAD:pendingState=undoLoadState;goPage(PAGE_LOAD_CONFIRM,M_BACK);hit=-1;break;
+            case M_COMPANION:
+                readCompanion(true);goPage(PAGE_COMPANION,M_CPARTY);hit=-1;break;
+            case M_CPARTY:goPage(PAGE_CPARTY,-1);hit=-1;break;
+            case M_CBAG:companionReferenceReturn=false;goPage(PAGE_CBAG,M_CPOCKET);hit=-1;break;
+            case M_CDEX:companionReferenceReturn=false;goPage(PAGE_CDEX,M_CDEX_FILTER);hit=-1;break;
+            case M_CGUIDE:goPage(PAGE_CGUIDE,-1);hit=-1;break;
+            case M_CGUIDE_REVEAL:companionGuideReveal=!companionGuideReveal;break;
+            case M_CBATTLE:goPage(PAGE_CBATTLE,M_BACK);hit=-1;break;
+            case M_CLOCATION:goPage(PAGE_CLOCATION,M_BACK);hit=-1;break;
+            case M_CMAP:goPage(PAGE_CMAP,M_BACK);hit=-1;break;
+            case M_CENCOUNTERS:goPage(PAGE_CENCOUNTERS,-1);hit=-1;break;
+            case M_CPOCKET:
+                companionPocket=Companion::StepPocket(companionProfile,companionPocket,dir);
+                break;
+            case M_CDEX_FILTER:companionDexFilter=(companionDexFilter+(dir<0?2:1))%3;break;
+            case M_SECOND_SCREEN:
+                secondDisplay.SetMode((DsDisplayState::Mode(secondDisplay.State()) + (dir < 0 ? 4 : 1)) % 5);
+                break;
+            case M_MATCHUPS:
+                goPage(PAGE_MATCHUPS, M_TYPE1);
+                hit = -1;
+                break;
+            case M_TYPE1:
+                companionType1 = CompanionTypes::Cycle(companionType1, dir);
+                break;
+            case M_TYPE2:
+                companionType2 = CompanionTypes::Cycle(companionType2, dir, true);
                 break;
             case M_CHEATS:
                 cheatWhere = -2;
@@ -6471,6 +7018,27 @@ int main(int argc, char** argv)
                 hit = -1;
                 break;
             case M_BACK:
+                if(menuPage==PAGE_CMAP){goPage(PAGE_CLOCATION,M_CMAP);hit=-1;break;}
+                if(menuPage==PAGE_CENCOUNTERS){goPage(PAGE_CLOCATION,M_CENCOUNTERS);hit=-1;break;}
+                if(menuPage==PAGE_RSEARCH){SDL_StopTextInput();goPage(PAGE_REFERENCE,M_REFERENCE_QUERY);hit=-1;break;}
+                if(menuPage==PAGE_REFERENCE){goPage(PAGE_COMPANION,M_REFERENCE);hit=-1;break;}
+                if(menuPage==PAGE_RDETAIL || (companionReferenceReturn&&(menuPage==PAGE_CITEM||menuPage==PAGE_CDEXDETAIL))){companionReferenceReturn=false;goPage(PAGE_REFERENCE,M_RRESULT0+companionReferenceId);hit=-1;break;}
+                if(menuPage==PAGE_EXTRAS){goPage(PAGE_MAIN,M_EXTRAS);hit=-1;break;}
+                if(menuPage==PAGE_QUICK_ACTIONS){goPage(PAGE_MAIN,M_QUICK_ACTIONS);hit=-1;break;}
+                if(menuPage==PAGE_RUN_CONFIRM){goPage(PAGE_NUZLOCKE,M_RUN_RESET);hit=-1;break;}
+                if(menuPage==PAGE_NUZLOCKE){goPage(PAGE_COMPANION,M_NUZLOCKE);hit=-1;break;}
+                if(menuPage==PAGE_CGUIDEENTRY){goPage(PAGE_CGUIDE,M_GUIDE0+companionGuideChoice);hit=-1;break;}
+                if(menuPage==PAGE_CGUIDE){goPage(PAGE_COMPANION,M_CGUIDE);hit=-1;break;}
+                if(menuPage==PAGE_CBATTLE){goPage(PAGE_COMPANION,M_CBATTLE);hit=-1;break;}
+                if(menuPage==PAGE_PLAYBACK){goPage(PAGE_MAIN,M_PLAYBACK);hit=-1;break;}
+                if(menuPage==PAGE_SLOT){goPage(PAGE_STATES,M_SLOT0+stateSlot);hit=-1;break;}
+                if(menuPage==PAGE_STATES){goPage(PAGE_MAIN,M_STATES);hit=-1;break;}
+                if(menuPage==PAGE_CITEM){goPage(PAGE_CBAG,M_CITEM0+companionItem);hit=-1;break;}
+                if(menuPage==PAGE_CMON){goPage(PAGE_CPARTY,M_CPARTY0+companionMon);hit=-1;break;}
+                if(menuPage==PAGE_CDEXDETAIL){goPage(PAGE_CDEX,M_CDEX0+companionSpecies);hit=-1;break;}
+                if(menuPage>PAGE_COMPANION&&menuPage<=PAGE_CLOCATION)
+                {int selected=menuPage==PAGE_CPARTY?M_CPARTY:menuPage==PAGE_CBAG?M_CBAG:menuPage==PAGE_CDEX?M_CDEX:M_CLOCATION;goPage(PAGE_COMPANION,selected);hit=-1;break;}
+                if(menuPage==PAGE_COMPANION){goPage(PAGE_MAIN,M_COMPANION);hit=-1;break;}
                 if(menuPage == PAGE_CSEARCH) {SDL_StopTextInput();goPage(PAGE_CHEATS,M_CSEARCH);hit=-1;break;}
                 if(menuPage == PAGE_CDETAIL) {goPage(PAGE_CHEATS,M_CHEAT0+cheatDetail);hit=-1;break;}
                 if(menuPage == PAGE_CINFO) {goPage(PAGE_CHEATS,M_CINFO);hit=-1;break;}
@@ -6503,7 +7071,7 @@ int main(int argc, char** argv)
                 }
                 if (backTo < 0)
                     backTo = menuPage == PAGE_DISPLAY ? M_DISPLAY : menuPage == PAGE_SOUND ? M_SOUND : menuPage == PAGE_GRAPHICS ? M_GRAPHICS
-                           : menuPage == PAGE_CHEATS ? M_CHEATS : menuPage == PAGE_RA ? M_RA : M_CONTROLMENU;
+                           : menuPage == PAGE_MATCHUPS ? M_MATCHUPS : menuPage == PAGE_CHEATS ? M_CHEATS : menuPage == PAGE_RA ? M_RA : M_CONTROLMENU;
                 goPage(PAGE_MAIN, backTo);
                 hit = -1;
                 break;
@@ -6697,7 +7265,16 @@ int main(int argc, char** argv)
         }
         if (menu.open && menuPage == PAGE_RA && !raTyping && frame % 20 == 0) buildMenu();
 
-        bool paused = menu.open;
+        const uint64_t secondScreenState = secondDisplay.State();
+        const bool panelDown=DsDisplayState::Mode(secondScreenState)==4 && (secondScreenState&DsDisplayState::Ready) && (secondScreenState&(1ULL<<24));
+        if(panelDown&&!companionFingerDown)
+        {
+            int x=secondScreenState&4095,y=(secondScreenState>>12)&4095;
+            if(x<640&&y<480)companionPanel.Touch(x,y);
+        }
+        companionFingerDown=panelDown;
+        const bool fastRequested=fastLock||kbFast||ps.rt>0.5f;
+        bool paused = menu.open || (!fastRequested && cfg.slowDivisor>1 && frame%cfg.slowDivisor!=0);
         int speed = 1;
         if (!paused && !swallowMenuButtons)
         {
@@ -6734,8 +7311,8 @@ int main(int argc, char** argv)
         // in about 33 ms by the last time's measure (ffFrameMs): where the emulation itself is
         // the limit (the Switch, 10 ms or more a frame) running 4 at once is no faster than 3, it
         // only shows fewer of them.
-        if (!paused && (fastLock || kbFast || ps.rt > 0.5f))
-            speed = ffFrameMs > 0 && !opt.headless ? std::clamp((int)(33.3 / ffFrameMs), 2, 4) : 4; // (tests: always 4)
+        if (!paused && fastRequested && (!cfg.smartFast || ((pokeActions.Flags() & PK_NDS_FIELD_SCREEN) && !(pokeActions.Flags() & (PK_NDS_FIELD_LOCKED|PK_NDS_FIELD_TEXT))) || ((pokeActions.Flags() & PK_NDS_FIELD_BATTLE) && !(pokeActions.Flags() & PK_NDS_FIELD_BATTLE_INPUT)) || (!pokeActions.Supported() && (ffInBattle || lastFieldForSpeed))))
+            speed = ffFrameMs > 0 && !opt.headless ? std::clamp((int)(33.3 / ffFrameMs), 2, cfg.fastSpeed) : cfg.fastSpeed; // (tests: always 4)
         prevPad = ps;
 
         // A decompilation build with SINGLE_SCREEN puts everything on the engine of the touch
@@ -6759,8 +7336,10 @@ int main(int argc, char** argv)
         if (singleScreenRom && !opt.layoutGiven)
             layout.mode = *singleScreenFlag ? preSingleLayout : LayoutMode::Merged;
         SDL_Rect rects[2];
-        LayoutRects(layout, outW, outH, rects);
-        const bool merged = layout.mode == LayoutMode::Merged;
+        Layout effectiveLayout = layout;
+        if (DsDisplayState::Physical(secondScreenState)) effectiveLayout.mode = DsDisplayState::Swapped(secondScreenState) ? LayoutMode::Bottom : LayoutMode::Top;
+        LayoutRects(effectiveLayout, outW, outH, rects);
+        const bool merged = effectiveLayout.mode == LayoutMode::Merged;
         {
             static const float aspectValue[] = { 0.0f, 16.0f / 9, 16.0f / 10, 3.0f / 2, 4.0f / 3 };
             g_mergedAspect = aspectValue[std::clamp(cfg.aspect, 0, 4)];
@@ -7368,6 +7947,14 @@ int main(int argc, char** argv)
                     if (skipFrames % 30 == 0) fprintf(stderr, "[ss] frame %u: NO INFO NEEDED chosen on the new game's first menu\n", frame);
                 }
             }
+            int secondX = 0, secondY = 0;
+            if (DsDisplayState::Touch(secondScreenState, secondX, secondY))
+            {
+                touching = true;
+                touchX = secondX;
+                touchY = secondY;
+            }
+            if(cfg.turboA && (frame/3)%2)keys&=~(1u<<KEY_A);
             nds->SetKeyMask(~keys & 0xFFF);
             if (touching) nds->TouchScreen((u16)touchX, (u16)touchY);
             else nds->ReleaseScreen();
@@ -7453,6 +8040,27 @@ int main(int argc, char** argv)
             // (Not emulating, as while paused: the waiting pictures shown in turn.)
             while (aheadCount)
                 if (!presentDue(false)) std::this_thread::sleep_for(std::chrono::duration<double>(std::max(0.0002, secondsToTick())));
+        }
+        if(pokeActionJob)
+        {
+            const int result=pk_nds_call_status(pokeActionJob);
+            if(result){if(result<0)say("PC ACTION CANCELLED - GAME SCENE CHANGED");pokeActionJob=0;}
+        }
+        if(!paused && companionProfile.supported && liveCompanionWanted() && frame%30==0)readCompanion();
+        if(!paused && cfg.rewindMb && !opt.lockstep && frame%60==0)
+        {
+            try
+            {
+                rewindHistory.Limit((size_t)cfg.rewindMb*1024*1024);
+                Savestate state;
+                if(nds->DoSavestate(&state)&&!state.Error)
+                {
+                    state.Finish();
+                    const auto* begin=(const unsigned char*)state.Buffer();
+                    rewindHistory.Push(std::vector<unsigned char>(begin,begin+state.Length()));
+                }
+            }
+            catch(const std::bad_alloc&){rewindHistory.Clear();cfg.rewindMb=0;say("REWIND DISABLED - NOT ENOUGH MEMORY");}
         }
         perfMark(1);
         sceneMark(-1);
@@ -7596,6 +8204,7 @@ int main(int argc, char** argv)
         }
         const bool fieldNow = (rc_probe_last_frame(probeFieldMap) + 1 >= rc_current_frame() && rc_probe_last_frame(probeFieldMap)) ||
             fieldHeldByFade;
+        lastFieldForSpeed=fieldNow && !appBottom;
         for (u32 sec = 0; sec < rc_num_sections; sec++)
         {
             // (A section that misses a frame or two still counts as running; only a gap of
@@ -7609,7 +8218,8 @@ int main(int argc, char** argv)
         layout.swapped = focus.Swapped();
         // While the touch cursor is in use the bottom screen has to be big enough to aim at.
         if (!merged && focus.mode == 0 && frame < cursorShownUntil) layout.swapped = true;
-        LayoutRects(layout, outW, outH, rects);
+        effectiveLayout.swapped = layout.swapped;
+        LayoutRects(effectiveLayout, outW, outH, rects);
         if (!paused)
         {
             // A new layout has to be asked for a few frames in a row before it replaces the
@@ -8128,6 +8738,19 @@ int main(int argc, char** argv)
             canvas.Text(tx + 4 * sc, ty + 3 * sc, toast, sc, (fade << 24) | 0xFFFFFF);
             overlayUsed = true;
         }
+        if(cfg.partyHud&&!menu.open&&companionSnapshot.ready&&!cfg.companionOverlay)
+        {
+            int scale=std::max(1,outH/480),width=170*scale,x=outW-width-12*scale,y=outH*14/100;
+            canvas.Fill(x-4*scale,y-4*scale,width+8*scale,(int)companionSnapshot.party.size()*22*scale+8*scale,0xCC101722);
+            for(const auto& mon:companionSnapshot.party)
+            {
+                canvas.Text(x,y,Cheats::Fit(companionMetadata.Species(mon.species),15)+" "+std::to_string(mon.hp)+"/"+std::to_string(mon.maxHp),scale,0xFFFFFFFF);
+                canvas.Fill(x,y+10*scale,width,4*scale,0xFF394653);
+                canvas.Fill(x,y+10*scale,mon.maxHp?width*mon.hp/mon.maxHp:0,4*scale,mon.hp*4<mon.maxHp?0xFFE05050:0xFF45C881);
+                y+=22*scale;
+            }
+            overlayUsed=true;
+        }
         if (menu.open)
         {
             // The buttons named as the controller in use has them (PlayStation's CROSS and CIRCLE,
@@ -8141,7 +8764,8 @@ int main(int argc, char** argv)
             std::string hint = touchPadUsed && touchPad.visible ? "TAP: CHOOSE   OUTSIDE: BACK"
                                : btn(Controls::A) + ": SELECT   " + btn(Controls::B) + ": BACK";
             const int selId = menu.selected >= 0 && menu.selected < (int)menuIds.size() ? menuIds[menu.selected] : -1;
-            static const char* pageTitle[] = { "", "KEYS AND BUTTONS", "DISPLAY", "GRAPHICS", "CONTROLS", "CHEATS", "RETROACHIEVEMENTS", "SOUND", "ACHIEVEMENTS", "ACHIEVEMENT", "SEARCH CHEATS", "CHEAT DETAILS", "DATABASE INFO", "SAVE BACKUPS", "RESTORE SAVE", "LOAD STATE" };
+            static const char* pageTitle[] = { "", "KEYS AND BUTTONS", "DISPLAY", "GRAPHICS", "CONTROLS", "CHEATS", "RETROACHIEVEMENTS", "SOUND", "ACHIEVEMENTS", "ACHIEVEMENT", "SEARCH CHEATS", "CHEAT DETAILS", "DATABASE INFO", "SAVE BACKUPS", "RESTORE SAVE", "LOAD STATE", "TYPE MATCHUPS", "COMPANION", "PARTY", "POKEMON", "BAG", "POKEDEX", "POKEDEX ENTRY", "LOCATION", "PLAYBACK", "STATE SLOTS", "STATE SLOT", "BATTLE INFO", "GUIDE", "GUIDE HINT", "NUZLOCKE TRACKER", "RESET TRACKER", "QUICK ACTIONS", "OPTIONAL FEATURES", "ITEM DETAILS", "SEARCH REFERENCE", "SEARCH REFERENCE", "REFERENCE ENTRY", "REFERENCE MAP", "ENCOUNTERS HERE" };
+            static_assert(sizeof(pageTitle)/sizeof(pageTitle[0])==PAGE_COUNT,"Every menu page needs a title");
             if (menuPage == PAGE_KEYS)
             {
                 if (!(touchPadUsed && touchPad.visible)) hint = btn(Controls::A) + ": CHANGE   " + btn(Controls::B) + ": BACK";
@@ -8167,6 +8791,7 @@ int main(int argc, char** argv)
             if (selId == M_STARTBTN) hint = cfg.startMenu ? "START OPENS THIS MENU" : "START IS THE DS START";
             if (selId == M_CONTROLS) hint = "SAVE, LOAD, FAST FORWARD, SWAP";
             if (selId == M_BOTHVER) hint = "WILD POKEMON OF BOTH VERSIONS";
+            if (selId == M_SECOND_SCREEN) hint = "SECOND DISPLAY: GAME OR COMPANION";
             if (selId == M_CHEATS) hint = cheats.items.empty() ? "NONE FOUND: SEE THE README" : "ACTION REPLAY CODES";
             if (selId == M_NOTHING && menuPage == PAGE_CHEATS && cheats.items.empty()) hint = "DATABASE INFO EXPLAINS WHAT WAS FOUND";
             // RETROACHIEVEMENTS.
@@ -8225,9 +8850,10 @@ int main(int argc, char** argv)
                 if(cheatWhere == -4)title="SEARCH RESULTS";
                 if(selId>=M_CHEAT0 && selId<M_ACH0)hint="SELECT: DETAILS   LEFT/RIGHT: ON/OFF";
             }
-            if(menuPage == PAGE_CSEARCH)
+            if(menuPage == PAGE_CSEARCH || menuPage == PAGE_RSEARCH)
             {
-                note="FIND: "+(cheatQuery.empty() ? std::string("ALL CODES") : cheatQuery);
+                const auto& query=menuPage==PAGE_RSEARCH?companionQuery:cheatQuery;
+                note="FIND: "+(query.empty() ? std::string("ALL ENTRIES") : query);
                 hint="TYPE OR SELECT LETTERS TO ADD";
             }
             if(menuPage == PAGE_CDETAIL || menuPage == PAGE_CINFO)note.clear();
@@ -8236,8 +8862,21 @@ int main(int argc, char** argv)
                 note=saveBackups[restoreChoice].label+". RESTORES THIS GAME'S SAVE AND RESTARTS IT. CURRENT SAVE KEPT AS BEFORE-RESTORE.SAV.";
             if(menuPage == PAGE_LOAD_CONFIRM)
                 note="YOUR CARTRIDGE SAVE IS KEPT. SAVING IN-GAME AFTER LOADING AN OLD STATE CAN STILL REPLACE NEWER PROGRESS.";
-            const bool wideMenu=menuPage==PAGE_CHEATS || menuPage==PAGE_CDETAIL || menuPage==PAGE_CINFO || menuPage==PAGE_CSEARCH || menuPage==PAGE_BACKUPS || menuPage==PAGE_RESTORE_CONFIRM || menuPage==PAGE_LOAD_CONFIRM;
+            if(menuPage == PAGE_MATCHUPS)
+                note.clear();
+            const bool wideMenu=menuPage==PAGE_CENCOUNTERS || menuPage==PAGE_REFERENCE || menuPage==PAGE_RSEARCH || menuPage==PAGE_RDETAIL || menuPage==PAGE_CITEM || menuPage==PAGE_EXTRAS || menuPage==PAGE_QUICK_ACTIONS || menuPage==PAGE_NUZLOCKE || menuPage==PAGE_RUN_CONFIRM || menuPage==PAGE_CGUIDE || menuPage==PAGE_CGUIDEENTRY || menuPage==PAGE_CBATTLE || menuPage==PAGE_STATES || menuPage==PAGE_SLOT || (menuPage>=PAGE_COMPANION&&menuPage<=PAGE_CLOCATION) || menuPage==PAGE_MATCHUPS || menuPage==PAGE_CHEATS || menuPage==PAGE_CDETAIL || menuPage==PAGE_CINFO || menuPage==PAGE_CSEARCH || menuPage==PAGE_BACKUPS || menuPage==PAGE_RESTORE_CONFIRM || menuPage==PAGE_LOAD_CONFIRM;
             menu.Draw(canvas, title, hint, note, wideMenu ? 260 : 0);
+            if(menuPage==PAGE_CMAP)
+            {
+                mapPanel.ShowMap();mapPanel.Draw(companionSnapshot,companionMetadata,companionProfile,companionGuide);
+                mapPanel.canvas.Fill(0,440,640,40,0xFF263346);
+                mapPanel.canvas.Text(174,454,"TAP / BACK: RETURN",1,0xFFFFFFFF);
+                canvas.Fill(0,0,canvas.w,canvas.h,0xD9101722);
+                const auto view=CompanionPanel::Overlay(canvas.w,canvas.h);
+                if(view.w>0&&view.h>0)for(int y=0;y<view.h;y++)for(int x=0;x<view.w;x++)
+                    canvas.px[(view.y+y)*canvas.w+view.x+x]=mapPanel.canvas.px[(y*480/view.h)*640+x*640/view.w];
+            }
+
             }
             overlayUsed = true;
         }
@@ -8406,6 +9045,10 @@ int main(int argc, char** argv)
     Achievements::Stop();
     if (!opt.headless)
     {
+        secondDisplay.Stop();
+        screenEffect.Clear();
+        statePreview.Clear();
+        if(companionTexture){SDL_DestroyTexture(companionTexture);companionTexture=nullptr;}
         if (!singleScreenRom) cfg.layout = LayoutName(layout.mode); // the automatic choice is not the player's setting
         cfg.focusMode = focus.mode;
         cfg.Save(opt.config);

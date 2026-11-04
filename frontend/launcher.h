@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 
 #include "ui.h"
+#include "optional_features.h"
 // (JPEG and PNG pictures for the list: the program that draws it defines STB_IMAGE_IMPLEMENTATION
 // with STBI_ONLY_JPEG and STBI_ONLY_PNG before including this, in one file.)
 #include "thirdparty/stb_image.h"
@@ -61,6 +62,8 @@ struct Game
     std::string where;
     // A game on its way (AddComingSoon): its tile says so and it cannot be played.
     bool comingSoon = false;
+    bool favourite = false;
+    long long lastPlayed = 0;
 };
 
 // The size the larger pictures are kept at (the tiles of the list at 720 lines).
@@ -837,6 +840,7 @@ inline void Draw(Canvas& c, const std::vector<Game>& games, int tab, int selecte
         if (sel && th.selBar) c.Fill(x + tile / 4, y + tile + (UiLang::Tall() ? 31 : 19) * s, tile / 2, s, th.selBar);
         std::string sub = g.comingSoon ? "COMING SOON" : !g.known ? "NOT PLAYABLE" : g.hasSave ? "SAVE FOUND" : "NEW GAME";
         if (!g.where.empty() && g.known) sub = (g.hasSave ? "SAVE " : "NEW ") + g.where; // e.g. SAVE IN BLACK2
+        if(g.favourite)c.Text(x+tile-24*s,y+4*s,"FAV",s,th.nameSel);
         const int ss = std::max(1, s * 2 / 3);
         c.Text(x + (tile - Canvas::TextWidth(sub, ss)) / 2, y + tile + (UiLang::Tall() ? 19 : 12) * s, sub, ss, !g.known && !g.comingSoon ? th.bad : sel ? th.subSel : th.sub);
     }
@@ -968,6 +972,13 @@ inline std::vector<Setting> SettingsList()
     // The interface's language (UiLang, ui_lang.h), shown first among DISPLAY's options.
     l.insert(l.begin(), { "list_lang", "LANGUAGE", UiLang::Choices(), "auto",
                           "THE LANGUAGE OF THE GAME LIST, THE SETTINGS AND THE PAUSE MENU (NOT OF THE GAMES)." });
+#ifndef __SWITCH__
+    l.push_back({"list_sort","SORT",{{"original","ORIGINAL"},{"favourites","FAVOURITES FIRST"},{"recent","RECENTLY PLAYED"}},"original",
+        "KEEPS THE CONSOLE SECTIONS. ORIGINAL RETAINS THE EXISTING GAME ORDER."});
+    l.push_back({"!favourite","TOGGLE FAVOURITE",{},"","ADDS OR REMOVES THE SELECTED GAME. ALSO F ON A KEYBOARD OR X ON A CONTROLLER."});
+#endif
+    size_t extraCount;const auto* extras=OptionalFeatures::Options(extraCount);
+    for(size_t i=0;i<extraCount;i++)l.push_back({extras[i].key,extras[i].name,onOff,"0",extras[i].help});
     // The game list's own look (GAME LIST: ThemeNamed, Background).
     l.push_back({ "list_colour", "COLOUR", { { "red", "RED" }, { "blue", "BLUE" }, { "green", "GREEN" }, { "purple", "PURPLE" },
                   { "gold", "GOLD" }, { "pink", "PINK" }, { "teal", "TEAL" } }, "red",
@@ -1037,6 +1048,7 @@ inline const std::vector<SettingsGroup>& SettingsGroups()
         { "!group5", "GAME LIST", "" },
         { "!group6", "RETROACHIEVEMENTS", "" },
         { "!group7", "HELP", "" },
+        { "!group8", "OPTIONAL FEATURES", "" },
     };
     return g;
 }
@@ -1044,7 +1056,9 @@ inline const std::vector<SettingsGroup>& SettingsGroups()
 inline int GroupOf(const Setting& s)
 {
     if (s.key && !strcmp(s.key, "!updates")) return 7;
+    if (s.key && !strcmp(s.key,"!favourite")) return 5;
     if (!s.key) return !strcmp(s.name, "KEYS AND BUTTONS") ? 3 : 7;
+    if (!strncmp(s.key,"extra_",6)) return 8;
     if (!strcmp(s.key, "list_lang")) return 0;
     if (!strncmp(s.key, "list_", 5)) return 5;
     if (!strcmp(s.key, "ra") || !strcmp(s.key, "!ra_login")) return 6;
@@ -1066,7 +1080,7 @@ struct SettingsPage
     std::vector<Setting> all = SettingsList();
     std::vector<Setting> items; // what is shown: the groups, or one group's options
     int group = -1;             // the group shown, -1: the list of groups
-    std::string groupText[8];   // (the groups' lines: their options' names)
+    std::string groupText[9];   // (the groups' lines: their options' names)
     std::vector<std::string> lines; // the file, as it is
     int selected = 0, scroll = 0;
     // Draw keeps the chosen option in view while follow is set (the keys and the D-pad); a

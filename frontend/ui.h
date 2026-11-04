@@ -218,6 +218,22 @@ struct Menu
         return i < (int)items.size() ? i : -1;
     }
 
+    // Informational values describe a row; they are not left/right settings. A tap
+    // activates the row (party details, dated state slots, backup details) like Enter.
+    void Tap(int x,int y,MenuInput& input,int& sliderValue)
+    {
+        const int item=ItemAt(x,y);
+        if(item==-2)input.back=true;
+        else if(item>=0)
+        {
+            selected=item;
+            if(items[item].slider>=0 && SliderAt(x)>=0){sliderValue=SliderAt(x);input.accept=true;}
+            else if(items[item].value.empty()||items[item].info)input.accept=true;
+            else if(x<drawnX+drawnW/3)input.left=true;
+            else input.right=true;
+        }
+    }
+
     // note: a few lines of text in a strip under the box (CHEATS: what the database says about
     // the chosen cheat), wrapped to the box's width.
     // The chosen row's colour (COLOUR, AccentNamed); the box, text and bars are shaded from it.

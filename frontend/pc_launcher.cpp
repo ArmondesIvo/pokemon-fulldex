@@ -43,6 +43,8 @@
 #include "thirdparty/stb_image.h"
 #undef STB_IMAGE_IMPLEMENTATION
 #include "launcher.h"
+#include "library_history.h"
+#include "android_second_screen.h"
 #include "ui_lang_sdl.h"
 #include "controls.h"
 #include "achievements.h"
@@ -577,6 +579,10 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
 #endif
     SDL_Texture* texture = nullptr;
     Canvas canvas;
+    std::unique_ptr<AndroidSecondScreen> libraryDisplay;
+    Uint32 libraryDisplayCheck=0;
+    Canvas libraryCard;libraryCard.Resize(640,480);
+    std::string libraryCardKey;
     std::map<std::string, std::vector<uint32_t>> artCache;
     std::vector<SDL_GameController*> pads;
     std::vector<SDL_Joystick*> joys; // (gamepads SDL has no layout for)
@@ -594,6 +600,22 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     bool updateAsked = false;
     Menu updateMenu;
 #endif
+    LibraryHistory library;
+    auto reorderLibrary=[&]() {
+        const std::string keep=selected>=0 && selected<(int)games.size()?games[selected].rom:"";
+        library.Load(fo.saves+"/fulldex-library.txt");
+        Launcher::Sort(games);
+        library.Apply(games,Launcher::ConfigValue(fo.cfg,"list_sort"));
+        for(size_t i=0;i<games.size();i++)if(games[i].rom==keep)selected=(int)i;
+        scroll=0;follow=true;
+    };
+    reorderLibrary();
+    auto toggleFavourite=[&]() {
+        if(selected<0||selected>=(int)games.size()||games[selected].comingSoon)return;
+        bool saved=library.Toggle(games[selected].rom);
+        note=saved?(library.Favourite(games[selected].rom)?"ADDED TO FAVOURITES":"REMOVED FROM FAVOURITES"):"COULD NOT SAVE FAVOURITES";
+        reorderLibrary();
+    };
     auto view = [&]() { return Launcher::MakeView(canvas, games, tab); };
     // Tests, without anyone there: SSR_LIST_TAB=n opens on tab n; SSR_LIST_PICK=a game code chooses
     // that game the first time the list is shown; SSR_LIST_SHOT=file.bmp keeps the list as drawn
@@ -814,6 +836,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     auto change = [&](int d) {
         const char* key = page.Change(d);
         if (key && !strncmp(key, "list_", 5)) Launcher::LoadLook(fo.cfg, fo.art, theme, background);
+        if(key && !strcmp(key,"list_sort"))reorderLibrary();
+        if(key && !strcmp(key,"!favourite"))toggleFavourite();
         if (key && !strcmp(key, "!ra_login"))
         {
             if (raState->busy) return;
@@ -1208,7 +1232,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     if (act == Controls::L || act == Controls::R) { if (!guide) setTab(tab + (act == Controls::R ? 1 : -1), "a key"); }
                     else if (act == Controls::A || act == Controls::START) { if (!e.key.repeat) choose(); }
                     else if (act == Controls::B || act == Controls::MENU) { if (guide) { if (!page.Back()) guide = false; } else quit = true; }
-                    else if (act == Controls::Y) toggleGuide();
+                    else if (act == Controls::X && !guide)toggleFavourite();
+                else if (act == Controls::Y) toggleGuide();
                     else if (act >= Controls::UP && act <= Controls::RIGHT)
                         move(act == Controls::LEFT ? 1 : act == Controls::RIGHT ? 2 : act == Controls::UP ? 3 : 4);
                     break;
@@ -1221,6 +1246,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 case SDLK_DOWN: case SDLK_s: move(4); break;
                 case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: if (!e.key.repeat) choose(); break;
                 case SDLK_ESCAPE: case SDLK_AC_BACK: if (guide) { if (!page.Back()) guide = false; } else quit = true; break;
+                case SDLK_f: if(!guide)toggleFavourite(); break;
                 case SDLK_h: case SDLK_F1: toggleGuide(); break;
                 case SDLK_o: OpenFolder(fo.roms); break;
                 case SDLK_q: case SDLK_PAGEUP: if (!guide) setTab(tab - 1, "a key"); break;
@@ -1265,6 +1291,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 const int act = ctl.PadCustom() ? ctl.ActionOfPad(in, ctl.byLabel)
                               : in == Controls::IN_A || in == Controls::IN_START ? Controls::A
                               : in == Controls::IN_B || in == Controls::IN_BACK ? Controls::B
+                              : in == Controls::IN_X ? Controls::X
                               : in == Controls::IN_Y ? Controls::Y
                               : in == Controls::IN_LB ? Controls::L : in == Controls::IN_RB ? Controls::R : -1;
                 if (act == Controls::L || act == Controls::R)
@@ -1275,6 +1302,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 }
                 else if (act == Controls::A || act == Controls::START) choose();
                 else if (act == Controls::B || act == Controls::SELECT) { if (guide) { if (!page.Back()) guide = false; } else quit = true; }
+                else if (act == Controls::X && !guide)toggleFavourite();
                 else if (act == Controls::Y) toggleGuide();
                 break;
             }
@@ -1523,6 +1551,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             lastScan = SDL_GetTicks();
             const std::string current = selected < 0 || selected >= (int)games.size() ? std::string() : games[selected].rom;
             games = FindGames(fo, artCache);
+            reorderLibrary();
             selected = -1;
             for (size_t i = 0; i < games.size(); i++)
                 if (games[i].rom == current) selected = (int)i;
@@ -1704,6 +1733,36 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             fprintf(stderr, "[launcher] switched to software renderer\n");
             continue;
         }
+        if(SDL_GetTicks()-libraryDisplayCheck>=500 || libraryDisplayCheck==0)
+        {
+            libraryDisplayCheck=SDL_GetTicks();
+            const bool enabled=Launcher::ConfigValue(fo.cfg,"extra_second_artwork")=="1";
+            if(enabled&&!libraryDisplay)libraryDisplay=std::make_unique<AndroidSecondScreen>(true);
+            else if(!enabled&&libraryDisplay)libraryDisplay.reset();
+        }
+        const uint64_t libraryState=libraryDisplay?libraryDisplay->State():0;
+        if(libraryState & DsDisplayState::AcceptingFrames)
+        {
+            const Launcher::Game* g=selected>=0&&selected<(int)games.size()?&games[selected]:nullptr;
+            const std::string key=g?g->rom+std::to_string(g->favourite)+std::to_string(g->lastPlayed):"empty";
+            if(key!=libraryCardKey)
+            {
+                libraryCardKey=key;libraryCard.Clear();libraryCard.Fill(0,0,640,480,0xFF101722);
+                libraryCard.Text(18,16,"POKEMON FULLDEX",3,0xFFFFD75E);
+                if(g)
+                {
+                    auto picture=Launcher::GamePicture(*g,320);
+                    if(picture.size()==320*320)for(int y=0;y<320;y++)for(int x=0;x<320;x++)
+                        libraryCard.px[(size_t)(y+66)*640+x+160]=picture[(size_t)y*320+x]|0xFF000000;
+                    std::string title=g->name;if(title.size()>48)title=title.substr(0,47)+".";
+                    libraryCard.Text(18,400,title,2,0xFFFFFFFF);
+                    libraryCard.Text(18,432,g->comingSoon?"COMING SOON":g->hasSave?"SAVE FOUND":"READY TO PLAY",2,0xFFB9C9DD);
+                    if(g->favourite)libraryCard.Text(500,432,"FAVOURITE",1,0xFFFFD75E);
+                }
+                else libraryCard.Text(18,100,"CHOOSE A GAME ON THE MAIN SCREEN",2,0xFFFFFFFF);
+            }
+            libraryDisplay->Submit(libraryCard.px.data(),640,480);
+        }
         SDL_RenderPresent(renderer);
 #ifdef SSR_IOS
         if (!loggedPresent)
@@ -1733,6 +1792,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             break;
         }
     }
+    if(libraryDisplay)libraryDisplay->Stop();
     lastTab = tab;
     SetConfigValues(fo.cfg, {{"launcher_tab", std::to_string(tab)}});
     for (SDL_GameController* p : pads) SDL_GameControllerClose(p);
@@ -1942,6 +2002,7 @@ bool Start(int& argc, char**& argv)
         if (games[chosen].platform == Launcher::GBA)
         {
             const std::string rom = games[chosen].rom;
+            LibraryHistory recent;recent.Load(fo.saves+"/fulldex-library.txt");if(Launcher::ConfigValue(fo.cfg,"extra_library_history")=="1")recent.Played(rom);
             if (FILE* f = fopen(lastPath.c_str(), "w"))
             {
                 fprintf(f, "%s\n", rom.c_str());
@@ -1951,6 +2012,8 @@ bool Start(int& argc, char**& argv)
             o.roms = rom.substr(0, rom.find_last_of("/\\"));
             o.saves = games[chosen].folder;
             o.data = fo.dir;
+            // GBA SECOND SCREEN (extra_gba_mirror) needs the PokeDaisy GBA-tree change (GbaWide::Options::secondDisplay),
+            // not in the release GBA inputs yet: deferred to the GBA companion work.
             o.fullscreen = ConfigFullscreen(fo.cfg, o.w, o.h);
             Launcher::SyncGbaSettings(fo.cfg, o.data);
             fprintf(stderr, "[launcher] GBA: %s\n", rom.c_str());
@@ -1967,6 +2030,7 @@ bool Start(int& argc, char**& argv)
     }
     g_canChange = true;
     const Launcher::Game& game = games[chosen];
+    LibraryHistory recent;recent.Load(fo.saves+"/fulldex-library.txt");if(Launcher::ConfigValue(fo.cfg,"extra_library_history")=="1")recent.Played(game.rom);
     if (const Launcher::KnownGame* k = Launcher::Known(game.code)) g_name = k->name;
     if (FILE* f = fopen(lastPath.c_str(), "w"))
     {
