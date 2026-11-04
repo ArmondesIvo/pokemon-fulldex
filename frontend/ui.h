@@ -152,6 +152,7 @@ inline uint32_t AccentNamed(const std::string& name)
 }
 
 #include "glass.h"
+#include "ui_clean_font.h"
 
 // Button presses the menu understands, edge-triggered.
 struct MenuInput
@@ -177,6 +178,27 @@ struct Menu
     // 0: a list (every page but one). More: the items are tiles in rows of that many (the pause
     // menu's first page: eight glass tiles, four to a row).
     int columns = 0;
+
+    // CLEAN text (on: Noto Sans, ui_clean_font.h, in title case) or the pixel font (the Retro look).
+    // Japanese and Korean menus keep the pixel font, which has their letters.
+    static inline bool Clean = true;
+    static bool UseClean() { return Clean && UiLang::lang < 5; }
+    static int Px(int scale, bool big = false) { return (big ? 14 : 12) * scale; }
+    static int TW(const std::string& s, int scale, bool big = false)
+    {
+        return UseClean() ? CleanFont::Width(CleanFont::Title(UiLang::Tr(s)), Px(scale, big), big) : Canvas::TextWidth(s, scale);
+    }
+    // (y: the top of a pixel-font line; clean text sits on the same baseline as its capitals.)
+    static void TX(Canvas& c, int x, int y, const std::string& s, int scale, uint32_t col, bool big = false)
+    {
+        if (UseClean()) CleanFont::Draw(c, x, y + 7 * scale, CleanFont::Title(UiLang::Tr(s)), Px(scale, big), col, big);
+        else c.Text(x, y, s, scale, col);
+    }
+    static void TXRaw(Canvas& c, int x, int y, const std::string& s, int scale, uint32_t col)
+    {
+        if (UseClean()) CleanFont::Draw(c, x, y + 7 * scale, s, Px(scale), col);
+        else c.TextRaw(x, y, s, scale, col);
+    }
 
     // Returns the index of an item that was activated this frame, or -1.
     // dir is -1/+1 when left/right was used on it, 0 for accept.
@@ -292,8 +314,8 @@ struct Menu
         drawnX = gx - gap; drawnY = gy - gap; drawnW = gridW + 2 * gap; drawnH = gridH + 2 * gap;
         drawnLineH = 0; drawnFirstY = 0; scroll = 0;
         const int headY = gy - 9 * scale - gap;
-        c.TextRaw(gx, headY, "FULLDEX", scale, GlassText);
-        c.Text(gx + gridW - Canvas::TextWidth("PAUSED", scale), headY, "PAUSED", scale, GlassHint);
+        TXRaw(c, gx, headY, "FULLDEX", scale, GlassText);
+        TX(c, gx + gridW - TW("PAUSED", scale), headY, "PAUSED", scale, GlassHint);
         for (int i = 0; i < n; i++)
         {
             const int x = gx + (i % cols) * (s + gap), y = gy + (i / cols) * (s + gap);
@@ -304,15 +326,15 @@ struct Menu
             const uint32_t ink = off ? GlassOff : GlassText;
             if (items[i].icon >= 0) Glass::DrawIcon(c, items[i].icon, x + s * 0.5f, y + s * 0.4f, s * 0.19f, ink);
             int ls = scale;
-            while (ls > 1 && Canvas::TextWidth(items[i].label, ls) > s * 0.88f) ls--;
-            c.Text(x + (s - Canvas::TextWidth(items[i].label, ls)) / 2, y + (int)(s * 0.72f), items[i].label, ls, ink);
+            while (ls > 1 && TW(items[i].label, ls, true) > s * 0.88f) ls--;
+            TX(c, x + (s - TW(items[i].label, ls, true)) / 2, y + (int)(s * 0.72f), items[i].label, ls, ink, true);
             if (!items[i].value.empty())
             {
                 const int vs = std::max(1, ls - 1);
-                c.Text(x + s - Canvas::TextWidth(items[i].value, vs) - s / 14, y + s / 14, items[i].value, vs, off ? GlassOff : GlassHint);
+                TX(c, x + s - TW(items[i].value, vs) - s / 14, y + s / 14, items[i].value, vs, off ? GlassOff : GlassHint);
             }
         }
-        c.Text((c.w - Canvas::TextWidth(hint, scale)) / 2, gy + gridH + gap + 2 * scale, hint, scale, GlassHint);
+        TX(c, (c.w - TW(hint, scale)) / 2, gy + gridH + gap + 2 * scale, hint, scale, GlassHint);
         if (solid) Glass::Opaque(c);
     }
 
@@ -341,7 +363,7 @@ struct Menu
         int boxW = (boxUnits > 0 ? boxUnits : 190) * scale;
         if (UiLang::lang)
             for (const auto& item : items)
-                boxW = std::max(boxW, Canvas::TextWidth(item.label, scale) + (item.value.empty() ? 0 : Canvas::TextWidth(shownValue(item), scale)) + 20 * scale);
+                boxW = std::max(boxW, TW(item.label, scale) + (item.value.empty() ? 0 : TW(shownValue(item), scale)) + 20 * scale);
         if (boxW > c.w - 8) boxW = c.w - 8;
         int boxH = lineH * rows + 6 * scale;
         // The note's lines (up to 4, the last cut short), and the box moved up to make room.
@@ -366,25 +388,25 @@ struct Menu
         const float radius = 5.0f * scale;
         Glass::Round(c, bx, by, boxW, boxH, radius, GlassShade);
         Glass::Round(c, bx, by, boxW, boxH, radius, GlassPanel, GlassEdge);
-        if (hasTitle) c.Text(bx + (boxW - Canvas::TextWidth(title, scale)) / 2, by + 3 * scale, title, scale, GlassText);
+        if (hasTitle) TX(c, bx + (boxW - TW(title, scale, true)) / 2, by + 3 * scale, title, scale, GlassText, true);
 
         int y = by + (hasTitle ? lineH : 0) + 5 * scale;
         // (Marks at the box's right edge where rows are scrolled out of view, above or below.)
-        if (scroll > 0) c.Text(bx + boxW - 8 * scale, y - lineH + 2 * scale, "+", scale, GlassHint);
-        if (scroll + shown < (int)items.size()) c.Text(bx + boxW - 8 * scale, y + shown * lineH - 2 * scale, "+", scale, GlassHint);
+        if (scroll > 0) TX(c, bx + boxW - 8 * scale, y - lineH + 2 * scale, "+", scale, GlassHint);
+        if (scroll + shown < (int)items.size()) TX(c, bx + boxW - 8 * scale, y + shown * lineH - 2 * scale, "+", scale, GlassHint);
         for (int i = scroll; i < scroll + shown; i++)
         {
             bool sel = i == selected;
             if (sel) Glass::Round(c, bx + 2 * scale, y - 2 * scale, boxW - 4 * scale, lineH, 3.0f * scale, GlassRow, GlassChosenEdge, (float)std::max(1, scale / 2));
             uint32_t col = items[i].disabled ? GlassOff : sel ? 0xFFFFFFFF : GlassText;
-            c.Text(bx + 6 * scale, y, items[i].label, scale, col);
+            TX(c, bx + 6 * scale, y, items[i].label, scale, col);
             if (!items[i].value.empty())
             {
                 const std::string v = shownValue(items[i]);
                 // (A slider's value right-aligned in room for its widest, "< 100% >", the bar left
                 // of it, so the bar stays put as the number changes.)
-                const int vx = bx + boxW - 6 * scale - Canvas::TextWidth(items[i].slider >= 0 ? "< 100% >" : v, scale);
-                c.Text(items[i].slider >= 0 ? bx + boxW - 6 * scale - Canvas::TextWidth(v, scale) : vx, y, v, scale, col);
+                const int vx = bx + boxW - 6 * scale - TW(items[i].slider >= 0 ? "< 100% >" : v, scale);
+                TX(c, items[i].slider >= 0 ? bx + boxW - 6 * scale - TW(v, scale) : vx, y, v, scale, col);
                 if (items[i].slider >= 0)
                 {
                     barStep = 5 * scale;
@@ -396,14 +418,14 @@ struct Menu
             }
             y += lineH;
         }
-        c.Text(bx + (boxW - Canvas::TextWidth(hint, scale)) / 2, y + 4 * scale, hint, scale, GlassHint);
+        TX(c, bx + (boxW - TW(hint, scale)) / 2, y + 4 * scale, hint, scale, GlassHint);
         if (!noteLines.empty())
         {
             const int ny = by + boxH + 3 * scale;
             Glass::Round(c, bx, ny, boxW, noteH, radius, GlassShade);
             Glass::Round(c, bx, ny, boxW, noteH, radius, GlassPanel, GlassEdge);
             for (size_t i = 0; i < noteLines.size(); i++)
-                c.TextRaw(bx + 6 * scale, ny + 4 * scale + (int)i * UiLang::LineUnits() * scale, noteLines[i], scale, GlassText);
+                TXRaw(c, bx + 6 * scale, ny + 4 * scale + (int)i * UiLang::LineUnits() * scale, noteLines[i], scale, GlassText);
         }
         if (solid) Glass::Opaque(c);
     }
