@@ -30,6 +30,34 @@ inline std::string Shown(const std::string& s, bool title)
 {
     return title ? CleanFont::Title(UiLang::Tr(s)) : UiLang::Tr(s);
 }
+// A description written in capitals (as the older pages had them) in sentence case: lower case but
+// for each sentence's first letter and the names kept in capitals (FPS, HUD, GBA...).
+inline std::string Sentence(const std::string& s)
+{
+    for (char ch : s) if (ch >= 'a' && ch <= 'z') return s; // (already written in sentence case)
+    static const char* const keep[] = { "FPS", "HUD", "GBA", "DS", "3D", "2D", "PC", "OK", "A", "B", "X", "Y", "L", "R", "MB", "GPU", "CPU", "JIT", "LCD", "HP", "TM", "HM" };
+    std::string out;
+    bool start = true;
+    size_t i = 0;
+    while (i < s.size())
+    {
+        size_t j = i;
+        while (j < s.size() && ((s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= '0' && s[j] <= '9') || (unsigned char)s[j] >= 0x80)) j++;
+        if (j == i) { out += s[i]; if (s[i] == '.' || s[i] == '!' || s[i] == '?' || s[i] == ':') start = true; i++; continue; }
+        std::string w = s.substr(i, j - i);
+        bool kept = false;
+        for (const char* k : keep) if (w == k) kept = true;
+        if (w == "POKEMON") w = "Pok\xC3\xA9" "mon", kept = true;
+        else if (w == "POKEDEX") w = "Pok\xC3\xA9" "dex", kept = true;
+        if (!kept)
+            for (size_t k = start ? 1 : 0; k < w.size(); k++)
+                if (w[k] >= 'A' && w[k] <= 'Z') w[k] += 32;
+        out += w;
+        start = false;
+        i = j;
+    }
+    return out;
+}
 inline int PixelScale(int px) { return std::max(1, (px + 4) / 9); }
 inline int W(const std::string& s, int px, bool bold = false, bool title = true)
 {
@@ -389,6 +417,53 @@ inline void Picture(Canvas& c, int kind, int art, int x, int y, int w, int h, fl
             }
         }
         break;
+    case Menu::P_MOTION: // OFF (30 a second), ON (60): a Poke Ball's path drawn as the frames that show it
+    {
+        Whole(c, Frame(c), x, y, w, h, r);
+        Glass::Round(c, x, y, w, h, r, 0x8C000000);
+        // (The same throw: 30 pictures a second show half as many places along it as 60.)
+        const int steps = art == 1 ? 9 : 5;
+        for (int i = 0; i < steps; i++)
+        {
+            const float t = i / (float)(steps - 1);
+            const float bx = x + w * (0.14f + 0.62f * t), by = y + h * (0.8f - 0.5f * std::sin(t * 3.14159f));
+            const uint32_t a = (uint32_t)(110 + 145 * t) << 24;
+            Glass::DrawIcon(c, Glass::I_POKEBALL, bx, by, h * 0.1f, a | 0xFFFFFF);
+        }
+        break;
+    }
+    case Menu::P_WIDE: // OFF (the DS's own 4:3 world, bars at the sides), ON (the world drawn wide)
+        if (art == 1) Whole(c, Frame(c), x, y, w, h, r);
+        else
+        {
+            Glass::Round(c, x, y, w, h, r, 0xFF040608);
+            Screen(c, Top(c), ds, x, y, w, h, 0);
+        }
+        break;
+    case Menu::P_RES: // the 3D resolution's lines (192 to 2160): the picture as blocky as that, close up
+    {
+        static const int lines[] = { 192, 288, 384, 540, 720, 1080, 1440, 2160 };
+        const int l = lines[std::clamp(art, 0, 7)];
+        const Src f = Frame(c);
+        // (A part of the picture as large as 1080 lines' worth of it would show, in blocks of the chosen lines.)
+        const int block = std::max(1, (int)std::lround(h * 12.0f / l));
+        Glass::Mark(c, x, y, x + w, y + h);
+        if (!f.p) { Whole(c, f, x, y, w, h, r); break; }
+        const float sx = f.w * 0.4f, sy = f.h * 0.38f, sw = f.w * 0.2f, sh = sw * h / w;
+        for (int by = 0; by < h; by += block)
+            for (int bx = 0; bx < w; bx += block)
+            {
+                const int px = std::clamp((int)(sx + (bx + block * 0.5f) * sw / w), 0, f.w - 1), py = std::clamp((int)(sy + (by + block * 0.5f) * sh / h), 0, f.h - 1);
+                const uint32_t col = f.p[(size_t)py * f.w + px] | 0xFF000000u;
+                for (int yy = by; yy < std::min(h, by + block); yy++)
+                    for (int xx = bx; xx < std::min(w, bx + block); xx++)
+                    {
+                        const int cx2 = x + xx, cy2 = y + yy;
+                        if (cx2 >= 0 && cx2 < c.w && cy2 >= 0 && cy2 < c.h) c.px[(size_t)cy2 * c.w + cx2] = col;
+                    }
+            }
+        break;
+    }
     default: Whole(c, Frame(c), x, y, w, h, r); break;
     }
 }
@@ -631,10 +706,10 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     Glass::Round(c, pvX, pvY, pvW, pvH, 18 * k, Row, 0x24FFFFFF, std::max(1.0f, k));
     const int pad = K(20), innerW = pvW - 2 * pad;
     const std::string name = it.kind == K_BACK ? std::string("BACK") : it.label;
-    const std::string desc = it.kind == K_BACK ? std::string("Back to Settings.") : it.desc;
+    const std::string desc = it.kind == K_BACK ? std::string("Back to Settings.") : Sentence(it.desc);
     T(c, pvX + pad, pvY + K(42), name, K(25), GlassText, true);
     int y = pvY + K(80);
-    for (const std::string& line : Wrap(desc, K(18), innerW, wide ? 4 : 3))
+    for (const std::string& line : Wrap(desc, K(18), innerW, wide ? 7 : 5))
     {
         T(c, pvX + pad, y, line, K(18), Desc, false, false);
         y += K(26);
@@ -643,7 +718,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     if (!it.tip.empty())
     {
         const int tipPx = K(17), tipLine = K(23);
-        const auto lines = Wrap(it.tip, tipPx, innerW - K(34), 3);
+        const auto lines = Wrap(Sentence(it.tip), tipPx, innerW - K(34), 3);
         const int tipTop = pvY + pvH - pad - (int)lines.size() * tipLine;
         Rule(c, pvX + pad, tipTop - K(18), innerW, std::max(1, K(1)), Line);
         Glass::DrawIcon(c, Glass::I_INFO, pvX + pad + K(12), tipTop + K(6), 11 * k, Desc);
@@ -651,7 +726,10 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         regionBottom = tipTop - K(34);
     }
     // The choices: a picture of each, the one on now edged and its name in a violet pill.
-    const int choices = (int)it.choices.size();
+    // (More than six choices, as 3D RESOLUTION's eight: only the first, the DS's own, beside the one
+    // on now.)
+    const bool onlyOn = it.choices.size() > 6 && it.choice >= 0;
+    const int choices = onlyOn ? (it.choice > 0 ? 2 : 1) : (int)it.choices.size();
     if (it.kind != K_BACK && it.kind != K_LINK && it.preview > P_NONE && choices > 0 && regionBottom - regionTop > K(60))
     {
         const int cols = choices <= 3 ? choices : 3, rows = (choices + cols - 1) / cols;
@@ -671,22 +749,35 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             const int col = i % cols, row = i / cols;
             const int cx = pvX + pad + col * (cellW + gapX) + cellW / 2;
             int cy = y0 + row * ((pictures ? picH + labelGap : 0) + labelH + gapY);
-            const bool on = i == it.choice;
+            const int ci = onlyOn ? (i == choices - 1 ? it.choice : 0) : i; // (the choice this card shows)
+            const bool on = ci == it.choice;
             if (pictures)
             {
                 const int x = cx - picW / 2;
                 if (on && !it.disabled) GlowRound(c, x - K(4), cy - K(4), picW + K(8), picH + K(8), 12 * k, k);
                 Glass::Round(c, x - K(4), cy - K(4), picW + K(8), picH + K(8), 12 * k, on ? 0x30FFFFFF : 0x1A000000,
                              on ? ChosenEdge : 0x48FFFFFF, on ? 2.4f * k : std::max(1.0f, 1.2f * k));
-                Picture(c, it.preview, i < (int)it.art.size() ? it.art[i] : i, x, cy, picW, picH, k);
+                Picture(c, it.preview, ci < (int)it.art.size() ? it.art[ci] : ci, x, cy, picW, picH, k);
                 cy += picH + labelGap;
             }
             int lpx = K(16);
-            while (lpx > 8 && W(it.choices[i], lpx, on) + K(30) > cellW) lpx--;
-            const int lw = W(it.choices[i], lpx, on) + K(30);
+            while (lpx > 8 && W(it.choices[ci], lpx, on) + K(30) > cellW) lpx--;
+            const int lw = W(it.choices[ci], lpx, on) + K(30);
             Glass::Round(c, cx - lw / 2, cy, lw, labelH, labelH * 0.5f, on ? Pill : PillOff, on ? PillEdge : PillOffEdge, std::max(1.0f, k));
-            TCentred(c, cx, cy + labelH / 2 + lpx * 7 / 20, it.choices[i], lpx, on ? PillInk : 0xFFDCE2EA, on);
+            TCentred(c, cx, cy + labelH / 2 + lpx * 7 / 20, it.choices[ci], lpx, on ? PillInk : 0xFFDCE2EA, on);
         }
+    }
+    else if (it.slider >= 0 && regionBottom - regionTop > K(40))
+    {
+        // (A slider, as VOLUME: ten bars, as many lit as it is set to, and its value under them.)
+        const int bars = 10, gap = K(6), bw = std::min(K(22), (innerW - 9 * gap) / bars), total = bars * bw + (bars - 1) * gap;
+        const int bx = pvX + (pvW - total) / 2, bh = K(70), by = regionTop + (regionBottom - regionTop - bh - K(40)) / 2;
+        for (int b = 0; b < bars; b++)
+        {
+            const int h = bh * (b + 3) / (bars + 2);
+            Glass::Round(c, bx + b * (bw + gap), by + bh - h, bw, h, bw * 0.3f, b < it.slider ? Pill : PillOff, b < it.slider ? 0 : PillOffEdge, std::max(1.0f, k));
+        }
+        TCentred(c, pvX + pvW / 2, by + bh + K(32), it.value, K(22), GlassText, true);
     }
     else if (it.kind != K_BACK && !it.value.empty() && regionBottom - regionTop > K(40))
     {

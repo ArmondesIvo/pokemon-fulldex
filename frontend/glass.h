@@ -240,7 +240,7 @@ enum Icon
 {
     I_PLAY, I_SAVE, I_LOAD, I_CHEATS, I_FAST, I_TROPHY, I_GEAR, I_POWER,
     I_BACK, I_MONITOR, I_SCREENS, I_GLOBE, I_RATIO, I_LAYOUT, I_EXPAND, I_FULLSCREEN, I_GRID, I_LAYERS,
-    I_PAD, I_GAUGE, I_WINDOW, I_PEOPLE, I_SPARKLE, I_INFO, I_CHEVRON_L, I_CHEVRON_R, I_POKEBALL,
+    I_PAD, I_GAUGE, I_WINDOW, I_PEOPLE, I_SPARKLE, I_INFO, I_CHEVRON_L, I_CHEVRON_R, I_POKEBALL, I_CHIP, I_SPEAKER, I_REWIND,
     I_COUNT
 };
 // A rhombus centred on (cx, cy), half width a and half height b (close to a true distance).
@@ -398,6 +398,26 @@ inline void DrawIcon(Canvas& c, int icon, float cx, float cy, float size, uint32
         }
         case I_CHEVRON_L: return std::min(Segment(u, v, 0.26f, -0.56f, -0.24f, 0, t * 0.6f), Segment(u, v, -0.24f, 0, 0.26f, 0.56f, t * 0.6f));
         case I_CHEVRON_R: return std::min(Segment(u, v, -0.26f, -0.56f, 0.24f, 0, t * 0.6f), Segment(u, v, 0.24f, 0, -0.26f, 0.56f, t * 0.6f));
+        case I_CHIP:
+        {
+            float d = std::fabs(Box(u, v, 0, 0, 0.52f, 0.52f, 0.1f)) - t / 2;
+            d = std::min(d, Box(u, v, 0, 0, 0.2f, 0.2f, 0.03f));
+            for (int i = -1; i <= 1; i++)
+            {
+                const float o = i * 0.3f;
+                d = std::min(d, std::min(Segment(u, v, o, -0.86f, o, -0.56f, t / 2), Segment(u, v, o, 0.56f, o, 0.86f, t / 2)));
+                d = std::min(d, std::min(Segment(u, v, -0.86f, o, -0.56f, o, t / 2), Segment(u, v, 0.56f, o, 0.86f, o, t / 2)));
+            }
+            return d;
+        }
+        case I_SPEAKER:
+        {
+            const float body = std::min(Box(u, v, -0.56f, 0, 0.18f, 0.24f, 0.04f), std::max(Rhombus(u, v, -0.38f, 0, 0.4f, 0.62f), -(u + 0.38f)));
+            const float w1 = std::max(std::fabs(Circle(u, v, -0.1f, 0, 0.42f)) - t / 2, -(u - 0.12f) + std::fabs(v) * 0.0f);
+            const float w2 = std::max(std::fabs(Circle(u, v, -0.1f, 0, 0.72f)) - t / 2, -(u - 0.22f));
+            return std::min(body, std::min(std::max(w1, std::fabs(v) - 0.36f), std::max(w2, std::fabs(v) - 0.6f)));
+        }
+        case I_REWIND: return std::min(Play(-u, v, -0.78f, 0.04f, 0, 0.52f), Play(-u, v, -0.04f, 0.78f, 0, 0.52f)) - 0.02f;
         case I_POKEBALL:
         {
             const float ring = std::fabs(Circle(u, v, 0, 0, 0.8f)) - t / 2;

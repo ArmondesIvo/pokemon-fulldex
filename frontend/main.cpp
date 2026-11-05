@@ -4843,6 +4843,38 @@ int main(int argc, char** argv)
             menuIds.push_back(id);
         };
         auto onOff = [](bool on) { return std::string(on ? "ON" : "OFF"); };
+        // Settings pages (ui_settings.h, Menu::style 1): Back in the header, rows in sections, and a
+        // preview of the chosen row (a picture of each choice, made from the paused game).
+        auto settingsPage = [&](int icon) {
+            menu.style = 1;
+            menu.pageIcon = icon;
+            add(M_BACK, "BACK", "");
+            menu.items.back().kind = Menu::K_BACK;
+        };
+        auto section = [&](const char* label, int icon) {
+            add(M_NOTHING, label, "", true);
+            menu.items.back().kind = Menu::K_SECTION;
+            menu.items.back().icon = icon;
+        };
+        // (choices: as the preview names them; the value shown is the one on now.)
+        auto picker = [&](int id, const char* label, int icon, int preview, const std::vector<std::string>& choices, int choice,
+                          const char* desc, const char* tip, const std::vector<int>& art = {}) {
+            const bool known = choice >= 0 && choice < (int)choices.size();
+            add(id, label, known ? choices[choice] : std::string("-"));
+            MenuItem& it = menu.items.back();
+            it.kind = Menu::K_PICKER;
+            it.icon = icon;
+            it.preview = preview;
+            it.choices = choices;
+            it.choice = choice;
+            it.art = art;
+            it.desc = desc;
+            it.tip = tip;
+        };
+        auto toggle = [&](int id, const char* label, int icon, int preview, bool on, const char* desc, const char* tip) {
+            picker(id, label, icon, preview, { "OFF", "ON" }, on ? 1 : 0, desc, tip);
+            menu.items.back().kind = Menu::K_TOGGLE;
+        };
         if (menuPage == PAGE_MAIN)
         {
             // Eight glass tiles (ui.h, Menu::DrawTiles). Everything the old list had is one step in:
@@ -4909,44 +4941,19 @@ int main(int argc, char** argv)
         }
         else if(menuPage==PAGE_EXTRAS)
         {
+            settingsPage(Glass::I_SPARKLE);
+            section("OPTIONAL FEATURES", Glass::I_SPARKLE);
+            static const int icons[] = { Glass::I_POKEBALL, Glass::I_FAST, Glass::I_SAVE, Glass::I_LOAD, Glass::I_SCREENS, Glass::I_SCREENS };
             size_t count;const auto* options=OptionalFeatures::Options(count);
-            for(size_t i=0;i<count;i++)add(M_EXTRA0+(int)i,options[i].name,onOff(cfg.*options[i].value));
-            add(M_NOTHING,"HUD / WINDOW / FILTERS: DISPLAY","",true);
-            add(M_NOTHING,"SPEED / REWIND / TURBO: PLAYBACK","",true);
-            add(M_BACK,"BACK","");
+            for(size_t i=0;i<count;i++)
+                toggle(M_EXTRA0+(int)i,options[i].name,icons[std::min<size_t>(i,5)],Menu::P_NONE,cfg.*options[i].value,options[i].help,
+                       "The HUD, companion window and filters are in Display; speed, rewind and turbo in Playback.");
         }
         else if (menuPage == PAGE_DISPLAY)
         {
             // A settings page (ui_settings.h): Back in the header, the rows in two sections, and a
             // preview of the chosen row with a picture of each choice made from the paused game.
-            menu.style = 1;
-            menu.pageIcon = Glass::I_MONITOR;
-            add(M_BACK, "BACK", "");
-            menu.items.back().kind = Menu::K_BACK;
-            auto section = [&](const char* label, int icon) {
-                add(M_NOTHING, label, "", true);
-                menu.items.back().kind = Menu::K_SECTION;
-                menu.items.back().icon = icon;
-            };
-            // (choices: as the preview names them; the value shown is the one on now.)
-            auto picker = [&](int id, const char* label, int icon, int preview, const std::vector<std::string>& choices, int choice,
-                              const char* desc, const char* tip, const std::vector<int>& art = {}) {
-                const bool known = choice >= 0 && choice < (int)choices.size();
-                add(id, label, known ? choices[choice] : std::string("-"));
-                MenuItem& it = menu.items.back();
-                it.kind = Menu::K_PICKER;
-                it.icon = icon;
-                it.preview = preview;
-                it.choices = choices;
-                it.choice = choice;
-                it.art = art;
-                it.desc = desc;
-                it.tip = tip;
-            };
-            auto toggle = [&](int id, const char* label, int icon, int preview, bool on, const char* desc, const char* tip) {
-                picker(id, label, icon, preview, { "OFF", "ON" }, on ? 1 : 0, desc, tip);
-                menu.items.back().kind = Menu::K_TOGGLE;
-            };
+            settingsPage(Glass::I_MONITOR);
             section("SCREEN & LAYOUT", Glass::I_MONITOR);
 #if defined(__ANDROID__) && defined(SSR_PC_LAUNCHER)
             picker(M_SECOND_SCREEN, "SECOND SCREEN", Glass::I_SCREENS, Menu::P_SECOND,
@@ -4990,7 +4997,7 @@ int main(int argc, char** argv)
                 menu.items.back().disabled = none;
             }
             toggle(M_SHOWFPS, "FPS COUNTER", Glass::I_GAUGE, Menu::P_FPS, cfg.showFps,
-                   "Show the frames per second in a corner of the screen.", "Handy for checking the game runs at full speed.");
+                   "Show the frames per second in a corner of the screen.", "Shows 60 when the game runs at full speed.");
             toggle(M_COMPANION_OVERLAY, "COMPANION WINDOW", Glass::I_WINDOW, Menu::P_COMPANION, cfg.companionOverlay,
                    "Show the Companion panel over the game: party, Pokédex and location.", "The Party HUD is hidden while this is on.");
             toggle(M_PARTY_HUD, "PARTY HUD", Glass::I_PEOPLE, Menu::P_PARTY, cfg.partyHud,
@@ -5000,56 +5007,72 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_SOUND)
         {
-            add(M_VOLUME, "VOLUME", cfg.volume == 0 ? std::string("OFF") : std::to_string(cfg.volume) + "%");
+            settingsPage(Glass::I_SPEAKER);
+            section("SOUND", Glass::I_SPEAKER);
+            picker(M_VOLUME, "VOLUME", Glass::I_SPEAKER, Menu::P_NONE, {}, -1, "How loud the game's sound and music are.", "Left and right change it in steps of 10%.");
+            menu.items.back().value = cfg.volume == 0 ? std::string("OFF") : std::to_string(cfg.volume) + "%";
             menu.items.back().slider = cfg.volume / 10;
-            add(M_FFMUTE, "FAST FORWARD SOUND", cfg.ffMute ? "OFF" : "ON");
-            add(M_BACK, "BACK", "");
+            toggle(M_FFMUTE, "FAST FORWARD SOUND", Glass::I_FAST, Menu::P_NONE, !cfg.ffMute,
+                   "Keep the sound on while fast forwarding.", "Off keeps fast forward silent.");
         }
         else if (menuPage == PAGE_GRAPHICS)
         {
-            add(M_FPS60, "60 FPS", onOff(cfg.fps60));
-            add(M_WIDE, "WIDESCREEN WORLD", onOff(cfg.wide));
+            settingsPage(Glass::I_SPARKLE);
+            section("PICTURE", Glass::I_SPARKLE);
+            // (The DS shows 60 pictures a second, but these games draw their 3D only every other one:
+            // 60 adds the in-between 3D picture, GPU3D.InterpolationEnabled. The FPS counter counts the
+            // screen, which is 60 either way, hence the tip.)
+            toggle(M_FPS60, "FPS", Glass::I_GAUGE, Menu::P_MOTION, cfg.fps60,
+                   "How smoothly the game moves. The original games run at 30 frames a second. 60 adds an extra frame between each one, so walking, the camera and battles look twice as smooth. The extra frame is drawn from the game's own 3D, halfway between two real frames: not AI, and not a guess from the picture.",
+                   "The game's speed doesn't change. The FPS counter shows 60 either way, as it counts the screen, not the game's pictures.");
+            menu.items.back().choices = { "30", "60" };
+            menu.items.back().value = cfg.fps60 ? "60" : "30";
+            toggle(M_WIDE, "WIDESCREEN WORLD", Glass::I_RATIO, Menu::P_WIDE, cfg.wide,
+                   "Draw the 3D world wider than the DS could, to fill a wide screen.", "Off shows the DS's own 4:3 picture.");
             // (Black, White, Black 2 and White 2. The game sets its memory up for it as it
             // starts, so a change waits for the next start.)
-            add(M_WIDEMAP, "WIDE MAP LOADING", !bw2map.Supported() ? "-" : onOff(cfg.wideMap) + (cfg.wideMap != bw2map.on ? " (NEXT START)" : ""));
+            toggle(M_WIDEMAP, "WIDE MAP LOADING", Glass::I_GLOBE, Menu::P_NONE, cfg.wideMap,
+                   bw2map.Supported() ? "Load more of the map at the sides, so the wide picture has no empty edges." : "Load more of the map at the sides. Not needed in this game.",
+                   "Black, White, Black 2 and White 2. Applies the next time the game starts.");
+            if (!bw2map.Supported()) { menu.items.back().disabled = true; menu.items.back().value = "-"; menu.items.back().choice = -1; }
+            else if (cfg.wideMap != bw2map.on) menu.items.back().tip = "Changed: applies the next time the game starts.";
 #ifdef __SWITCH__
-            add(M_WIDELINES, "WORLD DETAIL", std::to_string(detailLines[detailIndex()]));
-            // ON: fewer lines than WORLD DETAIL for a moment where drawing them cannot keep up
-            // (a move's animation full of effects), so that the game does not slow down.
-            add(M_AUTODETAIL, "LOWER DETAIL WHEN BUSY", onOff(cfg.autoDetail));
+            picker(M_WIDELINES, "WORLD DETAIL", Glass::I_GRID, Menu::P_RES, { "192", "288", "384", "540", "720", "1080", "1440", "2160" }, detailIndex(),
+                   "How many lines the 3D world is drawn with.", "More lines look sharper but need more power.");
+            toggle(M_AUTODETAIL, "LOWER DETAIL WHEN BUSY", Glass::I_EXPAND, Menu::P_NONE, cfg.autoDetail,
+                   "Draw fewer lines for a moment when a scene is too busy to keep up.", "So the game never slows down in big moves.");
 #else
             // (The same setting, named as on a PC's other games: the lines the 3D world is drawn
             // with, as a screen resolution.)
-            {
-                const int l = detailLines[detailIndex()];
-                add(M_WIDELINES, "3D RESOLUTION", std::to_string(l) + "P" + (l == 192 ? " (DS)" : l == 1440 ? " (2K)" : l == 2160 ? " (4K)" : ""));
-            }
-            add(M_AUTODETAIL, "LOWER RES WHEN BUSY", onOff(cfg.autoDetail));
+            picker(M_WIDELINES, "3D RESOLUTION", Glass::I_GRID, Menu::P_RES, { "192P (DS)", "288P", "384P", "540P", "720P", "1080P", "1440P (2K)", "2160P (4K)" }, detailIndex(),
+                   "How sharp the 3D world is drawn. 192P is the DS's own.", "Higher looks sharper but needs a faster graphics card.");
+            toggle(M_AUTODETAIL, "LOWER RES WHEN BUSY", Glass::I_EXPAND, Menu::P_NONE, cfg.autoDetail,
+                   "Drop the resolution for a moment when a scene is too busy to keep up.", "So the game never slows down in big moves.");
 #endif
+            section("PERFORMANCE", Glass::I_CHIP);
 #if SSR_WORLD_ON_GPU && !defined(__SWITCH__)
             // ON: the widescreen world drawn by the graphics card (OpenGL), not the processor.
-            // (On the Switch always on: its fallback after a start that did not keep going is
-            // for that start only, see StartWideGpu's marker.)
-            add(M_WIDEGPU, "WORLD ON GPU", melonDS::WideGpuCurrent ? "ON" : cfg.wideGpu ? "ON (NOT AVAILABLE)" : "OFF");
+            toggle(M_WIDEGPU, "WORLD ON GPU", Glass::I_CHIP, Menu::P_NONE, cfg.wideGpu,
+                   "Draw the widescreen world with the graphics card instead of the processor.", "Turn off if the picture looks wrong.");
+            if (cfg.wideGpu && !melonDS::WideGpuCurrent) menu.items.back().tip = "Not available on this device right now: game.log says why.";
 #endif
 #if SSR_MENU_GPU3D
-            // ON: the 3D scene drawn by the graphics chip instead of the processor. (Not on the
-            // Switch: its OpenGL driver hung the console from a second thread and, from the main
-            // thread, cost 10-12 ms a frame for the DS's picture and up to 22 ms to read a 720-line
-            // widescreen picture back, far more than drawing it in software.)
-            add(M_GPU3D, "3D ON GPU", UseGpu3D ? "ON" : cfg.gpu3d ? "ON (NOT AVAILABLE)" : "OFF");
+            // ON: the 3D scene drawn by the graphics chip instead of the processor.
+            toggle(M_GPU3D, "3D ON GPU", Glass::I_CHIP, Menu::P_NONE, cfg.gpu3d,
+                   "Draw the DS's 3D with the graphics card instead of the processor.", "Turn off if the picture looks wrong.");
+            if (cfg.gpu3d && !UseGpu3D) menu.items.back().tip = "Not available on this device right now: game.log says why.";
 #endif
 #if !defined(__SWITCH__) && !defined(SSR_PHONE)
-            // ON: 360 lines while fast forwarding, for more frames a second (the menu's hint says so).
-            add(M_FFLOWRES, "FAST FORWARD LOW RES", onOff(cfg.ffLowRes));
+            // ON: 360 lines while fast forwarding, for more frames a second.
+            toggle(M_FFLOWRES, "FAST FORWARD LOW RES", Glass::I_FAST, Menu::P_NONE, cfg.ffLowRes,
+                   "Draw the 3D at 360 lines while fast forwarding.", "More frames a second in fast forward.");
 #endif
 #if SSR_MENU_EMULATION
             // Read when the game starts (SwitchPlatform::Start); a change waits for the next start.
-            // FAST JIT: the JIT with fast memory.
-            add(M_EMULATION, "EMULATION", std::string(!cfg.jit ? "INTERPRETER" : cfg.fastMem ? "FAST JIT" : "JIT")
-                + (cfg.jit != UseJit || (cfg.jit && cfg.fastMem != UseFastMem) ? " (NEXT START)" : ""));
+            picker(M_EMULATION, "EMULATION", Glass::I_CHIP, Menu::P_NONE, { "FAST JIT", "JIT", "INTERPRETER" }, !cfg.jit ? 2 : cfg.fastMem ? 0 : 1,
+                   "How the DS's processors are run. Fast JIT is the quickest.", "Applies the next time the game starts.");
+            if (cfg.jit != UseJit || (cfg.jit && cfg.fastMem != UseFastMem)) menu.items.back().value += " (NEXT START)";
 #endif
-            add(M_BACK, "BACK", "");
         }
         else if(menuPage==PAGE_QUICK_ACTIONS)
         {
@@ -5077,14 +5100,36 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_PLAYBACK)
         {
-            add(M_FAST, "FAST FORWARD", onOff(fastLock));
-            add(M_FAST_SPEED,"FAST SPEED",std::to_string(cfg.fastSpeed)+"X");
-            add(M_SMART_FAST,"SMART FAST",onOff(cfg.smartFast));
-            add(M_SLOW_MOTION,"SLOW MOTION",cfg.slowDivisor==1?"OFF":cfg.slowDivisor==2?"1/2":"1/4");
-            add(M_TURBO_A,"TURBO A",onOff(cfg.turboA));
-            add(M_REWIND_MB,"REWIND MEMORY",cfg.rewindMb?std::to_string(cfg.rewindMb)+" MB":"OFF");
-            if(rewindHistory.Size())add(M_REWIND,"REWIND",std::to_string(rewindHistory.Size())+" SNAPSHOTS",true);
-            add(M_BACK,"BACK","");
+            settingsPage(Glass::I_FAST);
+            section("SPEED", Glass::I_FAST);
+            toggle(M_FAST, "FAST FORWARD", Glass::I_FAST, Menu::P_NONE, fastLock,
+                   "Keep the game fast forwarding until you turn it off.", "The fast forward key or button does the same while you hold it.");
+            {
+                static const int speeds[] = { 2, 3, 4, 8 };
+                int i = 0;
+                while (i < 3 && speeds[i] < cfg.fastSpeed) i++;
+                picker(M_FAST_SPEED, "FAST SPEED", Glass::I_GAUGE, Menu::P_NONE, { "2X", "3X", "4X", "8X" }, i,
+                       "How much faster fast forward runs.", "Higher speeds need a faster device.");
+            }
+            toggle(M_SMART_FAST, "SMART FAST", Glass::I_SPARKLE, Menu::P_NONE, cfg.smartFast,
+                   "Fast forward only while walking around and through battle animations, not while text is shown or you choose.",
+                   "So text and menus never fly past.");
+            picker(M_SLOW_MOTION, "SLOW MOTION", Glass::I_GAUGE, Menu::P_NONE, { "OFF", "1/2", "1/4" }, cfg.slowDivisor == 4 ? 2 : cfg.slowDivisor == 2 ? 1 : 0,
+                   "Run the game at half or a quarter of its speed.", "Handy for tricky timing.");
+            section("ASSIST", Glass::I_REWIND);
+            toggle(M_TURBO_A, "TURBO A", Glass::I_PAD, Menu::P_NONE, cfg.turboA,
+                   "Holding A presses it again and again.", "Speeds through text and repeated choices.");
+            picker(M_REWIND_MB, "REWIND MEMORY", Glass::I_REWIND, Menu::P_NONE, { "OFF", "64 MB", "128 MB" }, cfg.rewindMb == 128 ? 2 : cfg.rewindMb == 64 ? 1 : 0,
+                   "Keep recent moments in memory so you can step back.", "More memory goes further back.");
+            if (rewindHistory.Size())
+            {
+                add(M_REWIND, "REWIND", std::to_string(rewindHistory.Size()) + " SNAPSHOTS", true);
+                MenuItem& it = menu.items.back();
+                it.kind = Menu::K_LINK;
+                it.icon = Glass::I_REWIND;
+                it.desc = "Step back to the most recent moment kept in memory.";
+                it.tip = "Your in-game save is kept as it is.";
+            }
         }
         else if (menuPage == PAGE_STATES)
         {
@@ -7052,10 +7097,10 @@ int main(int argc, char** argv)
                 cfg.fastSpeed=speeds[(i+(dir<0?3:1))%4];cfg.Save(opt.config);break;
             }
             case M_SMART_FAST:cfg.smartFast=!cfg.smartFast;cfg.Save(opt.config);break;
-            case M_SLOW_MOTION:cfg.slowDivisor=cfg.slowDivisor==1?2:cfg.slowDivisor==2?4:1;cfg.Save(opt.config);break;
+            case M_SLOW_MOTION:cfg.slowDivisor=dir<0?(cfg.slowDivisor==1?4:cfg.slowDivisor==4?2:1):(cfg.slowDivisor==1?2:cfg.slowDivisor==2?4:1);cfg.Save(opt.config);break;
             case M_TURBO_A:cfg.turboA=!cfg.turboA;cfg.Save(opt.config);break;
             case M_REWIND_MB:
-                cfg.rewindMb=cfg.rewindMb==0?64:cfg.rewindMb==64?128:0;
+                cfg.rewindMb=dir<0?(cfg.rewindMb==0?128:cfg.rewindMb==128?64:0):(cfg.rewindMb==0?64:cfg.rewindMb==64?128:0);
                 rewindHistory.Limit((size_t)cfg.rewindMb*1024*1024);cfg.Save(opt.config);break;
             case M_REWIND:
             {
