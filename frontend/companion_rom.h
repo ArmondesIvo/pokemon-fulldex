@@ -137,9 +137,35 @@ struct Metadata
     // (Party icons: the ROM's icon archive and its palettes, HGSS and Platinum; companion_icons.h.)
     std::vector<Bytes> monIcons;
     std::vector<std::vector<uint32_t>> iconPalettes;
+    // (Gen 5: the icons are every other member from the first NCGR (7 in Black and White, 8 in Black 2
+    // and White 2), one for each species; their palettes chosen by a byte for each
+    // species in the ARM9 (low nibble; high: its female icon's), found by Gen 4's table, which it repeats.)
+    std::vector<uint8_t> gen5IconPalettes;
+    int gen5IconStart=-1;
+    void FindGen5IconPalettes(const Bytes& arm)
+    {
+        const size_t n=CompanionIcons::Gen4Egg;
+        for(size_t o=0;o+n+700<arm.size();o++)
+        {
+            bool ok=true;
+            for(size_t sp=1;sp<n&&ok;sp++){const uint8_t b=arm[o+sp];ok=(b&15)==CompanionIcons::Gen4Palette[sp]&&(b>>4)==(b&15);}
+            if(!ok)continue;
+            // (After Gen 4's: a Pokemon with a female icon has its palette in the high nibble.)
+            size_t end=o+1;while(end<arm.size()&&(arm[end]&15)<=2&&(arm[end]>>4)<=2)end++;
+            for(size_t q=o;q<end;q++)gen5IconPalettes.push_back(arm[q]&15);
+            return;
+        }
+    }
     bool MonIcon(int species,bool egg,std::vector<uint32_t>& out)const
     {
-        if(gen5||iconPalettes.empty())return false;
+        if(gen5)
+        {
+            const int member=gen5IconStart+2*species;
+            if(egg||iconPalettes.empty()||gen5IconStart<0||species<1||species>=(int)gen5IconPalettes.size()||member>=(int)monIcons.size())return false;
+            const int pal=gen5IconPalettes[species];
+            return pal<(int)iconPalettes.size()&&CompanionIcons::Icon(monIcons[member],iconPalettes[pal],out);
+        }
+        if(iconPalettes.empty())return false;
         const int id=egg?CompanionIcons::Gen4Egg:species;
         if(id<1||id>CompanionIcons::Gen4Egg||7+id>=(int)monIcons.size())return false;
         const int pal=CompanionIcons::Gen4Palette[id];
@@ -160,10 +186,31 @@ struct Metadata
     }
     void LoadItemIcons(const Bytes& rom,const Bytes& arm,bool hg)
     {
-        itemIcons=Narc(RomFile(rom,hg?"a/0/1/8":"itemtool/itemdata/item_icon.narc"));
+        itemIcons=Narc(RomFile(rom,gen5?"a/0/2/5":hg?"a/0/1/8":"itemtool/itemdata/item_icon.narc"));
         const int n=(int)itemIcons.size();
         if(n<2||arm.size()<8*64)return;
         auto u16=[&](size_t o){return (int)U16(arm.data()+o);};
+        if(gen5)
+        {
+            // (Gen 5: {icon, palette} for each item, four bytes; found by item 1 (the Master Ball)
+            // being the archive's first icon and palette, and the next ones being an icon and a
+            // palette each.)
+            auto is=[&](int m,const char* magic){return m>=0&&m<n&&itemIcons[m].size()>4&&!memcmp(itemIcons[m].data(),magic,4);};
+            for(size_t o=0;o+4*64<=arm.size();o+=4)
+            {
+                if(u16(o+4)!=2||u16(o+6)!=3)continue;
+                bool ok=true;
+                for(int i=1;i<60&&ok;i++)ok=is(u16(o+4*i),"RGCN")&&is(u16(o+4*i+2),"RLCN");
+                if(!ok)continue;
+                for(size_t e=o;e+4<=arm.size()&&itemIconIds.size()<std::max<size_t>(items.size(),1);e+=4)
+                {
+                    if(!is(u16(e),"RGCN")||!is(u16(e+2),"RLCN"))break;
+                    itemIconIds.push_back({u16(e),u16(e+2)});
+                }
+                return;
+            }
+            return;
+        }
         for(size_t o=0;o+8*64<=arm.size();o+=4)
         {
             if(u16(o)!=0||u16(o+2)>=n||u16(o+4)>=n)continue;
@@ -465,6 +512,14 @@ struct Metadata
         places=bank(gen5?89:hg?279:433);
         regionMap=ReferenceMap(Narc(RomFile(rom,gen5?"a/0/8/5":hg?"a/1/4/4":"graphic/tmap_gra.narc")),gen5,hg);
         if(!gen5){monIcons=Narc(RomFile(rom,hg?"a/0/2/0":"poketool/icongra/pl_poke_icon.narc"));if(!monIcons.empty())iconPalettes=CompanionIcons::Palettes(monIcons[0]);}
+        else
+        {
+            monIcons=Narc(RomFile(rom,"a/0/0/7"));
+            const Bytes arm=RomArm9(rom);
+            if(!monIcons.empty()){iconPalettes=CompanionIcons::Palettes(monIcons[0]);FindGen5IconPalettes(arm);}
+            for(size_t i=0;i<monIcons.size()&&i<16;i++)if(monIcons[i].size()>4&&!memcmp(monIcons[i].data(),"RGCN",4)){gen5IconStart=(int)i;break;}
+            LoadItemIcons(rom,arm,false);
+        }
         if(gen5)
         {
             auto zones=Narc(RomFile(rom,"a/0/1/2"));

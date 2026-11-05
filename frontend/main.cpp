@@ -4866,8 +4866,14 @@ int main(int argc, char** argv)
             const auto marker = companionMetadata.PlayerMarker(snap);
             if (marker.ready) { cv.markerX = (marker.x + 0.5f) / cv.mapW; cv.markerY = (marker.y + 0.5f) / cv.mapH; }
         }
-        // (Poke Balls: Gen 4's BALLS pocket; Gen 5 keeps them among ITEMS, so not counted.)
+        // (Poke Balls: Gen 4's BALLS pocket; Gen 5 keeps them among ITEMS: items 1 to 16, the Master
+        // Ball to the Cherish Ball, and 576, the Dream Ball.)
         if (!companionProfile.gen5 && cv.pockets.size() > 6) cv.balls = cv.pockets[6].total;
+        if (companionProfile.gen5)
+        {
+            cv.balls = 0;
+            for (const auto& item : snap.items) if ((item.id >= 1 && item.id <= 16) || item.id == 576) cv.balls += item.quantity;
+        }
         // (A battle: the foe first, then yours, and how the types match up.)
         if (snap.battlers.size() >= 2 && snap.battlers[1].species)
         {
