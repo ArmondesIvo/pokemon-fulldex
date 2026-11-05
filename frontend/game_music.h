@@ -33,6 +33,12 @@ struct GameMusic
     bool Log = false;
 
     bool isMusic[16] = {};
+    // (Streamed music, as Black 2's opening: the main processor locks two hardware channels at
+    // once (LOCK_CHANNEL, a mask of 2 or more), sets each up as PCM (SETUP_CHANNEL_PCM, its volume
+    // in the third word's top byte) and fades them (CHANNEL_VOLUME: mask, volume). Those channels'
+    // volumes scaled by Music until UNLOCK_CHANNEL; a single locked channel (a voice, a sample
+    // played by the game itself) by Sound Effects.)
+    uint32_t streamChannels = 0, sampleChannels = 0;
     int16_t gameVolume[16] = {}; // the volume the game last asked for, before ours
 
     uint8_t* players = nullptr; // the sound processor's 16 players, once found
@@ -53,6 +59,20 @@ struct GameMusic
         if (percent >= 100) return 0;
         if (percent <= 0) return -32768;
         return (int)std::lround(200.0 * std::log10(percent / 100.0));
+    }
+
+    // A stream's channel volume (0 to 127) at Music's setting: amplitude, as the hardware's volume is.
+    uint32_t StreamVolume(uint32_t v) const
+    {
+        const int percent = External ? 0 : Music;
+        if (percent >= 100) return v;
+        return (uint32_t)std::lround(v * std::max(0, percent) / 100.0);
+    }
+
+    uint32_t SampleVolume(uint32_t v) const
+    {
+        if (Effects >= 100) return v;
+        return (uint32_t)std::lround(v * std::max(0, Effects) / 100.0);
     }
 
     int16_t Ours(int player, int16_t game) const
@@ -110,6 +130,22 @@ struct GameMusic
                 }
                 if (Log) fprintf(stderr, "[sound] player %u volume %d -> %d\n", a0, game, ours);
             }
+            else if (id == 26) (__builtin_popcount(a0 & 0xFFFF) >= 2 ? streamChannels : sampleChannels) |= a0 & 0xFFFF; // LOCK_CHANNEL
+            else if (id == 27) { streamChannels &= ~a0; sampleChannels &= ~a0; } // UNLOCK_CHANNEL
+            else if (id == 14 && ((streamChannels | sampleChannels) >> (a0 & 15) & 1)) // SETUP_CHANNEL_PCM
+            {
+                const bool music = streamChannels >> (a0 & 15) & 1;
+                const uint32_t v = a2 >> 24, scaled = music ? StreamVolume(v) : SampleVolume(v);
+                if (scaled != v) { const uint32_t w = (a2 & 0x00FFFFFF) | scaled << 24; memcpy(Ram(cmd + 16), &w, 4); }
+                if (Log) fprintf(stderr, "[sound] %s channel %u volume %u -> %u\n", music ? "stream" : "sample", a0 & 15, v, scaled);
+            }
+            else if (id == 20 && (a0 & (streamChannels | sampleChannels))) // CHANNEL_VOLUME
+            {
+                const uint32_t scaled = (a0 & streamChannels) ? StreamVolume(a1 & 0x7F) : SampleVolume(a1 & 0x7F);
+                if (scaled != (a1 & 0x7F)) { const uint32_t w = (a1 & ~0x7Fu) | scaled; memcpy(Ram(cmd + 12), &w, 4); }
+            }
+            if (Log && id >= 12 && id <= 28) // (the channel commands, as streams use them)
+                fprintf(stderr, "[sound] command %u: %08x %08x %08x %08x\n", id, a0, a1, a2, a3);
             cmd = Read32(cmd);
         }
     }

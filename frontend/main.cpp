@@ -9829,6 +9829,23 @@ int main(int argc, char** argv)
                 AudioSumSq += (double)audioBuf[i] * audioBuf[i];
             }
             AudioSamples += (uint64_t)got * 2;
+            // (Every 300 frames with FULLDEX_SOUND_LOG: how loud, and which hardware channels play,
+            // each as channel:format:volume/shift; for finding music the menus do not reach.)
+            static double windowSq = 0; static uint64_t windowN = 0;
+            for (int i = 0; i < got * 2; i++) windowSq += (double)audioBuf[i] * audioBuf[i];
+            windowN += (uint64_t)got * 2;
+            if (gameMusic.Log && frame % 300 == 0 && windowN)
+            {
+                std::string channels;
+                for (int c = 0; c < 16; c++)
+                {
+                    const u32 cnt = nds->SPU.Read32(0x04000400 + c * 16);
+                    if (!(cnt & 0x80000000)) continue;
+                    channels += " " + std::to_string(c) + ":" + std::to_string((cnt >> 29) & 3) + ":" + std::to_string(cnt & 0x7F) + "/" + std::to_string((cnt >> 8) & 3);
+                }
+                fprintf(stderr, "[audio] frame %u rms %.0f channels%s\n", frame, std::sqrt(windowSq / windowN), channels.c_str());
+                windowSq = 0; windowN = 0;
+            }
         }
 
         if (opt.countChanges && top)
