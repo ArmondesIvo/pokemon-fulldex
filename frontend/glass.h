@@ -240,7 +240,7 @@ enum Icon
 {
     I_PLAY, I_SAVE, I_LOAD, I_CHEATS, I_FAST, I_TROPHY, I_GEAR, I_POWER,
     I_BACK, I_MONITOR, I_SCREENS, I_GLOBE, I_RATIO, I_LAYOUT, I_EXPAND, I_FULLSCREEN, I_GRID, I_LAYERS,
-    I_PAD, I_GAUGE, I_WINDOW, I_PEOPLE, I_SPARKLE, I_INFO, I_CHEVRON_L, I_CHEVRON_R, I_POKEBALL, I_CHIP, I_SPEAKER, I_REWIND,
+    I_PAD, I_GAUGE, I_WINDOW, I_PEOPLE, I_SPARKLE, I_INFO, I_CHEVRON_L, I_CHEVRON_R, I_CHEVRON_U, I_CHEVRON_D, I_POKEBALL, I_CHIP, I_SPEAKER, I_REWIND,
     I_COUNT
 };
 // A rhombus centred on (cx, cy), half width a and half height b (close to a true distance).
@@ -398,6 +398,8 @@ inline void DrawIcon(Canvas& c, int icon, float cx, float cy, float size, uint32
         }
         case I_CHEVRON_L: return std::min(Segment(u, v, 0.26f, -0.56f, -0.24f, 0, t * 0.6f), Segment(u, v, -0.24f, 0, 0.26f, 0.56f, t * 0.6f));
         case I_CHEVRON_R: return std::min(Segment(u, v, -0.26f, -0.56f, 0.24f, 0, t * 0.6f), Segment(u, v, 0.24f, 0, -0.26f, 0.56f, t * 0.6f));
+        case I_CHEVRON_U: return std::min(Segment(u, v, -0.56f, 0.26f, 0, -0.24f, t * 0.6f), Segment(u, v, 0, -0.24f, 0.56f, 0.26f, t * 0.6f));
+        case I_CHEVRON_D: return std::min(Segment(u, v, -0.56f, -0.26f, 0, 0.24f, t * 0.6f), Segment(u, v, 0, 0.24f, 0.56f, -0.26f, t * 0.6f));
         case I_CHIP:
         {
             float d = std::fabs(Box(u, v, 0, 0, 0.52f, 0.52f, 0.1f)) - t / 2;

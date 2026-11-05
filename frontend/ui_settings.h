@@ -230,26 +230,434 @@ inline void Inset(Canvas& c, Src s, int x, int y, int w, int h, float k)
     Whole(c, s, x, y, w, h, 2 * k);
 }
 
+// What CONTROLS' pictures show (set by DrawSettings from the menu): the controller's layout
+// (0 Xbox, 1 PlayStation, 2 Nintendo, as Controls::Style), the inputs held now, and a key's name.
+inline int& PadStyleNow() { static int s = 0; return s; }
+inline uint32_t& PadLiveNow() { static uint32_t m = 0; return m; }
+inline float* PadAxesNow() { static float a[6] = {}; return a; }
+inline std::string& KeyNow() { static std::string s; return s; }
+inline std::vector<std::string>& PadLabelsNow() { static std::vector<std::string> v; return v; }
+inline std::vector<Menu::TouchShape>& TouchNow() { static std::vector<Menu::TouchShape> v; return v; }
+
+// CONTROLS waiting for a key or button: a small glass card over the page. Where its two buttons
+// were drawn (PromptHit, for taps): 0 CANCEL, 1 CLEAR BINDING.
+struct PromptRect { int x = 0, y = 0, w = 0, h = 0; };
+inline PromptRect* PromptButtons() { static PromptRect r[2]; return r; }
+inline int PromptHit(int x, int y)
+{
+    for (int i = 0; i < 2; i++)
+    {
+        const PromptRect& r = PromptButtons()[i];
+        if (r.w > 0 && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return i;
+    }
+    return -1;
+}
+// title ("Press a button"), what for and what it is now, a warning (a button another action has,
+// pressed once), the buttons' hint; canClear: CLEAR BINDING can be chosen.
+inline void Prompt(Canvas& c, int icon, const std::string& title, const std::string& sub, const std::string& warn, const std::string& hint, bool canClear)
+{
+    const float k = std::max(0.42f, std::min(c.w / 1400.0f, c.h / 788.0f));
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    Glass::Round(c, 0, 0, c.w, c.h, 0, 0x66000000); // (the page dimmed behind it)
+    const int pw = std::min(c.w - K(32), K(460)), innerW = pw - K(48);
+    const auto warnLines = warn.empty() ? std::vector<std::string>() : Wrap(warn, K(16), innerW, 3);
+    const int ph = K(232) + (int)warnLines.size() * K(23) + (warnLines.empty() ? 0 : K(4));
+    const int px = (c.w - pw) / 2, py = (c.h - ph) / 2;
+    Glass::Glow(c, px, py, pw, ph, 20 * k, k);
+    Glass::Frost(c, px, py, pw, ph, 20 * k);
+    Glass::Round(c, px, py, pw, ph, 20 * k, 0xC8141A23, 0xE6FFFFFF, std::max(1.0f, 1.6f * k)); // (dark enough to read over the page)
+    Glass::DrawIcon(c, icon, c.w * 0.5f, py + K(38), 16 * k, Menu::GlassText);
+    TCentred(c, c.w / 2, py + K(88), title, K(24), Menu::GlassText, true);
+    TCentred(c, c.w / 2, py + K(116), sub, K(16), Desc);
+    int y = py + K(146);
+    for (const std::string& l : warnLines) { TCentred(c, c.w / 2, y, l, K(16), 0xFFFFD27A); y += K(23); }
+    if (!warnLines.empty()) y += K(4);
+    const int bw = K(150), bh = K(36), gap = K(14), bx = c.w / 2 - bw - gap / 2;
+    const char* const labels[] = { "CANCEL", "CLEAR BINDING" };
+    for (int i = 0; i < 2; i++)
+    {
+        const bool off = i == 1 && !canClear;
+        const int x = bx + i * (bw + gap);
+        Glass::Round(c, x, y, bw, bh, bh * 0.5f, off ? 0x0FFFFFFF : PillOff, off ? 0x1AFFFFFF : PillOffEdge, std::max(1.0f, k));
+        TCentred(c, x + bw / 2, y + bh / 2 + K(6), labels[i], K(16), off ? Menu::GlassOff : Menu::GlassText, true);
+        PromptButtons()[i] = { x, y, bw, off ? 0 : bh };
+    }
+    TCentred(c, c.w / 2, y + bh + K(26), hint, K(14), Menu::GlassHint);
+}
+
+// Shapes for the controllers, as signed distances in pixels (negative inside).
+namespace PadSdf
+{
+inline float Circle(float x, float y, float cx, float cy, float r) { return std::hypot(x - cx, y - cy) - r; }
+inline float Box(float x, float y, float cx, float cy, float hx, float hy, float r)
+{
+    r = std::min(r, std::min(hx, hy));
+    const float qx = std::fabs(x - cx) - hx + r, qy = std::fabs(y - cy) - hy + r;
+    return std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+}
+inline float Capsule(float x, float y, float ax, float ay, float bx, float by, float r)
+{
+    const float px = x - ax, py = y - ay, dx = bx - ax, dy = by - ay;
+    const float t = std::clamp((px * dx + py * dy) / (dx * dx + dy * dy), 0.0f, 1.0f);
+    return std::hypot(px - dx * t, py - dy * t) - r;
+}
+// A smooth join of two shapes (the grips flowing into the body), kk pixels wide.
+inline float Smin(float a, float b, float kk)
+{
+    const float h = std::clamp(0.5f + 0.5f * (b - a) / kk, 0.0f, 1.0f);
+    return b * (1 - h) + a * h - kk * h * (1 - h);
+}
+inline uint32_t Mix(uint32_t a, uint32_t b, float t)
+{
+    t = std::clamp(t, 0.0f, 1.0f);
+    uint32_t out = 0xFF000000u;
+    for (int sh = 0; sh <= 16; sh += 8)
+        out |= (uint32_t)std::clamp((int)((a >> sh & 255) * (1 - t) + (b >> sh & 255) * t + 0.5f), 0, 255) << sh;
+    return out;
+}
+// A shape drawn lit from above: top colour to bottom colour down its height, its top edges
+// catching the light and its bottom edges in shade (from which way its edge faces), a thin light
+// rim, and (shadow > 0) a soft shadow under it first.
+template <class F>
+void Shade(Canvas& c, int x0, int y0, int x1, int y1, F&& sdf, uint32_t top, uint32_t bottom, float bevel, float shadow, float k, bool dish = false)
+{
+    const int pad = (int)(shadow * 2 + 3);
+    x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+    Glass::Mark(c, x0, y0, x1, y1);
+    const float h = (float)std::max(1, y1 - y0 - 2 * pad);
+    for (int py = std::max(0, y0); py < std::min(c.h, y1); py++)
+        for (int px = std::max(0, x0); px < std::min(c.w, x1); px++)
+        {
+            const float fx = px + 0.5f, fy = py + 0.5f;
+            uint32_t& out = c.px[(size_t)py * c.w + px];
+            if (shadow > 0)
+            {
+                const float ds = sdf(fx, fy - shadow * 0.7f);
+                if (ds > -shadow && ds < shadow * 1.6f)
+                {
+                    const float a = 1.0f - std::clamp((ds + shadow * 0.2f) / (shadow * 1.8f), 0.0f, 1.0f);
+                    out = Glass::Over(out, (uint32_t)(a * a * 120) << 24);
+                }
+            }
+            const float d = sdf(fx, fy);
+            if (d > 1.0f) continue;
+            const float cover = std::clamp(0.5f - d, 0.0f, 1.0f);
+            // (Which way the edge faces: up is lit, down is in shade.)
+            const float gy = sdf(fx, fy + 1.0f) - sdf(fx, fy - 1.0f), gx = sdf(fx + 1.0f, fy) - sdf(fx - 1.0f, fy);
+            const float gl = std::max(0.001f, std::hypot(gx, gy));
+            const float up = -(gy * 0.85f + gx * 0.35f) / gl; // (light from the top, a little from the left)
+            const float rim = std::clamp(1.0f + d / bevel, 0.0f, 1.0f);
+            uint32_t col = Mix(top, bottom, (fy - (y0 + pad)) / h);
+            const float lift = (dish ? -up : up) * rim;
+            col = lift > 0 ? Mix(col, 0xFFFFFFFF, lift * 0.28f) : Mix(col, 0xFF000000, -lift * 0.45f);
+            if (d > -1.3f * k) col = Mix(col, 0xFFFFFFFF, 0.22f + std::max(0.0f, up) * 0.3f); // (the thin rim)
+            out = cover >= 1.0f ? col : Glass::Over(out, col, (int)(cover * 255));
+        }
+}
+// A shape as line art: filled (fill, may be clear) and outlined (stroke, sw pixels wide), smooth.
+template <class F>
+void Outline(Canvas& c, float x0, float y0, float x1, float y1, F&& sdf, uint32_t fill, uint32_t stroke, float sw)
+{
+    const int ix0 = (int)(x0 - sw - 2), iy0 = (int)(y0 - sw - 2), ix1 = (int)(x1 + sw + 3), iy1 = (int)(y1 + sw + 3);
+    Glass::Mark(c, ix0, iy0, ix1, iy1);
+    for (int py = std::max(0, iy0); py < std::min(c.h, iy1); py++)
+        for (int px = std::max(0, ix0); px < std::min(c.w, ix1); px++)
+        {
+            const float d = sdf(px + 0.5f, py + 0.5f);
+            if (d > sw) continue;
+            uint32_t& out = c.px[(size_t)py * c.w + px];
+            const float in = std::clamp(0.5f - d, 0.0f, 1.0f);
+            if (in > 0 && (fill >> 24)) out = Glass::Over(out, fill, (int)(in * 255));
+            const float line = std::clamp(sw * 0.5f + 0.5f - std::fabs(d), 0.0f, 1.0f);
+            if (line > 0) out = Glass::Over(out, stroke, (int)(line * 255));
+        }
+}
+// A straight line, smooth, w pixels wide.
+inline void Stroke(Canvas& c, float ax, float ay, float bx, float by, float w, uint32_t col)
+{
+    Outline(c, std::min(ax, bx), std::min(ay, by), std::max(ax, bx), std::max(ay, by),
+            [&](float px, float py) { return Capsule(px, py, ax, ay, bx, by, w * 0.5f); }, col, 0, 0);
+}
+} // namespace PadSdf
+
+// A controller as line art (a dark body, its outline and its buttons drawn in light lines), as
+// the kind in the player's hands (Controls::Kind): an Xbox-style pad, a PlayStation-style pad, a
+// Pro Controller, a pair of Joy-Con, one Joy-Con held sideways, or the Switch held as one with
+// the game on its screen. Plain shapes, no maker's design or logo; its buttons named as its maker
+// names them. hi: the input lit (Controls::IN_*, -1 none); live: those held now. With labels
+// (PadLabelsNow, KEYS AND BUTTONS), what each input does is written at the side, a line to it.
+inline void DrawPad(Canvas& c, int x, int y, int w, int h, float k, int kind, int hi, uint32_t live)
+{
+    using namespace PadSdf;
+    // (Controls::IN_* order: A B X Y BACK GUIDE START LS RS LB RB UP DOWN LEFT RIGHT LT RT.)
+    enum { A_, B_, X_, Y_, BACK_, GUIDE_, START_, LS_, RS_, LB_, RB_, UP_, DOWN_, LEFT_, RIGHT_, LT_, RT_, INPUTS };
+    enum { XB, PS, PRO, JOYS, JOY, HAND };
+    static const char* const xbox[] = { "A", "B", "X", "Y", "", "", "", "", "", "LB", "RB", "", "", "", "", "LT", "RT" };
+    static const char* const ps[] = { "\x01", "\x02", "\x03", "\x04", "", "", "", "", "", "L1", "R1", "", "", "", "", "L2", "R2" };
+    static const char* const nin[] = { "A", "B", "X", "Y", "-", "", "+", "", "", "L", "R", "", "", "", "", "ZL", "ZR" };
+    kind = std::clamp(kind, 0, 5);
+    const char* const* names = kind == PS ? ps : kind == XB ? xbox : nin;
+    const bool nintendo = kind >= PRO;
+    const std::vector<std::string>& labels = PadLabelsNow();
+    const bool callouts = labels.size() >= (size_t)INPUTS;
+    // The drawing in the middle, the labels' columns either side of it.
+    static const float aspects[] = { 1.5f, 1.5f, 1.5f, 1.2f, 2.3f, 2.35f };
+    const int padW = callouts ? (int)(w * 0.64f) : w, padX = x + (w - padW) / 2;
+    int ox, oy, ow, oh;
+    Fit(aspects[kind], padX, y + (callouts ? h / 20 : 0), padW, callouts ? h * 9 / 10 : h, ox, oy, ow, oh);
+    const float U = (float)ow;
+    auto X = [&](float u) { return ox + u * ow; };
+    auto Y = [&](float v) { return oy + v * oh; };
+    const float sw = std::max(1.2f, 0.007f * U); // (the lines' width)
+    const uint32_t ink = 0xE6F2F5F9, faint = 0x99C6CED8, bodyFill = 0xE0111720, bodyLine = 0xFF8B95A1;
+    auto lit = [&](int in) { return in == hi; };
+    auto held = [&](int in) { return in >= 0 && in < 32 && (live >> in & 1); };
+    auto fillOf = [&](int in) -> uint32_t { return lit(in) ? 0xFFFFFFFF : held(in) ? 0x99FFFFFF : 0x14FFFFFF; };
+    auto textOf = [&](int in) -> uint32_t { return lit(in) ? 0xFF0B1018 : ink; };
+    // Where each input is (for its label's line): its centre and size; -1 not on this controller.
+    float ax[INPUTS], ay[INPUTS], ar[INPUTS];
+    for (int i = 0; i < INPUTS; i++) ax[i] = -1;
+    auto at = [&](int in, float cx, float cy, float r) { ax[in] = cx; ay[in] = cy; ar[in] = r; };
+    auto name = [&](int in, float cx, float cy, int px) {
+        if (names[in][0]) T(c, (int)cx - W(names[in], px, true, false) / 2, (int)cy + px * 7 / 20, names[in], px, textOf(in), true, false);
+    };
+    auto button = [&](int in, float u, float v, float rad) {
+        const float cx = X(u), cy = Y(v), r = rad * U;
+        if (lit(in)) Glass::Glow(c, (int)(cx - r), (int)(cy - r), (int)(2 * r), (int)(2 * r), r, k);
+        Outline(c, cx - r, cy - r, cx + r, cy + r, [&](float px, float py) { return Circle(px, py, cx, cy, r); }, fillOf(in), ink, sw);
+        name(in, cx, cy, std::max(7, (int)(r * 1.0f)));
+        at(in, cx, cy, r);
+    };
+    auto pill = [&](int in, float u, float v, float bw, float bh) {
+        const float cx = X(u), cy = Y(v), hx = bw * U / 2, hy = bh * U / 2;
+        if (lit(in)) Glass::Glow(c, (int)(cx - hx), (int)(cy - hy), (int)(2 * hx), (int)(2 * hy), std::min(hx, hy), k);
+        Outline(c, cx - hx, cy - hy, cx + hx, cy + hy, [&](float px, float py) { return Box(px, py, cx, cy, hx, hy, std::min(hx, hy)); }, fillOf(in), ink, sw);
+        if (names[in][0]) name(in, cx, cy, std::max(7, (int)(std::min(hx, hy) * 1.7f)));
+        at(in, cx, cy, std::max(hx, hy));
+    };
+    auto stick = [&](int in, float u, float v, float rad) { // (two rings: the stick in its well; the cap follows the real stick)
+        const float cx = X(u), cy = Y(v), r = rad * U;
+        if (lit(in)) Glass::Glow(c, (int)(cx - r), (int)(cy - r), (int)(2 * r), (int)(2 * r), r, k);
+        Outline(c, cx - r, cy - r, cx + r, cy + r, [&](float px, float py) { return Circle(px, py, cx, cy, r); }, 0x30000000, ink, sw);
+        const float cr = r * 0.72f;
+        const float* axes = PadAxesNow() + (in == RS_ ? 2 : 0);
+        float dx = std::clamp(axes[0], -1.0f, 1.0f), dy = std::clamp(axes[1], -1.0f, 1.0f);
+        const float len = std::hypot(dx, dy);
+        if (len > 1) { dx /= len; dy /= len; }
+        const float mx = cx + dx * (r - cr) * 0.95f, my = cy + dy * (r - cr) * 0.95f;
+        const bool moved = len > 0.25f;
+        Outline(c, mx - cr, my - cr, mx + cr, my + cr, [&](float px, float py) { return Circle(px, py, mx, my, cr); },
+                moved && !lit(in) ? 0x66FFFFFF : fillOf(in), ink, sw);
+        at(in, cx, cy, r);
+    };
+    auto shoulder = [&](int in, float u, float v, float bw, float bh, float rr) {
+        const float cx = X(u), cy = Y(v), hx = bw * U / 2, hy = bh * U / 2;
+        if (lit(in)) Glass::Glow(c, (int)(cx - hx), (int)(cy - hy), (int)(2 * hx), (int)(2 * hy), rr * U, k);
+        Outline(c, cx - hx, cy - hy, cx + hx, cy + hy, [&](float px, float py) { return Box(px, py, cx, cy, hx, hy, rr * U); },
+                lit(in) || held(in) ? fillOf(in) : bodyFill, bodyLine, sw);
+        // (A trigger fills from the top as far as it is pulled.)
+        const float pull = in == LT_ ? PadAxesNow()[4] : in == RT_ ? PadAxesNow()[5] : 0;
+        if (pull > 0.05f && !lit(in))
+        {
+            const float fh = 2 * hy * std::min(1.0f, pull);
+            Glass::Round(c, (int)(cx - hx + sw), (int)(cy - hy + sw), (int)(2 * hx - 2 * sw), (int)std::max(1.0f, fh - 2 * sw), rr * U * 0.6f, 0x80FFFFFF);
+        }
+        if (names[in][0]) name(in, cx, cy - hy * 0.2f, std::max(7, (int)(hy * 0.85f)));
+        at(in, cx, cy - hy * 0.2f, hx);
+    };
+    auto arrowKey = [&](int in, float cx, float cy, float a, int icon) { // (one of the + pad's four keys)
+        if (lit(in)) Glass::Glow(c, (int)(cx - a / 2), (int)(cy - a / 2), (int)a, (int)a, a * 0.25f, k);
+        Outline(c, cx - a / 2, cy - a / 2, cx + a / 2, cy + a / 2, [&](float px, float py) { return Box(px, py, cx, cy, a * 0.46f, a * 0.46f, a * 0.2f); },
+                fillOf(in), ink, sw);
+        Glass::DrawIcon(c, icon, cx, cy, a * 0.22f, lit(in) ? 0xFF0B1018 : ink);
+        at(in, cx, cy, a * 0.5f);
+    };
+    auto dpad = [&](float u, float v, float arm) {
+        const float cx = X(u), cy = Y(v), a = arm * U;
+        arrowKey(UP_, cx, cy - a, a, Glass::I_CHEVRON_U);
+        arrowKey(DOWN_, cx, cy + a, a, Glass::I_CHEVRON_D);
+        arrowKey(LEFT_, cx - a, cy, a, Glass::I_CHEVRON_L);
+        arrowKey(RIGHT_, cx + a, cy, a, Glass::I_CHEVRON_R);
+    };
+    auto roundArrows = [&](float u, float v, float d, float rad) { // (Joy-Con's four round arrow buttons)
+        const float dv = d * ow / oh;
+        const int in[] = { UP_, DOWN_, LEFT_, RIGHT_ }, icon[] = { Glass::I_CHEVRON_U, Glass::I_CHEVRON_D, Glass::I_CHEVRON_L, Glass::I_CHEVRON_R };
+        const float du[] = { 0, 0, -d, d }, dvv[] = { -dv, dv, 0, 0 };
+        for (int i = 0; i < 4; i++)
+        {
+            button(in[i], u + du[i], v + dvv[i], rad);
+            Glass::DrawIcon(c, icon[i], X(u + du[i]), Y(v + dvv[i]), rad * U * 0.45f, lit(in[i]) ? 0xFF0B1018 : ink);
+        }
+    };
+    auto face = [&](float u, float v, float d, float rad) {
+        // SDL names them by place on Xbox and PlayStation pads (A at the bottom) and by label on
+        // Nintendo's (A on the right).
+        const int bottom = nintendo ? B_ : A_, right = nintendo ? A_ : B_, left = nintendo ? Y_ : X_, top = nintendo ? X_ : Y_;
+        const float dv = d * ow / oh;
+        button(top, u, v - dv, rad); button(bottom, u, v + dv, rad); button(left, u - d, v, rad); button(right, u + d, v, rad);
+    };
+    auto body = [&](auto&& sdf) { Outline(c, (float)ox, (float)oy, (float)(ox + ow), (float)(oy + oh), sdf, bodyFill, bodyLine, sw * 1.3f); };
+    auto padBody = [&](float bodyV, float bodyHX, float bodyHY, float bodyR, float gripAU, float gripAV, float gripBU, float gripBV, float gripR) {
+        body([&](float px, float py) {
+            const float b = Box(px, py, X(0.5f), Y(bodyV), bodyHX * U, bodyHY * U, bodyR * U);
+            const float g1 = Capsule(px, py, X(gripAU), Y(gripAV), X(gripBU), Y(gripBV), gripR * U);
+            const float g2 = Capsule(px, py, X(1 - gripAU), Y(gripAV), X(1 - gripBU), Y(gripBV), gripR * U);
+            return Smin(Smin(b, g1, 0.06f * U), g2, 0.06f * U);
+        });
+    };
+    switch (kind)
+    {
+    case PS: // a rounder pad: both sticks low and level, the + pad and face buttons high, a touch pad between
+        shoulder(LT_, 0.24f, 0.09f, 0.15f, 0.08f, 0.035f);
+        shoulder(RT_, 0.76f, 0.09f, 0.15f, 0.08f, 0.035f);
+        shoulder(LB_, 0.24f, 0.18f, 0.19f, 0.045f, 0.02f);
+        shoulder(RB_, 0.76f, 0.18f, 0.19f, 0.045f, 0.02f);
+        padBody(0.4f, 0.4f, 0.16f, 0.12f, 0.2f, 0.45f, 0.15f, 0.8f, 0.11f);
+        Outline(c, X(0.36f), Y(0.21f), X(0.64f), Y(0.43f), [&](float px, float py) { return Box(px, py, X(0.5f), Y(0.32f), 0.14f * U, 0.1f * oh, 0.025f * U); },
+                0xFF05070A, faint, sw);
+        dpad(0.2f, 0.42f, 0.04f);
+        face(0.8f, 0.42f, 0.064f, 0.032f);
+        stick(LS_, 0.36f, 0.67f, 0.062f);
+        stick(RS_, 0.64f, 0.67f, 0.062f);
+        pill(BACK_, 0.31f, 0.27f, 0.022f, 0.045f);
+        pill(START_, 0.69f, 0.27f, 0.022f, 0.045f);
+        button(GUIDE_, 0.5f, 0.56f, 0.024f);
+        break;
+    case JOYS: // two separate halves, held side by side
+        shoulder(LT_, 0.25f, 0.06f, 0.2f, 0.06f, 0.03f);
+        shoulder(RT_, 0.75f, 0.06f, 0.2f, 0.06f, 0.03f);
+        shoulder(LB_, 0.25f, 0.12f, 0.26f, 0.045f, 0.02f);
+        shoulder(RB_, 0.75f, 0.12f, 0.26f, 0.045f, 0.02f);
+        body([&](float px, float py) {
+            return std::min(Box(px, py, X(0.25f), Y(0.56f), 0.17f * U, 0.42f * oh, 0.13f * U), Box(px, py, X(0.75f), Y(0.56f), 0.17f * U, 0.42f * oh, 0.13f * U));
+        });
+        stick(LS_, 0.25f, 0.36f, 0.075f);
+        roundArrows(0.25f, 0.68f, 0.08f, 0.035f);
+        face(0.75f, 0.36f, 0.08f, 0.035f);
+        stick(RS_, 0.75f, 0.7f, 0.075f);
+        pill(BACK_, 0.36f, 0.2f, 0.045f, 0.022f);
+        pill(START_, 0.64f, 0.2f, 0.045f, 0.045f);
+        button(GUIDE_, 0.68f, 0.88f, 0.026f);
+        break;
+    case JOY: // one Joy-Con turned sideways: its stick on the left, its four buttons on the right
+        shoulder(LB_, 0.28f, 0.14f, 0.18f, 0.035f, 0.015f);
+        shoulder(RB_, 0.72f, 0.14f, 0.18f, 0.035f, 0.015f);
+        body([&](float px, float py) { return Box(px, py, X(0.5f), Y(0.55f), 0.46f * U, 0.36f * oh, 0.16f * U); });
+        stick(LS_, 0.27f, 0.55f, 0.08f);
+        face(0.71f, 0.55f, 0.075f, 0.036f);
+        pill(START_, 0.47f, 0.3f, 0.035f, 0.035f);
+        break;
+    case HAND: // the Switch held as one: the game on its screen, a Joy-Con each side
+    {
+        shoulder(LT_, 0.09f, 0.05f, 0.11f, 0.03f, 0.012f);
+        shoulder(RT_, 0.91f, 0.05f, 0.11f, 0.03f, 0.012f);
+        shoulder(LB_, 0.1f, 0.09f, 0.13f, 0.025f, 0.012f);
+        shoulder(RB_, 0.9f, 0.09f, 0.13f, 0.025f, 0.012f);
+        body([&](float px, float py) { return Box(px, py, X(0.5f), Y(0.55f), 0.49f * U, 0.43f * oh, 0.07f * U); });
+        const int sx = (int)X(0.2f), sy = (int)Y(0.2f), sw2 = (int)(0.6f * ow), sh2 = (int)(0.7f * oh);
+        Whole(c, Frame(c), sx, sy, sw2, sh2, 0.006f * U);
+        Outline(c, (float)sx, (float)sy, (float)(sx + sw2), (float)(sy + sh2),
+                [&](float px, float py) { return Box(px, py, sx + sw2 * 0.5f, sy + sh2 * 0.5f, sw2 * 0.5f, sh2 * 0.5f, 0.006f * U); }, 0, faint, sw);
+        stick(LS_, 0.1f, 0.36f, 0.042f);
+        roundArrows(0.1f, 0.68f, 0.04f, 0.018f);
+        face(0.9f, 0.36f, 0.037f, 0.018f);
+        stick(RS_, 0.9f, 0.7f, 0.042f);
+        pill(BACK_, 0.155f, 0.18f, 0.022f, 0.011f);
+        pill(START_, 0.845f, 0.18f, 0.022f, 0.022f);
+        button(GUIDE_, 0.87f, 0.9f, 0.013f);
+        break;
+    }
+    default: // XB and PRO: the left stick high and the + pad low, the right stick low
+        shoulder(LT_, 0.25f, 0.08f, 0.15f, 0.08f, 0.035f);
+        shoulder(RT_, 0.75f, 0.08f, 0.15f, 0.08f, 0.035f);
+        shoulder(LB_, 0.25f, 0.17f, 0.21f, 0.05f, 0.025f);
+        shoulder(RB_, 0.75f, 0.17f, 0.21f, 0.05f, 0.025f);
+        if (kind == PRO) padBody(0.4f, 0.38f, 0.17f, 0.1f, 0.22f, 0.45f, 0.18f, 0.8f, 0.12f);
+        else padBody(0.41f, 0.37f, 0.17f, 0.15f, 0.23f, 0.47f, 0.2f, 0.8f, 0.13f);
+        stick(LS_, 0.28f, 0.39f, 0.064f);
+        stick(RS_, 0.62f, 0.64f, 0.064f);
+        dpad(0.38f, 0.64f, 0.034f);
+        face(0.72f, 0.39f, 0.06f, 0.032f);
+        pill(BACK_, 0.42f, 0.33f, kind == PRO ? 0.028f : 0.03f, kind == PRO ? 0.014f : 0.03f);
+        pill(START_, 0.58f, 0.33f, 0.03f, 0.03f);
+        button(GUIDE_, 0.5f, kind == PRO ? 0.45f : 0.25f, 0.028f);
+        break;
+    }
+    if (!callouts) return;
+    // The labels: each input that does something, its label in the column on its side, the
+    // labels spread down the column in the order of their inputs, a line from each to its input.
+    const int px = std::max(8, std::min((int)(h * 0.05f), (int)(w * 0.032f))), gapY = px + std::max(3, px / 2);
+    for (int side = 0; side < 2; side++)
+    {
+        std::vector<int> list;
+        for (int i = 0; i < INPUTS; i++)
+            if (ax[i] >= 0 && !labels[i].empty() && ((ax[i] < X(0.5f)) == (side == 0))) list.push_back(i);
+        std::sort(list.begin(), list.end(), [&](int a, int b) { return ay[a] < ay[b]; });
+        if (list.empty()) continue;
+        const int n = (int)list.size();
+        // (Each as level with its input as it can be, kept apart and inside the box.)
+        std::vector<float> ly(n);
+        for (int i = 0; i < n; i++) ly[i] = std::max(ay[list[i]], i ? ly[i - 1] + gapY : (float)(y + px));
+        const float over = ly[n - 1] - (y + h - px * 0.6f);
+        if (over > 0)
+            for (int i = n - 1; i >= 0; i--) ly[i] = std::min(ly[i] - (i == n - 1 ? over : 0), i < n - 1 ? ly[i + 1] - gapY : ly[i]);
+        const float colX = side == 0 ? (float)(padX - px * 0.6f) : (float)(padX + padW + px * 0.6f);
+        for (int i = 0; i < n; i++)
+        {
+            const int in = list[i];
+            const bool on = lit(in);
+            const uint32_t lc = on ? 0xFFFFFFFF : 0x66FFFFFF, tc = on ? 0xFFFFFFFF : 0xFFB9C3CF;
+            const float sx = ax[in] + (side == 0 ? -ar[in] : ar[in]), sy = ay[in];
+            const float kneeX = side == 0 ? std::min(sx - px * 0.5f, (float)ox - px * 0.3f) : std::max(sx + px * 0.5f, (float)(ox + ow) + px * 0.3f);
+            Stroke(c, sx, sy, kneeX, ly[i], on ? sw * 1.4f : sw * 0.8f, lc);
+            Stroke(c, kneeX, ly[i], colX, ly[i], on ? sw * 1.4f : sw * 0.8f, lc);
+            const int tw = W(labels[in], px, on, false);
+            const int tx = side == 0 ? (int)colX - tw - px / 3 : (int)colX + px / 3;
+            T(c, tx, (int)ly[i] + px * 7 / 20, labels[in], px, tc, on, false);
+        }
+    }
+}
+
+// A keyboard's key with its name on it.
+inline void DrawKey(Canvas& c, int x, int y, int w, int h, float k, const std::string& name)
+{
+    const int px = std::max(9, (int)(h * 0.2f));
+    const int kh = (int)(h * 0.46f), kw = std::min(w - 4, std::max(kh, W(name, px, true) + (int)(h * 0.3f)));
+    const int kx = x + (w - kw) / 2, ky = y + (h - kh) / 2;
+    Glass::Glow(c, kx, ky, kw, kh, kh * 0.18f, k);
+    Glass::Round(c, kx, ky + (int)(kh * 0.08f), kw, kh, kh * 0.18f, 0xFFAEB7C3); // (its side, under it)
+    Glass::Round(c, kx, ky, kw, kh - (int)(kh * 0.04f), kh * 0.18f, 0xFFF4F6F9);
+    T(c, kx + (kw - W(name, px, true)) / 2, ky + kh / 2 + px * 7 / 20 - (int)(kh * 0.03f), name, px, 0xFF0B1018, true);
+}
+
 // One choice's picture (Menu::P_*, art: its variant), in (x, y, w, h).
 inline void Picture(Canvas& c, int kind, int art, int x, int y, int w, int h, float k)
 {
     const float r = 7 * k;
-    Glass::Round(c, x, y, w, h, r, 0xFF0E131A);
+    if (kind != Menu::P_PAD && kind != Menu::P_KEY) Glass::Round(c, x, y, w, h, r, 0xFF0E131A); // (the controller and key float on the glass)
     const int pad = (int)(4 * k), ix = x + pad, iy = y + pad, iw = w - 2 * pad, ih = h - 2 * pad, gap = (int)(3 * k);
     const float ds = 256.0f / 192.0f;
     switch (kind)
     {
-    case Menu::P_LAYOUT: // MERGED, HYBRID, SIDE, VERTICAL, TOP, BOTTOM
+    case Menu::P_LAYOUT: // MERGED, HYBRID, SIDE, VERTICAL, TOP, BOTTOM; 6: HYBRID, the bottom large; 7: HYBRID, AUTO
         if (art == 0)
         {
             WideTop(c, x, y, w, h, r);
             const int bw = (int)(w * 0.32f), bh = (int)(bw / ds);
             Inset(c, Bottom(c), x + w - bw - pad, y + h - bh - pad, bw, bh, k);
         }
-        else if (art == 1)
+        else if (art == 1 || art == 6 || art == 7)
         {
-            Screen(c, Top(c), ds, ix, iy, (int)(iw * 0.7f), ih, 2 * k);
-            Screen(c, Bottom(c), ds, ix + (int)(iw * 0.7f) + gap, iy, iw - (int)(iw * 0.7f) - gap, ih, 2 * k);
+            const Src big = art == 6 ? Bottom(c) : Top(c), small = art == 6 ? Top(c) : Bottom(c);
+            Screen(c, big, ds, ix, iy, (int)(iw * 0.7f), ih, 2 * k);
+            Screen(c, small, ds, ix + (int)(iw * 0.7f) + gap, iy, iw - (int)(iw * 0.7f) - gap, ih, 2 * k);
+            if (art == 7) // (AUTO: the two swap round as the game needs)
+            {
+                const float cx = ix + iw * 0.85f, cy = iy + ih * 0.82f, s2 = std::max(3.0f, 6 * k);
+                Glass::Round(c, (int)(cx - 2.2f * s2), (int)(cy - 1.4f * s2), (int)(4.4f * s2), (int)(2.8f * s2), 1.4f * s2, 0xD0101820);
+                Glass::DrawIcon(c, Glass::I_CHEVRON_L, cx - s2, cy, s2, 0xFFFFFFFF);
+                Glass::DrawIcon(c, Glass::I_CHEVRON_R, cx + s2, cy, s2, 0xFFFFFFFF);
+            }
         }
         else if (art == 2)
         {
@@ -458,28 +866,58 @@ inline void Picture(Canvas& c, int kind, int art, int x, int y, int w, int h, fl
             Screen(c, Top(c), ds, x, y, w, h, 0);
         }
         break;
-    case Menu::P_RES: // the 3D resolution's lines (192 to 2160): the picture as blocky as that, close up
+    case Menu::P_RES: // 3D RESOLUTION, close up: 0 the DS's own picture (192 lines, its real pixels);
+                      // 100 the picture as it was drawn when the menu opened (the setting then);
+                      // 200 another setting, which can only be seen once the game runs again
     {
-        static const int lines[] = { 192, 288, 384, 540, 720, 1080, 1440, 2160 };
-        const int l = lines[std::clamp(art, 0, 7)];
-        const Src f = Frame(c);
-        // (A part of the picture as large as 1080 lines' worth of it would show, in blocks of the chosen lines.)
-        const int block = std::max(1, (int)std::lround(h * 12.0f / l));
-        Glass::Mark(c, x, y, x + w, y + h);
-        if (!f.p) { Whole(c, f, x, y, w, h, r); break; }
-        const float sx = f.w * 0.4f, sy = f.h * 0.38f, sw = f.w * 0.2f, sh = sw * h / w;
-        for (int by = 0; by < h; by += block)
-            for (int bx = 0; bx < w; bx += block)
+        // (The same part of the top screen in both: a patch round its middle, in DS pixels.)
+        const float pw = 44, ph2 = pw * h / w, dcx = 128, dcy = 104;
+        if (art == 0)
+        {
+            Image(c, Top(c), dcx - pw / 2, dcy - ph2 / 2, pw, ph2, x, y, w, h, false, r);
+        }
+        else if (art == 100 && !c.sharp.empty() && c.sharp.size() == (size_t)c.w * c.h && c.baseW > 0)
+        {
+            const float u = c.baseW / 256.0f;
+            Image(c, Frame(c), c.baseX + (dcx - pw / 2) * u, c.baseY + (dcy - ph2 / 2) * u, pw * u, ph2 * u, x, y, w, h, true, r);
+        }
+        else
+        {
+            Glass::Round(c, x, y, w, h, r, 0xFF141A22);
+            const int px = std::max(8, (int)(h * 0.16f));
+            const auto lines = Wrap("Shown when you go back to the game", px, w - 2 * pad, 3);
+            int ly = y + h / 2 - (int)lines.size() * px * 13 / 20 + px * 7 / 10;
+            for (const std::string& l : lines) { TCentred(c, x + w / 2, ly, l, px, 0xFFB9C3CF); ly += px * 13 / 10; }
+        }
+        break;
+    }
+    case Menu::P_PAD: DrawPad(c, x + pad, y + pad, w - 2 * pad, h - 2 * pad, k, PadStyleNow(), art, PadLiveNow()); break;
+    case Menu::P_KEY: DrawKey(c, x, y, w, h, k, KeyNow()); break;
+    case Menu::P_TOUCH: // the game with the on-screen controls where they are now
+    {
+        Whole(c, Frame(c), x, y, w, h, r);
+        Glass::Round(c, x, y, w, h, r, 0x40000000);
+        const float sw = std::max(1.0f, 1.2f * k);
+        for (const Menu::TouchShape& t : TouchNow())
+        {
+            const float cx = x + t.x * w, cy = y + t.y * h;
+            if (t.w > 0)
             {
-                const int px = std::clamp((int)(sx + (bx + block * 0.5f) * sw / w), 0, f.w - 1), py = std::clamp((int)(sy + (by + block * 0.5f) * sh / h), 0, f.h - 1);
-                const uint32_t col = f.p[(size_t)py * f.w + px] | 0xFF000000u;
-                for (int yy = by; yy < std::min(h, by + block); yy++)
-                    for (int xx = bx; xx < std::min(w, bx + block); xx++)
-                    {
-                        const int cx2 = x + xx, cy2 = y + yy;
-                        if (cx2 >= 0 && cx2 < c.w && cy2 >= 0 && cy2 < c.h) c.px[(size_t)cy2 * c.w + cx2] = col;
-                    }
+                const float hx = t.w * w / 2, hy = t.h * h / 2;
+                PadSdf::Outline(c, cx - hx, cy - hy, cx + hx, cy + hy, [&](float px, float py) { return PadSdf::Box(px, py, cx, cy, hx, hy, std::min(hx, hy)); },
+                                0x40FFFFFF, 0xE6FFFFFF, sw);
             }
+            else
+            {
+                const float rr = t.r * h;
+                PadSdf::Outline(c, cx - rr, cy - rr, cx + rr, cy + rr, [&](float px, float py) { return PadSdf::Circle(px, py, cx, cy, rr); }, 0x40FFFFFF, 0xE6FFFFFF, sw);
+            }
+            if (!t.label.empty())
+            {
+                const int px = std::max(7, (int)(std::min(t.w > 0 ? t.h * h : t.r * h, h * 0.06f) * 0.9f));
+                T(c, (int)cx - W(t.label, px, true, false) / 2, (int)cy + px * 7 / 20, t.label, px, 0xFFFFFFFF, true, false);
+            }
+        }
         break;
     }
     default: Whole(c, Frame(c), x, y, w, h, r); break;
@@ -516,8 +954,9 @@ inline int Menu::UpdateSettings(const MenuInput& in, int& dir)
         const int d = in.left ? -1 : 1;
         // (Off is the left pill and On the right: left turns it off, right on, each only once.)
         if (it.kind == K_TOGGLE) { if ((d < 0) == (it.choice == 0)) return -1; dir = d; return selected; }
-        if (it.kind == K_PICKER || (it.kind == K_PLAIN && !it.value.empty() && !it.info)) { dir = d; return selected; }
-        if (it.kind == K_LINK && d > 0) return selected;
+        // (Only rows with a choice to step through answer left and right: a key's row, a link or a
+        // plain row waits for A, so pushing a stick sideways while moving down the list sets nothing.)
+        if (it.kind == K_PICKER) { dir = d; return selected; }
     }
     return -1;
 }
@@ -598,7 +1037,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     if (wide)
     {
         listX = px0 + K(30);
-        listW = (int)(W0 * 0.605f);
+        listW = (int)(W0 * listShare);
         listBottom = bottom;
         pvX = listX + listW + K(30);
         pvY = top + K(4);
@@ -721,6 +1160,12 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
 
     // The preview of the chosen row.
     const MenuItem& it = items[selected];
+    PadStyleNow() = padStyle;
+    PadLabelsNow() = padLabels;
+    TouchNow() = touchShapes;
+    PadLiveNow() = padLive;
+    std::copy(padAxes, padAxes + 6, PadAxesNow());
+    KeyNow() = it.value;
     Glass::Round(c, pvX, pvY, pvW, pvH, 18 * k, Row, 0x24FFFFFF, std::max(1.0f, k));
     const int pad = K(20), innerW = pvW - 2 * pad;
     const std::string name = it.kind == K_BACK ? std::string("BACK") : it.label;
@@ -746,22 +1191,59 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     // The choices: a picture of each, the one on now edged and its name in a violet pill.
     // (More than six choices, as 3D RESOLUTION's eight: only the first, the DS's own, beside the one
     // on now.)
-    const bool onlyOn = it.choices.size() > 6 && it.choice >= 0;
+    const bool onlyOn = it.preview == P_RES && it.choice >= 0;
     const int choices = onlyOn ? (it.choice > 0 ? 2 : 1) : (int)it.choices.size();
-    if (it.kind != K_BACK && it.kind != K_LINK && it.preview > P_NONE && choices > 0 && regionBottom - regionTop > K(60))
+    if (it.preview == P_SHORTCUTS && shortcutKeys.size() == 4 && regionBottom - regionTop > K(60))
+    {
+        // (CONTROLS' SHORTCUTS: Fulldex's four, each a tile with its icon, name, key and button.)
+        static const int icons[] = { Glass::I_FAST, Glass::I_SCREENS, Glass::I_SAVE, Glass::I_LOAD };
+        static const char* const names[] = { "FAST FORWARD", "SWAP SCREENS", "SAVE STATE", "LOAD STATE" };
+        const int gap = K(12), tw = (innerW - gap) / 2, th = std::min(K(104), (regionBottom - regionTop - gap) / 2);
+        const int y0 = regionTop + std::max(0, (regionBottom - regionTop - 2 * th - gap) / 2);
+        for (int i = 0; i < 4; i++)
+        {
+            const int tx = pvX + pad + (i % 2) * (tw + gap), ty = y0 + (i / 2) * (th + gap);
+            Glass::Round(c, tx, ty, tw, th, 12 * k, Row, RowEdge, std::max(1.0f, k));
+            Glass::DrawIcon(c, icons[i], tx + K(22), ty + K(22), 10 * k, GlassText);
+            T(c, tx + K(40), ty + K(27), names[i], K(15), GlassText, true);
+            const std::string kb = shortcutKeys[i], pd = i < (int)shortcutPads.size() ? shortcutPads[i] : std::string();
+            int ly = ty + K(54);
+            if (!kb.empty()) { T(c, tx + K(16), ly, "KEY", K(13), GlassHint); T(c, tx + tw - K(14) - W(kb, K(15), true), ly, kb, K(15), GlassText, true); ly += K(26); }
+            if (!pd.empty()) { T(c, tx + K(16), ly, "BUTTON", K(13), GlassHint); T(c, tx + tw - K(14) - W(pd, K(15), true), ly, pd, K(15), GlassText, true); }
+        }
+    }
+    else if (it.preview == P_TOUCH && regionBottom - regionTop > K(60))
+    {
+        // (TOUCH CONTROLS: the game with the on-screen buttons where they are, screen-shaped.)
+        int tx, ty, tw, th;
+        Fit(std::clamp((float)c.w / c.h, 1.3f, 2.3f), pvX + pad, regionTop, innerW, regionBottom - regionTop, tx, ty, tw, th);
+        Glass::Round(c, tx - K(4), ty - K(4), tw + K(8), th + K(8), 12 * k, 0x1A000000, 0x48FFFFFF, std::max(1.0f, 1.2f * k));
+        Picture(c, P_TOUCH, 0, tx, ty, tw, th, k);
+    }
+    else if (it.preview == P_PAD && !padLabels.empty() && it.kind != K_BACK && regionBottom - regionTop > K(60))
+    {
+        // (KEYS AND BUTTONS: the controller as large as the space allows, what each button does
+        // written beside it; the row's own button lit.)
+        const int noteH = padNote.empty() ? 0 : K(26);
+        Picture(c, P_PAD, it.art.empty() ? -1 : it.art[0], pvX + pad / 2, regionTop, pvW - pad, regionBottom - regionTop + K(10) - noteH, k);
+        if (!padNote.empty()) TCentred(c, pvX + pvW / 2, regionBottom + K(6), padNote, K(15), Desc);
+    }
+    else if (it.kind != K_BACK && it.kind != K_LINK && it.preview > P_NONE && choices > 0 && regionBottom - regionTop > K(60))
     {
         // (FPS's film strips are wide: one above the other, each with its name beside it.)
         const bool side = it.preview == P_MOTION;
-        const int cols = side ? 1 : choices <= 3 ? choices : 3, rows = (choices + cols - 1) / cols;
+        const int cols = side ? 1 : choices <= 3 ? choices : choices <= 6 ? 3 : 4, rows = (choices + cols - 1) / cols;
         const int gapX = K(14), gapY = K(12), labelH = K(28), labelGap = K(10), sideW = side ? K(58) : 0;
         const int captionH = side ? K(26) : 0; // (under the strips: what the white edge means)
         const int regionW = innerW, regionH = regionBottom - regionTop - captionH;
         const int cellW = (regionW - (cols - 1) * gapX) / cols, cellH = (regionH - (rows - 1) * gapY) / rows;
-        const float aspect = it.preview == P_SECOND ? 0.95f : side ? 3.2f : std::clamp((float)c.w / c.h, 1.3f, 2.1f);
+        const float aspect = it.preview == P_SECOND ? 0.95f : side ? 3.2f : it.preview == P_PAD && !padLabels.empty() ? 1.25f : it.preview == P_PAD || it.preview == P_KEY ? 1.6f
+                           : std::clamp((float)c.w / c.h, 1.3f, 2.1f);
         int picW = side ? std::min(cellW - sideW - gapX, (int)((cellH - K(8)) * aspect))
                         : std::min((int)(cellW * 0.94f), (int)((cellH - labelH - labelGap) * aspect));
         // (Two side by side, as wide as a third of the panel each at most: the design's size.)
-        if (!side) picW = std::min(picW, (int)(innerW * (cols == 2 ? 0.44f : 0.32f)));
+        if (!side) picW = std::min(picW, (int)(innerW * (cols == 1 ? 0.96f : cols == 2 ? 0.46f : cols == 3 ? 0.32f : 0.24f)));
+        const bool bare = (it.preview == P_PAD || it.preview == P_KEY) && choices == 1; // (one controller: no card round it)
         const int picH = (int)(picW / aspect);
         const bool pictures = picH >= K(26);
         const int rowH = side ? std::max(picH + K(8), labelH) : (pictures ? picH + labelGap : 0) + labelH;
@@ -778,9 +1260,10 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             if (pictures)
             {
                 const int x = side ? sideX + sideW + gapX : cx - picW / 2, py = side ? cy + (rowH - picH) / 2 : cy;
-                if (on && !it.disabled) GlowRound(c, x - K(4), py - K(4), picW + K(8), picH + K(8), 12 * k, k);
-                Glass::Round(c, x - K(4), py - K(4), picW + K(8), picH + K(8), 12 * k, on ? 0x30FFFFFF : 0x1A000000,
-                             on ? ChosenEdge : 0x48FFFFFF, on ? 2.4f * k : std::max(1.0f, 1.2f * k));
+                if (on && !it.disabled && !bare) GlowRound(c, x - K(4), py - K(4), picW + K(8), picH + K(8), 12 * k, k);
+                if (!bare)
+                    Glass::Round(c, x - K(4), py - K(4), picW + K(8), picH + K(8), 12 * k, on ? 0x30FFFFFF : 0x1A000000,
+                                 on ? ChosenEdge : 0x48FFFFFF, on ? 2.4f * k : std::max(1.0f, 1.2f * k));
                 Picture(c, it.preview, ci < (int)it.art.size() ? it.art[ci] : ci, x, py, picW, picH, k);
                 if (!side) cy += picH + labelGap;
             }

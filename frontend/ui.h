@@ -20,6 +20,9 @@ struct Canvas
     // the pictures in a settings page's preview (ui_settings.h) are made from them. Empty when
     // there is nothing to read (the preview then draws plain shapes).
     std::vector<uint32_t> sharp, dsTop, dsBottom;
+    // Where the top screen was shown in `sharp` (output pixels; w 0: not shown), so a part of it can
+    // be set beside the same part of dsTop (3D RESOLUTION's preview: the DS's own against now).
+    int baseX = 0, baseY = 0, baseW = 0, baseH = 0;
 
     void Resize(int nw, int nh)
     {
@@ -198,7 +201,24 @@ struct Menu
     int pageIcon = -1;
     enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK };
     // A preview's pictures (MenuItem::preview), one per choice (its art: which variant).
-    enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER, P_MOTION, P_WIDE, P_RES };
+    enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER, P_MOTION, P_WIDE, P_RES, P_PAD, P_KEY, P_SHORTCUTS, P_TOUCH };
+    // P_PAD and P_KEY (CONTROLS): the controller drawn in its maker's layout (padStyle: Controls::Style;
+    // a choice's art is the input lit, Controls::IN_*), the inputs held now lit too (padLive, a bit
+    // per input), or a keyboard's key.
+    int padStyle = 0;
+    uint32_t padLive = 0;
+    float padAxes[6] = {}; // (the sticks, -1 to 1: left x, y, right x, y; the triggers, 0 to 1: left, right)
+    // (P_PAD: what each input does, Controls::IN_* order, drawn beside it with a line to it, as
+    // KEYS AND BUTTONS; empty: no labels.) And how much of the panel the rows take (wide screens).
+    std::vector<std::string> padLabels;
+    std::string padNote; // (under the labelled controller: how else the menu opens, START + SELECT)
+    float listShare = 0.605f;
+    // P_SHORTCUTS (CONTROLS): Fulldex's four shortcuts, FAST, SWAP, SAVE, LOAD, each with its key
+    // and its controller button ("" where there is none). P_TOUCH: the on-screen controls, each
+    // a circle (r) or a pill (w, h), in parts of the screen.
+    std::vector<std::string> shortcutKeys, shortcutPads;
+    struct TouchShape { float x, y, r, w, h; std::string label; };
+    std::vector<TouchShape> touchShapes;
 
     // CLEAN text (on: Noto Sans, ui_clean_font.h, in title case) or the pixel font (the Retro look).
     // Japanese and Korean menus keep the pixel font, which has their letters.

@@ -1349,6 +1349,14 @@ struct Pads
         return false;
     }
     bool Empty() const { return controllers.empty() && joysticks.empty(); }
+    // The controller used last (a button pressed or a stick pushed on it: ReadPad), else the first:
+    // the one CONTROLS names the buttons of and draws.
+    size_t lastUsed = 0;
+    SDL_GameController* Current() const
+    {
+        if (controllers.empty()) return nullptr;
+        return controllers[lastUsed < controllers.size() ? lastUsed : 0];
+    }
 
     // Opens the device at `index` unless already open; its name, or null.
     const char* Open(int index)
@@ -1421,8 +1429,14 @@ static PadState ReadPad(Pads& pads)
     PadState st;
     // Each button pressed on any of them; each stick as far as on the one pushed furthest.
     auto merge = [](float& to, float v) { if (fabsf(v) > fabsf(to)) to = v; };
-    for (SDL_GameController* pad : pads.controllers)
+    for (size_t padIndex = 0; padIndex < pads.controllers.size(); padIndex++)
     {
+        SDL_GameController* pad = pads.controllers[padIndex];
+        // (The one in the player's hands: any button down or stick pushed well over.)
+        bool used = false;
+        for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX && !used; b++) used = SDL_GameControllerGetButton(pad, (SDL_GameControllerButton)b) != 0;
+        for (int a = 0; a < SDL_CONTROLLER_AXIS_MAX && !used; a++) used = abs(SDL_GameControllerGetAxis(pad, (SDL_GameControllerAxis)a)) > 20000;
+        if (used) pads.lastUsed = padIndex;
         for (int i = 0; i < PAD_COUNT; i++)
         {
             int from = i;
@@ -4743,6 +4757,7 @@ int main(int argc, char** argv)
         M_MATCHUPS, M_TYPE1, M_TYPE2, M_SECOND_SCREEN,
         M_COMPANION, M_CPARTY, M_CBAG, M_CDEX, M_CLOCATION, M_CMAP, M_CENCOUNTERS, M_REFERENCE, M_REFERENCE_KIND, M_REFERENCE_QUERY, M_CPOCKET, M_CDEX_FILTER, M_CBATTLE, M_CGUIDE, M_CGUIDE_REVEAL, M_NUZLOCKE, M_RUN_ENABLED, M_RUN_RESET, M_RUN_RESET_CONFIRM, M_QUICK_ACTIONS, M_OPEN_PC, M_HUB_SAVE, M_HUB_LOAD, M_HUB_CHEATS, M_HUB_FAST, M_HUB_SETTINGS, M_HUB_QUIT,
         M_QUIT_YES, M_RESET_YES, // (QUIT GAME / RESET GAME asked first: PAGE_QUIT_CONFIRM)
+        M_SHORTCUTS, // (CONTROLS: Fulldex's own four shortcuts, opening KEYS AND BUTTONS at them)
         M_EXTRAS, M_EXTRA0=92000, M_EXTRA_END=92006, M_PLAYBACK=93000, M_FAST_SPEED, M_SMART_FAST, M_SLOW_MOTION, M_REWIND_MB, M_REWIND, M_TURBO_A, M_SCREEN_FILTER, M_COMPANION_OVERLAY, M_PARTY_HUD,
         M_STATES, M_SLOT_SAVE, M_SLOT_LOAD, M_SLOT_PREVIOUS, M_UNDO_LOAD,
         M_CPARTY0=80000, M_CDEX0=81000, M_CITEM0=83000, M_RRESULT0=86000, M_SLOT0=90000, M_GUIDE0=91000,
@@ -4803,6 +4818,10 @@ int main(int argc, char** argv)
 #endif
     bool ctlKeyboard = false;
     int capturing = -1;
+    // (A key or button another action has, pressed once while choosing: pressed again, the two
+    // swap; the prompt says so first. A scancode or a Controls::IN_* input; -1 none.)
+    int capturePending = -1;
+    int resAtOpen = -1; // (3D RESOLUTION as the menu opened: the setting the paused picture was drawn at)
     uint32_t captureUntil = 0;
     bool captureReleased = false;
     bool navHoldOff = false; // (the button just given: ignored by the menu until let go)
@@ -4810,27 +4829,132 @@ int main(int argc, char** argv)
     bool saveEdge = false, loadEdge = false; // (SAVE STATE / LOAD STATE: the button just pressed)
     const int ctlRow0 = ctlHasKeyboard ? 1 : 0; // the first action's row
     const int ctlRowReset = ctlRow0 + Controls::COUNT, ctlRowBack = ctlRowReset + 1;
+    // KEYS AND BUTTONS as a settings page: what each row is (an action, 0 and up, or KR_*), as the
+    // headings move the rows down.
+    enum { KR_CHANGING = -10, KR_RESET = -11, KR_BACK = -12, KR_SECTION = -13 };
+    std::vector<int> keyRole;
+    bool ctlResetAsk = false; // (RESET ALL chosen once: the next choice of it resets, anything else not)
+    (void)ctlRowBack;
     bool confirmReset = false; // PAGE_QUIT_CONFIRM asks about RESET GAME (else QUIT GAME)
+#ifndef __SWITCH__
+    // SCREEN LAYOUT's eight choices: MERGED, HYBRID with the large screen chosen automatically, the
+    // top or the bottom (LARGE SCREEN, which only HYBRID uses), SIDE, VERTICAL, TOP and BOTTOM.
+    auto layoutChoice = [&]() {
+        switch (layout.mode)
+        {
+        case LayoutMode::Merged: return 0;
+        case LayoutMode::Hybrid: return focus.mode == 1 ? 2 : focus.mode == 2 ? 3 : 1;
+        case LayoutMode::Side: return 4;
+        case LayoutMode::Vertical: return 5;
+        case LayoutMode::Top: return 6;
+        default: return 7;
+        }
+    };
+    auto setLayoutChoice = [&](int c) {
+        static const LayoutMode modes[] = { LayoutMode::Merged, LayoutMode::Hybrid, LayoutMode::Hybrid, LayoutMode::Hybrid,
+                                            LayoutMode::Side, LayoutMode::Vertical, LayoutMode::Top, LayoutMode::Bottom };
+        c = (c % 8 + 8) % 8;
+        layout.mode = modes[c];
+        if (c >= 1 && c <= 3) focus.mode = c - 1; // (AUTO, TOP, BOTTOM)
+        focus.manualFlip = false;
+    };
+#endif
     auto buildMenu = [&]() {
         menu.columns = menuPage == PAGE_MAIN ? 4 : 0; // (the first page: eight glass tiles)
         menu.style = 0; // (a list; settings pages set 1 below)
         menu.pageIcon = -1;
+        menu.padLabels.clear();
+        menu.padNote.clear();
+        menu.listShare = 0.605f;
         if (menuPage == PAGE_KEYS)
         {
+            // A settings page (ui_settings.h): KEYBOARD / CONTROLLER, the DS's buttons, Fulldex's own
+            // actions, RESET ALL. A row's key or button shows on the right and, large, in the preview.
             menuIds.clear();
-            // (The names on the first controller connected: Xbox's, PlayStation's or Nintendo's.)
-            const int padStyle = Controls::StyleOf(pads.controllers.empty() ? nullptr : pads.controllers[0]);
+            keyRole.clear();
             menu.items.clear();
-            if (ctlHasKeyboard) menu.items.push_back({ "CHANGING", ctlKeyboard ? "KEYBOARD" : "CONTROLLER" });
+            menu.style = 1;
+            menu.pageIcon = Glass::I_PAD;
+            // (The preview wider than other pages': the controller with what each button does beside it.)
+            if (!ctlKeyboard)
+            {
+                menu.listShare = 0.5f;
+                static const char* const shortName[Controls::COUNT] = { "A", "B", "X", "Y", "L", "R", "START", "SELECT", "UP", "DOWN", "LEFT", "RIGHT",
+                                                                        "MENU", "FAST", "SWAP", "SAVE", "LOAD" };
+                menu.padLabels.assign(Controls::IN_COUNT, std::string());
+                for (int a = 0; a < Controls::COUNT; a++)
+                {
+                    const int in = cfg.controls.Pad(a, cfg.byLabel);
+                    if (in < 0 || in >= Controls::IN_COUNT) continue;
+                    std::string& l = menu.padLabels[in];
+                    l += (l.empty() ? "" : " / ") + CleanFont::Title(shortName[a]);
+                }
+                // (How else a controller opens the menu, main.cpp's comboMenu and START BUTTON.)
+                const int startIn = cfg.controls.Pad(Controls::START, cfg.byLabel), selectIn = cfg.controls.Pad(Controls::SELECT, cfg.byLabel);
+                if (cfg.startMenu)
+                {
+                    if (startIn >= 0 && startIn < Controls::IN_COUNT) menu.padLabels[startIn] = "Menu";
+                    menu.padNote = "START opens the menu: Controls > Start Button";
+                }
+                else
+                {
+                    const int style = Controls::StyleOf(pads.Current());
+                    menu.padNote = startIn >= 0 && selectIn >= 0
+                        ? std::string(Controls::InputName(startIn, style)) + " + " + Controls::InputName(selectIn, style) + " together also open the menu"
+                        : std::string();
+                }
+            }
+            // (The names on the first controller connected: Xbox's, PlayStation's or Nintendo's.)
+            const int padStyle = Controls::StyleOf(pads.Current());
+            auto row = [&](int role, const std::string& label, const std::string& value, int kind, int icon, const std::string& desc, const std::string& tip) {
+                menu.items.push_back({ label, value });
+                MenuItem& it = menu.items.back();
+                it.kind = kind;
+                it.icon = icon;
+                it.desc = desc;
+                it.tip = tip;
+                keyRole.push_back(role);
+                menuIds.push_back(M_NOTHING);
+            };
+            row(KR_BACK, "BACK", "", Menu::K_BACK, -1, "", "");
+            if (ctlHasKeyboard)
+            {
+                row(KR_CHANGING, "CHANGING", ctlKeyboard ? "KEYBOARD" : "CONTROLLER", Menu::K_TOGGLE, ctlKeyboard ? Glass::I_GRID : Glass::I_PAD,
+                    "Which to change below: the keyboard's keys or a controller's buttons.",
+                    pads.Current() ? "Showing the " + std::string(Controls::KindName(Controls::KindOf(pads.Current()))) + ": the one used last. Each keeps its own buttons."
+                                   : std::string("Each keeps its own; both work at once."));
+                menu.items.back().choices = { "KEYBOARD", "CONTROLLER" };
+                menu.items.back().choice = ctlKeyboard ? 0 : 1;
+            }
+            const std::string how = ctlKeyboard ? "Choose it, then press the key to use. Esc leaves it as it was."
+                                                : "Choose it, then press the button to use. Wait 5 seconds to leave it as it was.";
             for (int a = 0; a < Controls::COUNT; a++)
             {
+                if (a == 0) row(KR_SECTION, "DS BUTTONS", "", Menu::K_SECTION, Glass::I_PAD, "", "");
+                if (a == Controls::MENU) row(KR_SECTION, "FULLDEX", "", Menu::K_SECTION, Glass::I_SPARKLE, "", "");
                 std::string v = capturing == a ? (ctlKeyboard ? "PRESS A KEY" : "PRESS A BUTTON")
                               : ctlKeyboard ? Controls::KeyName(cfg.controls.Key(a))
                                             : Controls::InputName(cfg.controls.Pad(a, cfg.byLabel), padStyle);
-                menu.items.push_back({ Controls::ActionName(a), v });
+                static const int extra[] = { Glass::I_GEAR, Glass::I_FAST, Glass::I_SCREENS, Glass::I_SAVE, Glass::I_LOAD };
+                const int icon = a >= Controls::MENU ? extra[a - Controls::MENU] : a >= Controls::UP ? Glass::I_PAD : -1;
+                const char* hint = Controls::ActionHint(a);
+                std::string desc = hint ? std::string(hint) : a == Controls::MENU ? std::string(cfg.startMenu ? "OPENS AND CLOSES THIS MENU. A CONTROLLER'S START DOES TOO (CONTROLS > START BUTTON)." : "OPENS AND CLOSES THIS MENU. ON A CONTROLLER, START AND SELECT TOGETHER DO TOO.")
+                                 : "THE DS'S " + std::string(Controls::ActionName(a)) + (a < Controls::UP ? " BUTTON" : "");
+                row(a, Controls::ActionName(a), v, Menu::K_PLAIN, icon, desc, how);
+                // (The preview: the controller with this action's button lit, or the key.)
+                MenuItem& it = menu.items.back();
+                it.preview = ctlKeyboard ? Menu::P_KEY : Menu::P_PAD;
+                it.choices = { v };
+                it.choice = 0;
+                it.art = { ctlKeyboard || capturing == a ? -1 : cfg.controls.Pad(a, cfg.byLabel) };
             }
-            menu.items.push_back({ "RESET ALL", "" });
-            menu.items.push_back({ "BACK", "" });
+            if (ctlResetAsk)
+                row(KR_RESET, "RESET ALL", "PRESS AGAIN", Menu::K_PLAIN, Glass::I_REWIND,
+                    "Choose it again to put every key and button back as Fulldex first had them. Anything else leaves them as they are.",
+                    "Both the keyboard's and the controllers'.");
+            else
+                row(KR_RESET, "RESET ALL", "", Menu::K_PLAIN, Glass::I_REWIND, "Put every key and button back as Fulldex first had them. Asks first.",
+                    "Both the keyboard's and the controllers'.");
             return;
         }
 #ifndef __SWITCH__
@@ -4900,6 +5024,7 @@ int main(int argc, char** argv)
             add(M_SAVESTATE, "QUICK SAVE", "");
             add(M_STATES, "STATE SLOTS", "");
             if (!opt.noSave) add(M_BACKUPS, "SAVE BACKUPS", "");
+            add(M_EXTRA0 + 2, "STATE THUMBNAILS", onOff(cfg.statePreviews)); // (from OPTIONAL FEATURES)
             add(M_BACK, "BACK", "");
         }
         else if (menuPage == PAGE_HUB_LOAD)
@@ -4907,6 +5032,7 @@ int main(int argc, char** argv)
             add(M_LOADSTATE, "QUICK LOAD", "");
             add(M_STATES, "STATE SLOTS", "");
             if (!opt.noSave) add(M_BACKUPS, "SAVE BACKUPS", "");
+            add(M_EXTRA0 + 2, "STATE THUMBNAILS", onOff(cfg.statePreviews));
             add(M_BACK, "BACK", "");
         }
         else if (menuPage == PAGE_HUB_CHEATS)
@@ -4922,9 +5048,9 @@ int main(int argc, char** argv)
             add(M_PLAYBACK, "PLAYBACK", fastLock ? "FAST FORWARD ON" : "", true); // (fast forward, speed, slow motion, turbo, rewind)
             add(M_SOUND, "SOUND", "");
             add(M_CONTROLMENU, "CONTROLS", "");
-            add(M_EXTRAS, "OPTIONAL FEATURES", "");
-            if(cfg.quickActions&&pokeActions.Supported()&&!opt.lockstep)add(M_QUICK_ACTIONS,"QUICK ACTIONS","");
-            add(M_MATCHUPS, "TYPE MATCHUPS", "");
+            // (OPTIONAL FEATURES is gone from here: LIVE UPDATES, QUICK ACTIONS and TYPE MATCHUPS are in
+            // COMPANION, STATE THUMBNAILS in SAVE and LOAD; the rest work in the game list only and are
+            // in its SETTINGS.)
             add(M_BACK, "BACK", "");
         }
         else if (menuPage == PAGE_HUB_QUIT)
@@ -4945,9 +5071,10 @@ int main(int argc, char** argv)
             section("OPTIONAL FEATURES", Glass::I_SPARKLE);
             static const int icons[] = { Glass::I_POKEBALL, Glass::I_FAST, Glass::I_SAVE, Glass::I_LOAD, Glass::I_SCREENS, Glass::I_SCREENS };
             size_t count;const auto* options=OptionalFeatures::Options(count);
-            for(size_t i=0;i<count;i++)
+            // (From 1: LIVE COMPANION, the first, is in COMPANION as LIVE UPDATES.)
+            for(size_t i=1;i<count;i++)
                 toggle(M_EXTRA0+(int)i,options[i].name,icons[std::min<size_t>(i,5)],Menu::P_NONE,cfg.*options[i].value,options[i].help,
-                       "The HUD, companion window and filters are in Display; speed, rewind and turbo in Playback.");
+                       "Live updates are in Companion; the HUD, companion window and filters in Display; speed, rewind and turbo in Playback.");
         }
         else if (menuPage == PAGE_DISPLAY)
         {
@@ -4969,12 +5096,12 @@ int main(int argc, char** argv)
                    "Narrower than your screen: bars at the sides.");
 #ifndef __SWITCH__
             // (The Switch always shows the one wide screen these layouts are built around.)
-            picker(M_LAYOUT, "SCREEN LAYOUT", Glass::I_LAYOUT, Menu::P_LAYOUT, { "MERGED", "HYBRID", "SIDE", "VERTICAL", "TOP", "BOTTOM" }, (int)layout.mode,
-                   "How the DS's two screens are arranged.",
-                   "Merged is Fulldex's widescreen view: one screen with the other's parts drawn in.");
-            picker(M_LARGE, "LARGE SCREEN", Glass::I_EXPAND, Menu::P_LARGE, { "AUTO", "TOP", "BOTTOM" }, focus.mode,
-                   "Which screen is the large one, where the layout has a large and a small screen.",
-                   "Auto brings the touch screen forward while you use it.");
+            // One setting: LARGE SCREEN only ever changed HYBRID (layout.h, Layout::swapped), so its
+            // three choices are HYBRID's here. (layoutChoice: LayoutMode and focus.mode as one.)
+            picker(M_LAYOUT, "SCREEN LAYOUT", Glass::I_LAYOUT, Menu::P_LAYOUT,
+                   { "WIDESCREEN", "BIG + SMALL (AUTO)", "BIG TOP", "BIG BOTTOM", "SIDE BY SIDE", "STACKED", "TOP ONLY", "BOTTOM ONLY" }, layoutChoice(),
+                   "How the DS's two screens are shown. Widescreen is Fulldex's own wide view.",
+                   "Big + Small (Auto) brings the touch screen forward while you use it.", { 0, 7, 1, 6, 2, 3, 4, 5 });
 #if !defined(SSR_PHONE)
             // (Always full screen on the Switch and phones. Borderless: a window the size of the
             // screen, so other windows come up at once.)
@@ -5038,14 +5165,21 @@ int main(int argc, char** argv)
             else if (cfg.wideMap != bw2map.on) menu.items.back().tip = "Changed: applies the next time the game starts.";
 #ifdef __SWITCH__
             picker(M_WIDELINES, "WORLD DETAIL", Glass::I_GRID, Menu::P_RES, { "192", "288", "384", "540", "720", "1080", "1440", "2160" }, detailIndex(),
-                   "How many lines the 3D world is drawn with.", "More lines look sharper but need more power.");
+                   "How many lines the 3D world is drawn with. 192 is the DS's own.", "More lines look sharper but need more power.");
+            menu.items.back().art.clear();
+            for (int i = 0; i < detailCount; i++) menu.items.back().art.push_back(i == 0 ? 0 : i == resAtOpen ? 100 : 200);
             toggle(M_AUTODETAIL, "LOWER DETAIL WHEN BUSY", Glass::I_EXPAND, Menu::P_NONE, cfg.autoDetail,
                    "Draw fewer lines for a moment when a scene is too busy to keep up.", "So the game never slows down in big moves.");
 #else
             // (The same setting, named as on a PC's other games: the lines the 3D world is drawn
             // with, as a screen resolution.)
             picker(M_WIDELINES, "3D RESOLUTION", Glass::I_GRID, Menu::P_RES, { "192P (DS)", "288P", "384P", "540P", "720P", "1080P", "1440P (2K)", "2160P (4K)" }, detailIndex(),
-                   "How sharp the 3D world is drawn. 192P is the DS's own.", "Higher looks sharper but needs a faster graphics card.");
+                   "How sharp the 3D world is drawn. 192P is the DS's own; characters, text and menus stay as the DS drew them.",
+                   "Higher looks sharper but needs a faster graphics card.");
+            // (Its preview: the DS's own picture beside the one drawn when the menu opened; another
+            // setting's can only be seen once the game runs again.)
+            menu.items.back().art.clear();
+            for (int i = 0; i < detailCount; i++) menu.items.back().art.push_back(i == 0 ? 0 : i == resAtOpen ? 100 : 200);
             toggle(M_AUTODETAIL, "LOWER RES WHEN BUSY", Glass::I_EXPAND, Menu::P_NONE, cfg.autoDetail,
                    "Drop the resolution for a moment when a scene is too busy to keep up.", "So the game never slows down in big moves.");
 #endif
@@ -5155,6 +5289,8 @@ int main(int argc, char** argv)
             if (menuPage == PAGE_COMPANION)
             {
                 info(companionSnapshot.message);
+                // (LIVE COMPANION, from OPTIONAL FEATURES: whether these pages keep up as you play.)
+                add(M_EXTRA0 + 0, "LIVE UPDATES", onOff(cfg.liveCompanion));
                 if (companionSnapshot.ready)
                 {
                     add(M_CPARTY,"PARTY",std::to_string(companionSnapshot.party.size()),true);
@@ -5166,6 +5302,11 @@ int main(int argc, char** argv)
                     add(M_NUZLOCKE,"NUZLOCKE TRACKER",onOff(nuzlocke.Enabled()));
                     if(!companionGuide.empty())add(M_CGUIDE,"GUIDE","");
                 }
+                // (From SETTINGS: TYPE MATCHUPS. From OPTIONAL FEATURES: QUICK ACTION SHORTCUTS, here
+                // QUICK ACTIONS, with its one action under it while it is on.)
+                add(M_MATCHUPS,"TYPE MATCHUPS","");
+                add(M_EXTRA0 + 1, "QUICK ACTIONS", onOff(cfg.quickActions));
+                if(cfg.quickActions&&pokeActions.Supported()&&!opt.lockstep)add(M_OPEN_PC,"OPEN PC","");
                 info("Based on PokeDaisy by Lidor Itzhari - https://github.com/lidor30/pokedaisy");
             }
             else if(menuPage==PAGE_REFERENCE)
@@ -5533,19 +5674,67 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_CONTROLS)
         {
+            settingsPage(Glass::I_PAD);
+            section("CONTROLS", Glass::I_PAD);
             add(M_CONTROLS, "KEYS AND BUTTONS", "");
+            menu.items.back().kind = Menu::K_LINK;
+            menu.items.back().icon = Glass::I_PAD;
+            menu.items.back().desc = "Change which key or button does what: the DS's buttons, and Fulldex's own (pause menu, fast forward, swap screens, save and load state).";
+            menu.items.back().tip = "The keyboard and controllers each keep their own.";
+            // Fulldex's own four shortcuts at a glance, each with its key and its controller button.
+            add(M_SHORTCUTS, "SHORTCUTS", "");
+            menu.items.back().kind = Menu::K_LINK;
+            menu.items.back().icon = Glass::I_FAST;
+            menu.items.back().preview = Menu::P_SHORTCUTS;
+            menu.items.back().desc = "Fulldex's own: fast forward, swap screens, save state and load state.";
+            menu.items.back().tip = "Choose it to change them. Each can also be left without a key or button.";
+            {
+                const int acts[] = { Controls::FAST, Controls::SWAP, Controls::SAVE, Controls::LOAD };
+                menu.shortcutKeys.clear();
+                menu.shortcutPads.clear();
+                for (int a : acts)
+                {
+                    menu.shortcutKeys.push_back(ctlHasKeyboard ? CleanFont::Title(Controls::KeyName(cfg.controls.Key(a))) : std::string());
+                    const int in = cfg.controls.Pad(a, cfg.byLabel);
+                    menu.shortcutPads.push_back(in < 0 ? std::string("-") : CleanFont::Title(Controls::InputName(in, Controls::StyleOf(pads.Current()))));
+                }
+            }
 #ifdef SSR_PHONE
-            add(M_TOUCHLAYOUT, "TOUCH CONTROLS", "EDIT LAYOUT");
+            add(M_TOUCHLAYOUT, "TOUCH CONTROLS", "");
+            menu.items.back().kind = Menu::K_LINK;
+            menu.items.back().icon = Glass::I_LAYOUT;
+            menu.items.back().preview = Menu::P_TOUCH;
+            menu.items.back().desc = "Move and resize the on-screen buttons.";
+            menu.items.back().tip = "Drag them where your thumbs fall, then save.";
+            // (The preview: the on-screen buttons where they are now, in parts of the screen.)
+            menu.touchShapes.clear();
+            if (touchPad.w > 0 && touchPad.h > 0)
+            {
+                const float tw = (float)touchPad.w, th = (float)touchPad.h;
+                menu.touchShapes.push_back({ touchPad.dpadX / tw, touchPad.dpadY / th, touchPad.dpadR / th, 0, 0, "" });
+                for (const TouchPad::Button& b : touchPad.buttons)
+                    menu.touchShapes.push_back({ b.x / tw, b.y / th, b.r / th, b.w / tw, b.h / th, b.label ? b.label : "" });
+            }
 #endif
-            add(M_STARTBTN, "START BUTTON", cfg.startMenu ? "PAUSE MENU" : "DS START");
+            toggle(M_STARTBTN, "START BUTTON", Glass::I_PLAY, Menu::P_NONE, cfg.startMenu,
+                   "What the controller's Start button does: the DS's Start, or open this menu.", "The pause menu key or button opens it either way.");
+            menu.items.back().choices = { "DS START", "PAUSE MENU" };
+            menu.items.back().value = cfg.startMenu ? "PAUSE MENU" : "DS START";
 #ifndef __SWITCH__
             // (Nothing to choose on the Switch: its labels are the DS's positions.)
-            add(M_BUTTONS, "BUTTONS", cfg.byLabel ? "BY LABEL" : "BY POSITION");
+            toggle(M_BUTTONS, "BUTTONS", Glass::I_PAD, Menu::P_NONE, cfg.byLabel,
+                   "By position: the DS's A is the button on the right, where the DS has it. By label: the button marked A.",
+                   "Matters on Xbox-style pads, where A is at the bottom, not on the right.");
+            menu.items.back().choices = { "BY POSITION", "BY LABEL" };
+            menu.items.back().value = cfg.byLabel ? "BY LABEL" : "BY POSITION";
+            // (The preview: where the DS's A goes, the controller's right button or the one marked A.)
+            menu.items.back().preview = Menu::P_PAD;
+            menu.items.back().art = { Controls::DefaultPad(Controls::A, false), Controls::DefaultPad(Controls::A, true) };
 #endif
 #if !defined(__SWITCH__) && !defined(SSR_PHONE)
-            add(M_PADTOUCH, "STICK TOUCH CURSOR", onOff(cfg.padTouch)); // (the Switch and phones have touch screens)
+            toggle(M_PADTOUCH, "STICK TOUCH CURSOR", Glass::I_GAUGE, Menu::P_NONE, cfg.padTouch,
+                   "Use a controller's stick as a cursor on the touch screen.", "Handy when playing with a controller away from the mouse."); // (the Switch and phones have touch screens)
 #endif
-            add(M_BACK, "BACK", "");
         }
     };
     // To another page of the pause menu, on the row of item `select` (its first row: -1).
@@ -5558,7 +5747,7 @@ int main(int argc, char** argv)
         case M_STATES: case M_BACKUPS: return hubPage == PAGE_HUB_LOAD ? PAGE_HUB_LOAD : PAGE_HUB_SAVE;
         case M_CHEATS: case M_BOTHVER: return PAGE_HUB_CHEATS;
         case M_DISPLAY: case M_GRAPHICS: case M_PLAYBACK: case M_FAST: case M_SOUND: case M_CONTROLMENU: case M_EXTRAS:
-        case M_QUICK_ACTIONS: case M_MATCHUPS: return PAGE_HUB_SETTINGS;
+        case M_QUICK_ACTIONS: return PAGE_HUB_SETTINGS;
         case M_QUIT: case M_RESET: return PAGE_HUB_QUIT;
         }
         return -1;
@@ -5618,6 +5807,22 @@ int main(int argc, char** argv)
     auto say = [&](const std::string& msg) {
         toast = msg;
         toastUntil = frame + 120;
+    };
+    // CONTROLS choosing a key or button: done (or left as it was), or the action's cleared
+    // (CLEAR BINDING: only Fulldex's own shortcuts, Controls::Clearable).
+    auto captureEnd = [&]() {
+        capturing = -1;
+        capturePending = -1;
+        navHoldOff = true;
+        buildMenu();
+    };
+    auto captureClear = [&]() {
+        if (capturing < 0 || !Controls::Bindings::Clearable(capturing)) return;
+        if (ctlKeyboard) cfg.controls.ClearKey(capturing);
+        else cfg.controls.ClearPad(capturing);
+        cfg.Save(opt.config);
+        say(std::string(Controls::ActionName(capturing)) + (ctlKeyboard ? " HAS NO KEY NOW" : " HAS NO BUTTON NOW"));
+        captureEnd();
     };
     // The quick slot (SAVE STATE / LOAD STATE in the pause menu, and their keys and buttons).
     auto saveAt = [&](const std::string& path) {
@@ -6363,6 +6568,8 @@ int main(int argc, char** argv)
             // closes the menu.
             auto menuTap = [&](float fx, float fy) {
                 if(menuPage==PAGE_CMAP){nav.back=true;return;}
+                // (CONTROLS choosing a key or button: only the prompt's CANCEL and CLEAR BINDING.)
+                if(menuPage==PAGE_KEYS&&capturing>=0){const int b=SettingsArt::PromptHit((int)fx,(int)fy);if(b==0)captureEnd();else if(b==1)captureClear();return;}
                 menu.Tap((int)fx,(int)fy,nav,sliderTap);
             };
             while (SDL_PollEvent(&ev))
@@ -6514,14 +6721,27 @@ int main(int argc, char** argv)
                     }
                     else if (menu.open && capturing >= 0)
                     {
-                        // CONTROLS waiting for a key: ESC leaves it as it was.
-                        if (k != SDLK_ESCAPE && k != SDLK_AC_BACK && ctlKeyboard)
+                        // CONTROLS waiting for a key: ESC leaves it as it was; BACKSPACE or DELETE
+                        // clear one of Fulldex's own shortcuts (CLEAR BINDING).
+                        if ((k == SDLK_BACKSPACE || k == SDLK_DELETE) && Controls::Bindings::Clearable(capturing)) captureClear();
+                        else if (k != SDLK_ESCAPE && k != SDLK_AC_BACK && ctlKeyboard)
                         {
-                            cfg.controls.SetKey(capturing, sc);
-                            cfg.Save(opt.config);
+                            // (A key another action has: the prompt says so, and a second press swaps the two.)
+                            const int other = cfg.controls.ActionOfKey(sc);
+                            if (other >= 0 && other != capturing && capturePending != sc)
+                            {
+                                capturePending = sc;
+                                captureUntil = SDL_GetTicks() + 5000;
+                            }
+                            else
+                            {
+                                cfg.controls.SetKey(capturing, sc);
+                                if (other >= 0 && other != capturing) say(std::string(Controls::ActionName(capturing)) + " AND " + Controls::ActionName(other) + " SWAPPED KEYS");
+                                cfg.Save(opt.config);
+                                captureEnd();
+                            }
                         }
-                        capturing = -1;
-                        buildMenu();
+                        else captureEnd();
                     }
                     else if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || act == Controls::MENU)
                     {
@@ -6821,20 +7041,29 @@ int main(int argc, char** argv)
             else if (!ctlKeyboard)
             {
                 const int in = NewPadInput(physPad, prevPhysPad);
+                // (A button another action has: the prompt says so first; pressed again, the two swap.)
+                int other = -1;
                 if (in >= 0)
+                    for (int b = 0; b < Controls::COUNT; b++)
+                        if (b != capturing && cfg.controls.Pad(b, cfg.byLabel) == in) other = b;
+                if (in >= 0 && other >= 0 && capturePending != in)
+                {
+                    capturePending = in;
+                    captureReleased = false;
+                    captureUntil = SDL_GetTicks() + 5000;
+                }
+                else if (in >= 0)
                 {
                     cfg.controls.SetPad(capturing, in, cfg.byLabel);
+                    capturePending = -1;
+                    if (other >= 0) say(std::string(Controls::ActionName(capturing)) + " AND " + Controls::ActionName(other) + " SWAPPED BUTTONS");
                     cfg.Save(opt.config);
                     capturing = -1;
                     navHoldOff = true;
                     buildMenu();
                 }
             }
-            if (capturing >= 0 && SDL_GetTicks() > captureUntil)
-            {
-                capturing = -1;
-                buildMenu();
-            }
+            if (capturing >= 0 && SDL_GetTicks() > captureUntil) captureEnd();
             toggleMenu = false;
             nav = MenuInput();
             ps = PadState();
@@ -6931,23 +7160,28 @@ int main(int argc, char** argv)
         {
             // KEYS AND BUTTONS: B goes back to CONTROLS.
             int dir = 0;
-            const int hit = nav.back ? ctlRowBack : menu.Update(nav, dir);
-            if (hit == 0 && ctlHasKeyboard) ctlKeyboard = !ctlKeyboard;
-            else if (hit >= ctlRow0 && hit < ctlRowReset)
+            const int hit = nav.back ? -100 : menu.Update(nav, dir);
+            const int role = hit == -100 ? KR_BACK : hit >= 0 && hit < (int)keyRole.size() ? keyRole[hit] : -999;
+            const bool wasAsking = ctlResetAsk;
+            if (hit >= 0 || hit == -100) ctlResetAsk = false; // (asked once: anything else chosen cancels it)
+            if (role == KR_CHANGING) ctlKeyboard = !ctlKeyboard;
+            else if (role >= 0 && role < Controls::COUNT)
             {
                 // (Left or right on an action, as a tap on it does: the same as choosing it.)
-                capturing = hit - ctlRow0;
+                capturing = role;
+                capturePending = -1;
                 captureUntil = SDL_GetTicks() + 5000;
                 captureReleased = false;
             }
-            else if (hit == ctlRowReset)
+            else if (role == KR_RESET && !wasAsking) ctlResetAsk = true;
+            else if (role == KR_RESET)
             {
                 cfg.controls.Reset();
                 cfg.Save(opt.config);
                 say("CONTROLS RESET");
             }
-            else if (hit == ctlRowBack) goPage(PAGE_CONTROLS, M_CONTROLS);
-            if (hit >= 0 && menuPage == PAGE_KEYS) buildMenu();
+            else if (role == KR_BACK) goPage(PAGE_CONTROLS, M_CONTROLS);
+            if ((hit >= 0 || hit == -100) && menuPage == PAGE_KEYS) buildMenu();
         }
         else if (menu.open)
         {
@@ -7215,6 +7449,7 @@ int main(int argc, char** argv)
                     hubPage=-1;goPage(PAGE_MAIN,tileId);hit=-1;break;
                 }
                 if(menuPage==PAGE_QUIT_CONFIRM){goPage(PAGE_HUB_QUIT,confirmReset?M_RESET:M_QUIT);hit=-1;break;}
+                if(menuPage==PAGE_MATCHUPS){goPage(PAGE_COMPANION,M_MATCHUPS);hit=-1;break;}
                 if(menuPage==PAGE_CMAP){goPage(PAGE_CLOCATION,M_CMAP);hit=-1;break;}
                 if(menuPage==PAGE_CENCOUNTERS){goPage(PAGE_CLOCATION,M_CENCOUNTERS);hit=-1;break;}
                 if(menuPage==PAGE_RSEARCH){SDL_StopTextInput();goPage(PAGE_REFERENCE,M_REFERENCE_QUERY);hit=-1;break;}
@@ -7278,7 +7513,7 @@ int main(int argc, char** argv)
                 break;
 #ifndef __SWITCH__
             case M_LAYOUT:
-                layout.mode = (LayoutMode)(((int)layout.mode + (dir < 0 ? 5 : 1)) % 6);
+                setLayoutChoice(layoutChoice() + (dir < 0 ? -1 : 1));
                 break;
             case M_LARGE:
                 focus.mode = (focus.mode + (dir < 0 ? 2 : 1)) % 3;
@@ -7389,12 +7624,21 @@ int main(int argc, char** argv)
                 UiLang::Set(cfg.listLang);
                 break;
             }
+            case M_SHORTCUTS:
+                capturing = -1;
+                ctlKeyboard = ctlHasKeyboard && pads.Empty() && !touchPadUsed;
+                goPage(PAGE_KEYS, -1);
+                for (size_t r = 0; r < keyRole.size(); r++)
+                    if (keyRole[r] == Controls::FAST) { menu.selected = (int)r; break; } // (on FAST FORWARD)
+                hit = -1;
+                break;
             case M_CONTROLS:
                 capturing = -1;
                 // (The keyboard's keys shown first when no controller is connected.)
                 ctlKeyboard = ctlHasKeyboard && pads.Empty() && !touchPadUsed;
                 goPage(PAGE_KEYS, -1);
-                menu.selected = ctlRow0;
+                for (size_t r = 0; r < keyRole.size(); r++)
+                    if (keyRole[r] == 0) { menu.selected = (int)r; break; } // (on A)
                 hit = -1; // (the page is built: not again below)
                 break;
             case M_STARTBTN:
@@ -8423,6 +8667,21 @@ int main(int argc, char** argv)
         if (!merged && focus.mode == 0 && frame < cursorShownUntil) layout.swapped = true;
         effectiveLayout.swapped = layout.swapped;
         LayoutRects(effectiveLayout, outW, outH, rects);
+        // (Where the top screen is, until the menu opens: 3D RESOLUTION's preview sets a part of
+        // the picture beside the same part of the DS's own.)
+        if (!menu.open)
+        {
+            if (merged)
+            {
+                const MergedView v = MergedMakeView(outW, outH);
+                canvas.baseX = (int)v.originX; canvas.baseY = (int)v.originY;
+                canvas.baseW = (int)(256 * v.unit); canvas.baseH = (int)(192 * v.unit);
+            }
+            else
+            {
+                canvas.baseX = rects[0].x; canvas.baseY = rects[0].y; canvas.baseW = rects[0].w; canvas.baseH = rects[0].h;
+            }
+        }
         if (!paused)
         {
             // A new layout has to be asked for a few frames in a row before it replaces the
@@ -8880,7 +9139,7 @@ int main(int argc, char** argv)
             }
             const int tsc = std::max(1, outH / 360);
             const std::string label = std::string(pads.Empty() ? Controls::KeyName(cfg.controls.Key(Controls::Y))
-                : Controls::InputName(cfg.controls.Pad(Controls::Y, cfg.byLabel), Controls::StyleOf(pads.controllers.empty() ? nullptr : pads.controllers[0])))
+                : Controls::InputName(cfg.controls.Pad(Controls::Y, cfg.byLabel), Controls::StyleOf(pads.Current())))
                 + ": RUN " + (shoesOn ? "ON" : "OFF");
             const int tw = Canvas::TextWidth(label, tsc);
             canvas.Fill(ox + (ow - tw) / 2 - 3 * tsc, oy + oh + 2 * tsc, tw + 6 * tsc, 11 * tsc, 0xC0000000);
@@ -8895,7 +9154,7 @@ int main(int argc, char** argv)
             const Element* body = nullptr;
             for (const Element& e : scene.items)
                 if (e.screen == 1 && e.sy > 0 && e.sw >= 120) { body = &e; break; }
-            const int style = Controls::StyleOf(pads.controllers.empty() ? nullptr : pads.controllers[0]);
+            const int style = Controls::StyleOf(pads.Current());
             auto btn = [&](int a) {
                 return std::string(Controls::InputName(cfg.controls.Pad(a, cfg.byLabel), style));
             };
@@ -8957,6 +9216,7 @@ int main(int argc, char** argv)
         // The DS's two screens as the menu opens (the game is paused): the settings pages' previews.
         if (menu.open && canvas.dsTop.empty() && nds)
         {
+            resAtOpen = detailIndex();
             const int topIndex = singleView() ? 1 : 0;
             canvas.dsTop.assign(nds->GPU.Framebuffer[nds->GPU.FrontBuffer][topIndex].get(), nds->GPU.Framebuffer[nds->GPU.FrontBuffer][topIndex].get() + 256 * 192);
             canvas.dsBottom.assign(nds->GPU.Framebuffer[nds->GPU.FrontBuffer][1 - topIndex].get(), nds->GPU.Framebuffer[nds->GPU.FrontBuffer][1 - topIndex].get() + 256 * 192);
@@ -8974,7 +9234,7 @@ int main(int argc, char** argv)
             auto btn = [&](int a) {
                 return kbOnly ? std::string(a == Controls::A ? "ENTER" : "ESC")
                               : std::string(Controls::InputName(cfg.controls.Pad(a, cfg.byLabel),
-                                    Controls::StyleOf(pads.controllers.empty() ? nullptr : pads.controllers[0])));
+                                    Controls::StyleOf(pads.Current())));
             };
             std::string hint = touchPadUsed && touchPad.visible ? "TAP: CHOOSE   OUTSIDE: BACK"
                                : btn(Controls::A) + ": SELECT   " + btn(Controls::B) + ": BACK";
@@ -8985,13 +9245,43 @@ int main(int argc, char** argv)
             {
                 if (!(touchPadUsed && touchPad.visible)) hint = btn(Controls::A) + ": CHANGE   " + btn(Controls::B) + ": BACK";
                 if (capturing >= 0) hint = ctlKeyboard ? "ESC: LEAVE IT AS IT WAS" : "OR WAIT 5 SECONDS: AS IT WAS";
-                else if (menu.selected == 0 && ctlHasKeyboard) hint = "CHANGE: KEYBOARD OR CONTROLLER";
-                else if (const char* h = Controls::ActionHint(menu.selected - ctlRow0)) hint = h;
+                const int keySel = menu.selected >= 0 && menu.selected < (int)keyRole.size() ? keyRole[menu.selected] : -999;
+                (void)keySel;
 #ifdef __SWITCH__
-                else if (menu.selected == ctlRow0 + Controls::MENU && cfg.controls.pad[Controls::MENU] < 0)
+                if (capturing < 0 && keySel == Controls::MENU && cfg.controls.pad[Controls::MENU] < 0)
                     hint = cfg.startMenu ? "+ OPENS IT (START BUTTON)" : "+ AND - OPEN IT";
 #endif
+                // (The preview's controller: the one connected, its buttons held now lit.)
+                menu.padStyle = Controls::KindOf(pads.Current());
+                menu.padLive = 0;
+                for (int b = 0; b < PAD_COUNT && b < 15; b++) if (physPad.btn[b]) menu.padLive |= 1u << b;
+                if (physPad.lt > 0.5f) menu.padLive |= 1u << Controls::IN_LT;
+                if (physPad.rt > 0.5f) menu.padLive |= 1u << Controls::IN_RT;
+                // (And where the sticks are and how far the triggers are pulled: the drawing's follow.)
+                const float axes[6] = { physPad.lx, physPad.ly, physPad.rx, physPad.ry, physPad.lt, physPad.rt };
+                std::copy(axes, axes + 6, menu.padAxes);
                 menu.Draw(canvas, pageTitle[PAGE_KEYS], hint);
+                if (capturing >= 0)
+                {
+                    // The prompt over the page: what is being chosen and what it is now, a warning
+                    // when the one pressed is another action's, CANCEL and CLEAR BINDING.
+                    const std::string now = ctlKeyboard ? Controls::KeyName(cfg.controls.Key(capturing))
+                                                        : Controls::InputName(cfg.controls.Pad(capturing, cfg.byLabel), Controls::StyleOf(pads.Current()));
+                    std::string warn;
+                    if (capturePending >= 0)
+                    {
+                        const int other = ctlKeyboard ? cfg.controls.ActionOfKey(capturePending) : cfg.controls.ActionOfPad(capturePending, cfg.byLabel);
+                        const std::string what = ctlKeyboard ? Controls::KeyName(capturePending) : Controls::InputName(capturePending, Controls::StyleOf(pads.Current()));
+                        if (other >= 0)
+                            warn = what + " already does " + CleanFont::Title(Controls::ActionName(other)) + ". Press it again to swap the two, or press another.";
+                    }
+                    const bool clearable = Controls::Bindings::Clearable(capturing);
+                    SettingsArt::Prompt(canvas, ctlKeyboard ? Glass::I_GRID : Glass::I_PAD, ctlKeyboard ? "PRESS A KEY" : "PRESS A BUTTON",
+                                        CleanFont::Title(Controls::ActionName(capturing)) + "  \xC2\xB7  now " + now, warn,
+                                        ctlKeyboard ? (clearable ? "Esc: cancel    Backspace: clear" : "Esc: cancel")
+                                                    : (touchPadUsed && touchPad.visible ? "Tap Cancel, or wait 5 seconds" : "Wait 5 seconds to cancel"),
+                                        clearable);
+                }
             }
             else
             {
@@ -9007,6 +9297,9 @@ int main(int argc, char** argv)
             if (selId == M_CONTROLS) hint = "SAVE, LOAD, FAST FORWARD, SWAP";
             if (selId == M_BOTHVER) hint = "WILD POKEMON OF BOTH VERSIONS";
             if (selId == M_SECOND_SCREEN) hint = "SECOND DISPLAY: GAME OR COMPANION";
+            if (selId == M_EXTRA0 && menuPage == PAGE_COMPANION) hint = "KEEPS THESE PAGES UP TO DATE AS YOU PLAY";
+            if (selId == M_EXTRA0 + 1 && menuPage == PAGE_COMPANION) hint = "GAME ACTIONS HERE, FOR VERIFIED VERSIONS";
+            if (selId == M_EXTRA0 + 2) hint = "A PICTURE OF THE GAME WITH EACH STATE";
             if (selId == M_CHEATS) hint = cheats.items.empty() ? "NONE FOUND: SEE THE README" : "ACTION REPLAY CODES";
             if (selId == M_NOTHING && menuPage == PAGE_CHEATS && cheats.items.empty()) hint = "DATABASE INFO EXPLAINS WHAT WAS FOUND";
             // RETROACHIEVEMENTS.
@@ -9091,6 +9384,11 @@ int main(int argc, char** argv)
             if (menu.style == 1)
                 hint = touchPadUsed && touchPad.visible ? "TAP: CHOOSE   OUTSIDE: BACK" : btn(Controls::A) + ": SELECT   " + btn(Controls::B) + ": BACK";
             const bool wideMenu=menuPage==PAGE_CENCOUNTERS || menuPage==PAGE_REFERENCE || menuPage==PAGE_RSEARCH || menuPage==PAGE_RDETAIL || menuPage==PAGE_CITEM || menuPage==PAGE_EXTRAS || menuPage==PAGE_QUICK_ACTIONS || menuPage==PAGE_NUZLOCKE || menuPage==PAGE_RUN_CONFIRM || menuPage==PAGE_CGUIDE || menuPage==PAGE_CGUIDEENTRY || menuPage==PAGE_CBATTLE || menuPage==PAGE_STATES || menuPage==PAGE_SLOT || (menuPage>=PAGE_COMPANION&&menuPage<=PAGE_CLOCATION) || menuPage==PAGE_MATCHUPS || menuPage==PAGE_CHEATS || menuPage==PAGE_CDETAIL || menuPage==PAGE_CINFO || menuPage==PAGE_CSEARCH || menuPage==PAGE_BACKUPS || menuPage==PAGE_RESTORE_CONFIRM || menuPage==PAGE_LOAD_CONFIRM || menuPage==PAGE_QUIT_CONFIRM;
+            if (menuPage == PAGE_CONTROLS) // (BUTTONS' preview: the controller connected)
+            {
+                menu.padStyle = Controls::KindOf(pads.Current());
+                menu.padLive = 0;
+            }
             menu.Draw(canvas, title, hint, note, wideMenu ? 260 : 0);
             if(menuPage==PAGE_CMAP)
             {
