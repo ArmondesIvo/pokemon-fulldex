@@ -4750,6 +4750,13 @@ int main(int argc, char** argv)
     // The live companion (COMPANION WINDOW, HUD, STATUS BAR): its picture from the latest read, the
     // window's tab (Battle while a battle runs, then back) and where it was drawn, for taps.
     Menu::CompanionView liveView; unsigned liveViewVersion = ~0u;
+    // (The second screen's companion, Android's COMPANION mode: the Companion Window filling it, over
+    // the blurred game; drawn again when the game's data or the tab changes, else twice a second.)
+    Canvas secondCanvas;
+    int secondTabRects[6][4] = {};
+    unsigned secondDrawnVersion = ~0u;
+    int secondDrawnTab = -1;
+    uint32_t secondSince = 0;
     int liveTab = 0, liveTabBeforeBattle = -1, liveTabRects[6][4] = {}, livePanel[4] = {};
     // A tap or click at (x, y) on the screen: on a tab, that tab; anywhere on the window, kept from the game.
     auto liveTouch = [&](float x, float y) {
@@ -4914,7 +4921,7 @@ int main(int argc, char** argv)
         M_CHEAT_ON = 49000, // ON NOW: every cheat that is on, from any folder
         M_CFOLDER0 = 50000  // (M_CFOLDER0 + i: folder i of the cheat database)
     };
-    enum { PAGE_MAIN, PAGE_KEYS, PAGE_DISPLAY, PAGE_GRAPHICS, PAGE_CONTROLS, PAGE_CHEATS, PAGE_RA, PAGE_SOUND, PAGE_RA_LIST, PAGE_RA_DETAIL, PAGE_CSEARCH, PAGE_CDETAIL, PAGE_CINFO, PAGE_BACKUPS, PAGE_RESTORE_CONFIRM, PAGE_LOAD_CONFIRM, PAGE_MATCHUPS, PAGE_COMPANION, PAGE_CPARTY, PAGE_CMON, PAGE_CBAG, PAGE_CDEX, PAGE_CDEXDETAIL, PAGE_CLOCATION, PAGE_PLAYBACK, PAGE_STATES, PAGE_SLOT, PAGE_CBATTLE, PAGE_CGUIDE, PAGE_CGUIDEENTRY, PAGE_NUZLOCKE, PAGE_RUN_CONFIRM, PAGE_QUICK_ACTIONS, PAGE_EXTRAS, PAGE_CITEM, PAGE_REFERENCE, PAGE_RSEARCH, PAGE_RDETAIL, PAGE_CMAP, PAGE_CENCOUNTERS, PAGE_HUB_SAVE, PAGE_HUB_LOAD, PAGE_HUB_CHEATS, PAGE_HUB_SETTINGS, PAGE_HUB_QUIT, PAGE_QUIT_CONFIRM, PAGE_COUNT };
+    enum { PAGE_MAIN, PAGE_KEYS, PAGE_DISPLAY, PAGE_GRAPHICS, PAGE_CONTROLS, PAGE_CHEATS, PAGE_RA, PAGE_SOUND, PAGE_RA_LIST, PAGE_RA_DETAIL, PAGE_CSEARCH, PAGE_CDETAIL, PAGE_CINFO, PAGE_BACKUPS, PAGE_RESTORE_CONFIRM, PAGE_LOAD_CONFIRM, PAGE_MATCHUPS, PAGE_COMPANION, PAGE_CPARTY, PAGE_CMON, PAGE_CBAG, PAGE_CDEX, PAGE_CDEXDETAIL, PAGE_CLOCATION, PAGE_PLAYBACK, PAGE_STATES, PAGE_SLOT, PAGE_CBATTLE, PAGE_CGUIDE, PAGE_CGUIDEENTRY, PAGE_NUZLOCKE, PAGE_RUN_CONFIRM, PAGE_QUICK_ACTIONS, PAGE_EXTRAS, PAGE_CITEM, PAGE_REFERENCE, PAGE_RSEARCH, PAGE_RDETAIL, PAGE_CMAP, PAGE_CENCOUNTERS, PAGE_HUB_SAVE, PAGE_HUB_LOAD, PAGE_HUB_CHEATS, PAGE_HUB_SETTINGS, PAGE_HUB_QUIT, PAGE_QUIT_CONFIRM, PAGE_SLOT_REPLACE, PAGE_COUNT };
     int companionType1 = 0, companionType2 = CompanionTypes::None;
     // ACHIEVEMENTS (RETROACHIEVEMENTS' list): read from the set as the page opens.
     std::vector<Achievements::Row> achList;
@@ -4984,6 +4991,7 @@ int main(int argc, char** argv)
     bool ctlResetAsk = false; // (RESET ALL chosen once: the next choice of it resets, anything else not)
     (void)ctlRowBack;
     bool confirmReset = false; // PAGE_QUIT_CONFIRM asks about RESET GAME (else QUIT GAME)
+    int loadFromSlot = -1;     // PAGE_LOAD_CONFIRM opened from LOAD's grid: that slot (back returns to it)
 #ifndef __SWITCH__
     // SCREEN LAYOUT's eight choices: MERGED, HYBRID with the large screen chosen automatically, the
     // top or the bottom (LARGE SCREEN, which only HYBRID uses), SIDE, VERTICAL, TOP and BOTTOM.
@@ -5017,6 +5025,8 @@ int main(int argc, char** argv)
         menu.headerNote.clear();
         menu.listShare = 0.605f;
         menu.tallRows = false;
+        menu.rowTall = 1.0f;     // (BAG, POKEDEX and the rest of COMPANION's pages set their own)
+        menu.slotGrid = false;   // (SAVE and LOAD)
         #ifdef SSR_PHONE
         menu.touchRows = 1.5f; // (settings rows big enough for a finger)
         #endif
@@ -5173,21 +5183,60 @@ int main(int argc, char** argv)
             tile(M_HUB_SETTINGS, "SETTINGS", "", Glass::I_GEAR);
             tile(M_HUB_QUIT, "QUIT GAME", "", Glass::I_POWER);
         }
-        else if (menuPage == PAGE_HUB_SAVE)
+        else if (menuPage == PAGE_HUB_SAVE || menuPage == PAGE_HUB_LOAD)
         {
-            add(M_SAVESTATE, "QUICK SAVE", "");
-            add(M_STATES, "STATE SLOTS", "");
-            if (!opt.noSave) add(M_BACKUPS, "SAVE BACKUPS", "");
-            add(M_EXTRA0 + 2, "STATE THUMBNAILS", onOff(cfg.statePreviews)); // (from OPTIONAL FEATURES)
-            add(M_BACK, "BACK", "");
+            // SAVE and LOAD: a settings page as a grid (Menu::slotGrid): QUICK SAVE (or QUICK LOAD and
+            // UNDO LAST LOAD), SAVE BACKUPS and THUMBNAILS as pills, then the ten slots as cards,
+            // each with the game's top screen as it was saved and when.
+            const bool saving = menuPage == PAGE_HUB_SAVE;
+            settingsPage(saving ? Glass::I_SAVE : Glass::I_LOAD);
+            menu.slotGrid = true;
+            auto pill = [&](int id, const char* label, int icon) {
+                add(id, label, "");
+                menu.items.back().kind = Menu::K_LINK;
+                menu.items.back().icon = icon;
+            };
+            if (saving) pill(M_SAVESTATE, "QUICK SAVE", Glass::I_SAVE);
+            else
+            {
+                pill(M_LOADSTATE, "QUICK LOAD", Glass::I_LOAD);
+                if (StateSlots::Exists(undoLoadState)) pill(M_UNDO_LOAD, "UNDO LAST LOAD", Glass::I_REWIND);
+            }
+            if (!opt.noSave) pill(M_BACKUPS, "SAVE BACKUPS", Glass::I_LOAD);
+            add(M_EXTRA0 + 2, "THUMBNAILS", "");
+            menu.items.back().kind = Menu::K_TOGGLE;
+            menu.items.back().icon = Glass::I_GRID;
+            menu.items.back().choice = cfg.statePreviews ? 1 : 0;
+            for (int slot = 0; slot < 10; slot++)
+            {
+                const std::string path = StateSlots::Path(quickState, slot);
+                add(M_SLOT0 + slot, ("SLOT " + std::to_string(slot + 1)).c_str(), StateSlots::Friendly(path), true);
+                MenuItem& it = menu.items.back();
+                it.kind = Menu::K_SLOT;
+                // (Its picture: the top screen of the two saved beside the state, if it is the
+                // state's own and not an older one's.)
+                if (cfg.statePreviews && !it.value.empty() && StateSlots::PreviewCurrent(path))
+                    if (SDL_Surface* bmp = SDL_LoadBMP((path + ".bmp").c_str()))
+                    {
+                        if (SDL_Surface* argb = SDL_ConvertSurfaceFormat(bmp, SDL_PIXELFORMAT_ARGB8888, 0))
+                        {
+                            const int w = std::min(argb->w, 256), h = std::min(argb->h, 192);
+                            it.thumb.resize((size_t)w * h);
+                            for (int y = 0; y < h; y++) memcpy(&it.thumb[(size_t)y * w], (const uint8_t*)argb->pixels + (size_t)y * argb->pitch, (size_t)w * 4);
+                            it.thumbW = w; it.thumbH = h;
+                            SDL_FreeSurface(argb);
+                        }
+                        SDL_FreeSurface(bmp);
+                    }
+            }
         }
-        else if (menuPage == PAGE_HUB_LOAD)
+        else if (menuPage == PAGE_SLOT_REPLACE)
         {
-            add(M_LOADSTATE, "QUICK LOAD", "");
-            add(M_STATES, "STATE SLOTS", "");
-            if (!opt.noSave) add(M_BACKUPS, "SAVE BACKUPS", "");
-            add(M_EXTRA0 + 2, "STATE THUMBNAILS", onOff(cfg.statePreviews));
-            add(M_BACK, "BACK", "");
+            // (A slot with a state in it, chosen on SAVE: asked first.)
+            add(M_SLOT_SAVE, "REPLACE", "");
+            add(M_BACK, "CANCEL", "");
+            menu.style = 2;
+            menu.dialogIcon = Glass::I_SAVE;
         }
         else if (menuPage == PAGE_HUB_CHEATS)
         {
@@ -6167,8 +6216,11 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_LOAD_CONFIRM)
         {
+            // (A card with two buttons, as QUIT GAME?: Menu::DrawDialog.)
+            add(M_LOAD_CONFIRM,"LOAD","");
             add(M_BACK,"CANCEL","");
-            add(M_LOAD_CONFIRM,"LOAD STATE","");
+            menu.style = 2;
+            menu.dialogIcon = Glass::I_LOAD;
         }
         else if (menuPage == PAGE_RA_LIST)
         {
@@ -6419,7 +6471,7 @@ int main(int argc, char** argv)
         SetClock(*nds, false);
     };
     auto loadQuick = [&]() {
-        pendingState=quickState;
+        pendingState=quickState;loadFromSlot=-1;
         menu.open = true;
         goPage(PAGE_LOAD_CONFIRM, M_BACK);
     };
@@ -6680,8 +6732,28 @@ int main(int argc, char** argv)
     auto renderFrame = [&](DrawJob& j) {
         if(DsDisplayState::Mode(secondDisplay.State())==4)
         {
-            const auto& panel=companionPanel.Draw(companionSnapshot,companionMetadata,companionProfile,companionGuide);
-            secondDisplay.Submit(panel.px.data(),640,480);
+            const int sw = 960, sh = 720;
+            if (secondCanvas.w != sw || secondCanvas.h != sh) { secondCanvas.Resize(sw, sh); secondDrawnTab = -1; }
+            if (companionSnapshot.ready && liveViewVersion != companionVersion) { fillCompanionView(liveView); liveViewVersion = companionVersion; }
+            const bool inBattle = !liveView.battle.empty();
+            if (inBattle && liveTabBeforeBattle < 0 && liveTab != 4) { liveTabBeforeBattle = liveTab; liveTab = 4; }
+            if (!inBattle && liveTabBeforeBattle >= 0) { liveTab = liveTabBeforeBattle; liveTabBeforeBattle = -1; }
+            if (++secondSince >= 30 || secondDrawnVersion != liveViewVersion || secondDrawnTab != liveTab)
+            {
+                // (The game's top screen, stretched to the canvas and blurred, under the glass.)
+                const uint32_t* game = j.top;
+                if (game)
+                {
+                    std::vector<uint32_t> big((size_t)sw * sh);
+                    for (int y = 0; y < sh; y++)
+                        for (int x = 0; x < sw; x++) big[(size_t)y * sw + x] = game[(y * 192 / sh) * 256 + x * 256 / sw] | 0xFF000000u;
+                    Glass::MakeBackdrop(secondCanvas.backdrop, big.data(), sw, sh);
+                }
+                Glass::Backdrop(secondCanvas);
+                CompanionWindow(secondCanvas, liveView, liveTab, secondTabRects, nullptr, true);
+                secondDisplay.Submit(secondCanvas.px.data(), sw, sh);
+                secondSince = 0; secondDrawnVersion = liveViewVersion; secondDrawnTab = liveTab;
+            }
         }
         else secondDisplay.Submit(DsDisplayState::Swapped(secondDisplay.State()) ? j.top : j.bot);
         // (The widened battle picture, from what was grabbed after the frame: made here, beside
@@ -7847,7 +7919,23 @@ int main(int argc, char** argv)
                 goPage(PAGE_CGUIDE,id);hit=-1;
             }
             if(id>=M_SLOT0&&id<M_SLOT0+10&&dir==0)
-            {stateSlot=id-M_SLOT0;goPage(PAGE_SLOT,M_SLOT_SAVE);hit=-1;}
+            {
+                // (SAVE's grid: saved there, asked first if one is there already. LOAD's: asked.)
+                stateSlot=id-M_SLOT0;
+                const std::string path=StateSlots::Path(quickState,stateSlot);
+                if(menuPage==PAGE_HUB_SAVE)
+                {
+                    if(StateSlots::Exists(path))goPage(PAGE_SLOT_REPLACE,M_BACK);
+                    else{saveAt(path);goPage(PAGE_HUB_SAVE,id);}
+                }
+                else if(menuPage==PAGE_HUB_LOAD)
+                {
+                    if(StateSlots::Exists(path)){pendingState=path;loadFromSlot=stateSlot;goPage(PAGE_LOAD_CONFIRM,M_BACK);}
+                    else say("SLOT "+std::to_string(stateSlot+1)+" IS EMPTY");
+                }
+                else goPage(PAGE_SLOT,M_SLOT_SAVE);
+                hit=-1;
+            }
             if(id>=M_CPARTY0 && id<M_CPARTY0+6 && dir==0)
             {companionMon=id-M_CPARTY0;goPage(PAGE_CMON,-1);hit=-1;}
             if(id>M_CDEX0 && id<=M_CDEX0+649 && dir==0)
@@ -7963,7 +8051,7 @@ int main(int argc, char** argv)
                 }
                 hit=-1;break;
             case M_LOAD_CONFIRM:
-                loadQuickNow();menu.open=false;swallowMenuButtons=true;hit=-1;break;
+                loadFromSlot=-1;loadQuickNow();menu.open=false;swallowMenuButtons=true;hit=-1;break;
             case M_BOTHVER:
                 // (Achievements are not followed while it is on, as with a cheat: the other
                 // version's Pokemon are for the other version's players.)
@@ -8013,17 +8101,20 @@ int main(int argc, char** argv)
                 }
                 break;
             }
-            case M_HUB_SAVE: goPage(PAGE_HUB_SAVE, M_STATES); hit = -1; break;
-            case M_HUB_LOAD: goPage(PAGE_HUB_LOAD, M_STATES); hit = -1; break;
+            case M_HUB_SAVE: goPage(PAGE_HUB_SAVE, M_SAVESTATE); hit = -1; break;
+            case M_HUB_LOAD: goPage(PAGE_HUB_LOAD, M_LOADSTATE); hit = -1; break;
             case M_HUB_CHEATS: goPage(PAGE_HUB_CHEATS, M_CHEATS); hit = -1; break;
             case M_HUB_FAST: goPage(PAGE_PLAYBACK, M_FAST); hit = -1; break;
             case M_HUB_SETTINGS: goPage(PAGE_HUB_SETTINGS, M_DISPLAY); hit = -1; break;
             case M_HUB_QUIT: confirmReset = false; goPage(PAGE_QUIT_CONFIRM, M_BACK); hit = -1; break; // (straight to "are you sure?")
             case M_STATES:goPage(PAGE_STATES,M_SLOT0);hit=-1;break;
-            case M_SLOT_SAVE:saveAt(StateSlots::Path(quickState,stateSlot));break;
+            case M_SLOT_SAVE:
+                saveAt(StateSlots::Path(quickState,stateSlot));
+                if(menuPage==PAGE_SLOT_REPLACE){goPage(PAGE_HUB_SAVE,M_SLOT0+stateSlot);hit=-1;}
+                break;
             case M_SLOT_LOAD:pendingState=StateSlots::Path(quickState,stateSlot);goPage(PAGE_LOAD_CONFIRM,M_BACK);hit=-1;break;
             case M_SLOT_PREVIOUS:pendingState=StateSlots::Path(quickState,stateSlot)+".previous";goPage(PAGE_LOAD_CONFIRM,M_BACK);hit=-1;break;
-            case M_UNDO_LOAD:pendingState=undoLoadState;goPage(PAGE_LOAD_CONFIRM,M_BACK);hit=-1;break;
+            case M_UNDO_LOAD:pendingState=undoLoadState;loadFromSlot=-1;goPage(PAGE_LOAD_CONFIRM,M_BACK);hit=-1;break;
             case M_COMPANION:
                 readCompanion(true);goPage(PAGE_COMPANION,M_CPARTY);hit=-1;break;
             case M_CPARTY:goPage(PAGE_CPARTY,-1);hit=-1;break;
@@ -8140,6 +8231,8 @@ int main(int argc, char** argv)
                 if(menuPage == PAGE_CDETAIL) {goPage(PAGE_CHEATS,M_CHEAT0+cheatDetail);hit=-1;break;}
                 if(menuPage == PAGE_CINFO) {goPage(PAGE_CHEATS,M_CINFO);hit=-1;break;}
                 if(menuPage == PAGE_RESTORE_CONFIRM) {goPage(PAGE_BACKUPS,M_BACKUP0+restoreChoice);hit=-1;break;}
+                if(menuPage == PAGE_SLOT_REPLACE){goPage(PAGE_HUB_SAVE,M_SLOT0+stateSlot);hit=-1;break;}
+                if(menuPage == PAGE_LOAD_CONFIRM && loadFromSlot >= 0){const int slot=loadFromSlot;loadFromSlot=-1;goPage(PAGE_HUB_LOAD,M_SLOT0+slot);hit=-1;break;}
                 if(menuPage == PAGE_BACKUPS || menuPage == PAGE_LOAD_CONFIRM)
                 {goPage(PAGE_MAIN,menuPage == PAGE_BACKUPS ? M_BACKUPS : M_LOADSTATE);hit=-1;break;}
                 if(menuPage == PAGE_CHEATS && cheatWhere == -4)
@@ -8409,8 +8502,11 @@ int main(int argc, char** argv)
         const bool panelDown=DsDisplayState::Mode(secondScreenState)==4 && (secondScreenState&DsDisplayState::Ready) && (secondScreenState&(1ULL<<24));
         if(panelDown&&!companionFingerDown)
         {
+            // (A tab of the second screen's Companion Window tapped: that tab.)
             int x=secondScreenState&4095,y=(secondScreenState>>12)&4095;
-            if(x<640&&y<480)companionPanel.Touch(x,y);
+            for(int i=0;i<6;i++)
+                if(x>=secondTabRects[i][0]&&x<secondTabRects[i][0]+secondTabRects[i][2]&&y>=secondTabRects[i][1]&&y<secondTabRects[i][1]+secondTabRects[i][3])
+                {liveTab=i;liveTabBeforeBattle=-1;}
         }
         companionFingerDown=panelDown;
         const bool fastRequested=fastLock||kbFast||ps.rt>0.5f;
@@ -9952,7 +10048,7 @@ int main(int argc, char** argv)
             std::string hint = touchPadUsed && touchPad.visible ? "TAP: CHOOSE   OUTSIDE: BACK"
                                : btn(Controls::A) + ": SELECT   " + btn(Controls::B) + ": BACK";
             const int selId = menu.selected >= 0 && menu.selected < (int)menuIds.size() ? menuIds[menu.selected] : -1;
-            static const char* pageTitle[] = { "", "KEYS AND BUTTONS", "DISPLAY", "GRAPHICS", "CONTROLS", "CHEATS", "RETROACHIEVEMENTS", "SOUND", "ACHIEVEMENTS", "ACHIEVEMENT", "SEARCH CHEATS", "CHEAT DETAILS", "DATABASE INFO", "SAVE BACKUPS", "RESTORE SAVE", "LOAD STATE", "TYPE MATCHUPS", "COMPANION", "PARTY", "POKEMON", "BAG", "POKEDEX", "POKEDEX ENTRY", "LOCATION", "PLAYBACK", "STATE SLOTS", "STATE SLOT", "BATTLE INFO", "GUIDE", "GUIDE HINT", "NUZLOCKE TRACKER", "RESET TRACKER", "QUICK ACTIONS", "OPTIONAL FEATURES", "ITEM DETAILS", "SEARCH REFERENCE", "SEARCH REFERENCE", "REFERENCE ENTRY", "REFERENCE MAP", "ENCOUNTERS HERE" , "SAVE", "LOAD", "CHEATS", "SETTINGS", "QUIT GAME", "QUIT GAME" };
+            static const char* pageTitle[] = { "", "KEYS AND BUTTONS", "DISPLAY", "GRAPHICS", "CONTROLS", "CHEATS", "RETROACHIEVEMENTS", "SOUND", "ACHIEVEMENTS", "ACHIEVEMENT", "SEARCH CHEATS", "CHEAT DETAILS", "DATABASE INFO", "SAVE BACKUPS", "RESTORE SAVE", "LOAD STATE", "TYPE MATCHUPS", "COMPANION", "PARTY", "POKEMON", "BAG", "POKEDEX", "POKEDEX ENTRY", "LOCATION", "PLAYBACK", "STATE SLOTS", "STATE SLOT", "BATTLE INFO", "GUIDE", "GUIDE HINT", "NUZLOCKE TRACKER", "RESET TRACKER", "QUICK ACTIONS", "OPTIONAL FEATURES", "ITEM DETAILS", "SEARCH REFERENCE", "SEARCH REFERENCE", "REFERENCE ENTRY", "REFERENCE MAP", "ENCOUNTERS HERE" , "SAVE", "LOAD", "CHEATS", "SETTINGS", "QUIT GAME", "QUIT GAME", "REPLACE SLOT" };
             static_assert(sizeof(pageTitle)/sizeof(pageTitle[0])==PAGE_COUNT,"Every menu page needs a title");
             if (menuPage == PAGE_KEYS)
             {
@@ -10083,7 +10179,15 @@ int main(int argc, char** argv)
             if(menuPage == PAGE_RESTORE_CONFIRM && restoreChoice>=0 && restoreChoice<(int)saveBackups.size())
                 note=saveBackups[restoreChoice].label+". RESTORES THIS GAME'S SAVE AND RESTARTS IT. CURRENT SAVE KEPT AS BEFORE-RESTORE.SAV.";
             if(menuPage == PAGE_LOAD_CONFIRM)
-                note="YOUR CARTRIDGE SAVE IS KEPT. SAVING IN-GAME AFTER LOADING AN OLD STATE CAN STILL REPLACE NEWER PROGRESS.";
+            {
+                title = loadFromSlot >= 0 ? "LOAD SLOT " + std::to_string(loadFromSlot + 1) + "?" : pendingState == undoLoadState ? "UNDO LAST LOAD?" : "LOAD STATE?";
+                note = "Your cartridge save is kept. Saving in the game after loading an older state can still replace newer progress.";
+            }
+            if(menuPage == PAGE_SLOT_REPLACE)
+            {
+                title = "REPLACE SLOT " + std::to_string(stateSlot + 1) + "?";
+                note = "The state in it now is saved over (" + StateSlots::Friendly(StateSlots::Path(quickState, stateSlot)) + ").";
+            }
             if(menuPage == PAGE_MATCHUPS)
                 note.clear();
             if(menuPage == PAGE_QUIT_CONFIRM)

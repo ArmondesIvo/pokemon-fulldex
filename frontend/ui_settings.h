@@ -947,6 +947,35 @@ inline int Menu::UpdateSettings(const MenuInput& in, int& dir)
             if (items[i].kind != K_SECTION) { selected = i; return; }
         }
     };
+    if (slotGrid && (in.up || in.down || in.left || in.right))
+    {
+        // (The slot grid: the pills a row, the cards rows of slotCols; Back above the pills.)
+        std::vector<int> pills, cards;
+        int back = -1;
+        for (int i = 0; i < n; i++)
+            if (items[i].kind == K_SLOT) cards.push_back(i);
+            else if (items[i].kind == K_BACK) back = i;
+            else if (items[i].kind != K_SECTION) pills.push_back(i);
+        const int cols = std::max(1, slotCols);
+        const int pc = (int)(std::find(cards.begin(), cards.end(), selected) - cards.begin());
+        const int pp = (int)(std::find(pills.begin(), pills.end(), selected) - pills.begin());
+        if (pc < (int)cards.size())
+        {
+            if (in.left && pc % cols > 0) selected = cards[pc - 1];
+            if (in.right && pc % cols < cols - 1 && pc + 1 < (int)cards.size()) selected = cards[pc + 1];
+            if (in.down && pc + cols < (int)cards.size()) selected = cards[pc + cols];
+            if (in.up) selected = pc >= cols ? cards[pc - cols] : !pills.empty() ? pills[std::min(pc, (int)pills.size() - 1)] : back >= 0 ? back : selected;
+        }
+        else if (pp < (int)pills.size())
+        {
+            if (in.left && pp > 0) selected = pills[pp - 1];
+            if (in.right && pp + 1 < (int)pills.size()) selected = pills[pp + 1];
+            if (in.down && !cards.empty()) selected = cards[std::min(pp, (int)cards.size() - 1)];
+            if (in.up && back >= 0) selected = back;
+        }
+        else if (in.down) selected = !pills.empty() ? pills[0] : !cards.empty() ? cards[0] : selected;
+        return -1;
+    }
     if (in.up) step(-1);
     if (in.down) step(1);
     const MenuItem& it = items[selected];
@@ -970,6 +999,12 @@ inline int Menu::SettingsItemAt(int x, int y) const
     if (x >= backX && x < backX + backS && y >= backY && y < backY + backS)
         for (size_t i = 0; i < items.size(); i++)
             if (items[i].kind == K_BACK) return (int)i;
+    if (slotGrid)
+    {
+        for (const auto& r : slotRects)
+            if (x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]) return r[4];
+        return -1;
+    }
     if (x < rowX || x >= rowX + rowW) return -1;
     for (size_t i = 0; i < items.size() && i < rowY.size(); i++)
         if (rowY[i] >= 0 && items[i].kind != K_SECTION && y >= rowY[i] && y < rowY[i] + rowH) return (int)i;
@@ -990,7 +1025,9 @@ inline void Menu::SettingsTap(int item, int x, MenuInput& input)
     if (item < 0) return;
     selected = item;
     const MenuItem& it = items[item];
-    // (A pill tapped: that one. A picker: its left half back, its right half on.)
+    // (A pill tapped: that one. A picker: its left half back, its right half on. The slot grid:
+    // whatever is tapped is chosen, a toggle turned over.)
+    if (slotGrid) { input.accept = true; return; }
     if (it.kind == K_TOGGLE || it.kind == K_PICKER)
     {
         if (x >= ctlX) { if (x < ctlX + ctlW / 2) input.left = true; else input.right = true; }
@@ -1655,6 +1692,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
 
     // Where the rows and the preview go.
     const int top = py0 + K(108), bottom = py0 + H0 - K(24);
+    if (slotGrid) { DrawSlotGrid(c, px0 + K(30), W0 - K(60), top, bottom, k); return; }
     int listX, listW, listBottom, pvX, pvY, pvW, pvH;
     if (wide)
     {
@@ -2105,6 +2143,100 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
 // style 2: a question in a raised glass card ("Quit Game?"), the paused game frosted behind it.
 // The buttons: CANCEL (the last item) on the left, the action (items[0]) on the right; the chosen
 // one a white pill.
+// SAVE and LOAD (Menu::slotGrid): the page's other rows as pills across the top (QUICK SAVE,
+// BACKUPS, THUMBNAILS), then the state slots as cards, five across (two on a portrait screen), each
+// with the game's top screen as it was saved, the slot's number and when; an empty one a faint
+// outline. The chosen card or pill glows as a row does.
+inline void Menu::DrawSlotGrid(Canvas& c, int x0, int w0, int top, int bottom, float k) const
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    slotRects.clear();
+    const int n = (int)items.size();
+    std::vector<int> pills, cards;
+    for (int i = 0; i < n; i++)
+        if (items[i].kind == K_SLOT) cards.push_back(i);
+        else if (items[i].kind != K_BACK && items[i].kind != K_SECTION) pills.push_back(i);
+    // (The pills: each its icon, name and, for a toggle, On or Off.)
+    const int ph = K(52);
+    int px = x0, rowTop = top;
+    for (int i : pills)
+    {
+        const MenuItem& it = items[i];
+        const bool sel = i == selected;
+        const std::string state = it.kind == K_TOGGLE ? (it.choice == 1 ? "On" : "Off") : it.value;
+        const int lw = W(it.label, K(18), true), sw = state.empty() ? 0 : W(state, K(16)) + K(14);
+        const int pw = K(it.icon >= 0 ? 58 : 28) + lw + sw + K(26);
+        if (px + pw > x0 + w0 && px > x0) { px = x0; rowTop += ph + K(12); } // (a phone: on to a second row)
+        const int top = rowTop;
+        if (sel) GlowRound(c, px, top, pw, ph, ph * 0.5f, k);
+        Glass::Round(c, px, top, pw, ph, ph * 0.5f, sel ? RowChosen : Row, sel ? ChosenEdge : 0, sel ? 2.2f * k : std::max(1.0f, k));
+        if (!sel) Glass::Rim(c, px, top, pw, ph, ph * 0.5f, std::max(1.0f, k), 0x50, 0x14);
+        int tx = px + K(24);
+        if (it.icon >= 0) { Glass::DrawIcon(c, it.icon, tx + K(10), top + ph * 0.5f, 10 * k, GlassText); tx += K(34); }
+        T(c, tx, top + ph / 2 + K(7), it.label, K(18), GlassText, true);
+        if (!state.empty()) T(c, tx + lw + K(14), top + ph / 2 + K(7), state, K(16), it.kind == K_TOGGLE && it.choice != 1 ? GlassHint : Desc);
+        slotRects.push_back({ px, top, pw, ph, i });
+        px += pw + K(12);
+    }
+    // (The cards: as large as fit, the picture 4:3, the words under it.)
+    const bool wide = c.w >= c.h * 1.2f;
+    const int cols = wide ? 5 : 2;
+    slotCols = cols;
+    const int rows = std::max(1, ((int)cards.size() + cols - 1) / cols);
+    const int gy = rowTop + ph + K(24), gap = K(16);
+    const int textH = K(58);
+    int cw = (w0 - (cols - 1) * gap) / cols;
+    int imgH = cw * 3 / 4;
+    const int availH = bottom - gy;
+    if (rows * (imgH + textH) + (rows - 1) * gap > availH) { imgH = std::max(K(40), (availH - (rows - 1) * gap) / rows - textH); }
+    const int ch = imgH + textH;
+    for (size_t q = 0; q < cards.size(); q++)
+    {
+        const int i = cards[q];
+        const MenuItem& it = items[i];
+        const bool sel = i == selected;
+        const int cx = x0 + (int)(q % cols) * (cw + gap), cy = gy + (int)(q / cols) * (ch + gap);
+        if (cy + ch > bottom + K(4)) break;
+        const bool empty = it.value.empty();
+        if (sel) GlowRound(c, cx, cy, cw, ch, 14 * k, k);
+        Glass::Round(c, cx, cy, cw, ch, 14 * k, sel ? RowChosen : empty ? 0x0CFFFFFF : Row, sel ? ChosenEdge : 0, sel ? 2.2f * k : std::max(1.0f, k));
+        if (!sel) Glass::Rim(c, cx, cy, cw, ch, 14 * k, std::max(1.0f, k), empty ? 0x30 : 0x50, 0x10);
+        // (The picture, inset, its corners rounded by the card's glass round it.)
+        const int ix = cx + K(8), iy = cy + K(8), iw = cw - K(16), ih = imgH - K(8);
+        if (!it.thumb.empty() && it.thumbW > 0 && it.thumbH > 0)
+        {
+            // (Filling the box, cut evenly at the sides or top and bottom rather than squeezed.)
+            const float sc = std::max((float)iw / it.thumbW, (float)ih / it.thumbH);
+            const float ox = (it.thumbW - iw / sc) * 0.5f, oy = (it.thumbH - ih / sc) * 0.5f;
+            for (int yy = 0; yy < ih; yy++)
+            {
+                const int Y = iy + yy;
+                if (Y < 0 || Y >= c.h) continue;
+                const int sy = std::clamp((int)(oy + yy / sc), 0, it.thumbH - 1);
+                for (int xx = 0; xx < iw; xx++)
+                {
+                    const int X = ix + xx;
+                    if (X < 0 || X >= c.w) continue;
+                    // (corners: a small radius cut away)
+                    const int r = K(8), dx = xx < r ? r - xx : xx >= iw - r ? xx - (iw - r - 1) : 0, dy = yy < r ? r - yy : yy >= ih - r ? yy - (ih - r - 1) : 0;
+                    if (dx * dx + dy * dy > r * r) continue;
+                    c.px[(size_t)Y * c.w + X] = it.thumb[(size_t)sy * it.thumbW + std::clamp((int)(ox + xx / sc), 0, it.thumbW - 1)] | 0xFF000000u;
+                }
+            }
+            Glass::Mark(c, ix, iy, ix + iw, iy + ih);
+        }
+        else
+        {
+            Glass::Round(c, ix, iy, iw, ih, 8 * k, empty ? 0x08FFFFFF : 0x400A111C);
+            Glass::DrawIcon(c, empty ? Glass::I_SAVE : Glass::I_PLAY, ix + iw * 0.5f, iy + ih * 0.5f, 13 * k, empty ? GlassHint : GlassText);
+        }
+        T(c, cx + K(14), cy + imgH + K(26), it.label, K(17), empty && !sel ? GlassHint : GlassText, true);
+        T(c, cx + K(14), cy + imgH + K(48), empty ? std::string("Empty") : it.value, K(14), GlassHint);
+        slotRects.push_back({ cx, cy, cw, ch, i });
+    }
+}
+
 inline void Menu::DrawDialog(Canvas& c, const std::string& title, const std::string& text, const std::string& hint) const
 {
     using namespace SettingsArt;
@@ -2157,20 +2289,23 @@ inline void Menu::DrawDialog(Canvas& c, const std::string& title, const std::str
 // glass panel down the right of the screen, its tabs as icons along its top, the chosen tab's
 // picture under them. Tinted glass with a lit rim, no frost (it is drawn every frame over a moving
 // game). tabRects: where each tab was drawn, for taps.
-inline void CompanionWindow(Canvas& c, const Menu::CompanionView& cv, int tab, int (*tabRects)[4] = nullptr, int* panelRect = nullptr)
+inline void CompanionWindow(Canvas& c, const Menu::CompanionView& cv, int tab, int (*tabRects)[4] = nullptr, int* panelRect = nullptr, bool full = false)
 {
     using namespace SettingsArt;
     // (A card in the top right corner, about a quarter of the screen across and two thirds down:
-    // the game stays the main thing on one screen.)
-    const float margin = std::min(c.w, c.h) * 0.03f;
-    const int ph = (int)(c.h * 0.68f), pw = (int)std::min(c.w * 0.25f, ph * 0.64f);
+    // the game stays the main thing on one screen. full: the whole canvas, a second screen's, over
+    // the blurred game already in it.)
+    const float margin = std::min(c.w, c.h) * (full ? 0.035f : 0.03f);
+    const int ph = full ? (int)(c.h - 2 * margin) : (int)(c.h * 0.68f);
+    const int pw = full ? (int)(c.w - 2 * margin) : (int)std::min(c.w * 0.25f, ph * 0.64f);
     const int px = (int)(c.w - pw - margin), py = (int)margin;
-    const float k = std::max(0.42f, ph / 640.0f);
+    const float k = full ? std::max(0.5f, std::min(c.w, c.h) / 560.0f) : std::max(0.42f, ph / 640.0f);
     auto K = [&](float v) { return (int)std::lround(v * k); };
     if (panelRect) { panelRect[0] = px; panelRect[1] = py; panelRect[2] = pw; panelRect[3] = ph; }
     // (No shadow round it: over the bright game it reads as a dark border.)
     // (Frosted when the game under it has been read: the menus' glass; else dark glass.)
-    if (Glass::FrostLive(c, px, py, pw, ph, 24 * k)) Glass::Round(c, px, py, pw, ph, 24 * k, Panel);
+    if (full) { Glass::Frost(c, px, py, pw, ph, 24 * k); Glass::Round(c, px, py, pw, ph, 24 * k, Panel); }
+    else if (Glass::FrostLive(c, px, py, pw, ph, 24 * k)) Glass::Round(c, px, py, pw, ph, 24 * k, Panel);
     else Glass::Round(c, px, py, pw, ph, 24 * k, 0xD8101826);
     Glass::Rim(c, px, py, pw, ph, 24 * k, std::max(1.2f, 1.6f * k));
     static const int icons[] = { Glass::I_PEOPLE, Glass::I_LOAD, Glass::I_GLOBE, Glass::I_INFO, Glass::I_SPARKLE, Glass::I_CHEATS };

@@ -187,6 +187,7 @@ struct MenuItem
     int preview = -1;
     std::string desc, tip;
     int indent = 0; // (settings pages: a row inside an open folder, K_FOLDER, drawn further in)
+    std::vector<uint32_t> thumb; int thumbW = 0, thumbH = 0; // (K_SLOT: the state's picture, ARGB)
 };
 
 struct Menu
@@ -202,7 +203,7 @@ struct Menu
     // rows in sections on the left and a preview of the chosen row on the right.
     int style = 0;
     int pageIcon = -1;
-    enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK, K_FOLDER };
+    enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK, K_FOLDER, K_SLOT };
     std::string headerNote; // (settings pages: a few words at the header's right, CHEATS' counts)
     // A preview's pictures (MenuItem::preview), one per choice (its art: which variant).
     enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER, P_MOTION, P_WIDE, P_RES, P_PAD, P_KEY, P_SHORTCUTS, P_TOUCH, P_CPARTY, P_CBAG, P_CDEX, P_CPLACE, P_CBATTLE, P_CMON, P_CITEM, P_CDEXMON, P_CGUIDE, P_CBFOE, P_CBMOVE, P_CBCOVER };
@@ -702,6 +703,13 @@ struct Menu
     int dialogIcon = -1;
     mutable int dialogX[2] = {}, dialogY = 0, dialogW = 0, dialogH = 0;
     void DrawDialog(Canvas& c, const std::string& title, const std::string& text, const std::string& hint) const;
+    // (A settings page of state slots, SAVE and LOAD: its other rows as pills across the top, the
+    // K_SLOT rows as cards in a grid, each with its picture and date. Where each was drawn:
+    // slotRects {x, y, w, h, item}; the grid's columns: slotCols.)
+    bool slotGrid = false;
+    mutable std::vector<std::array<int, 5>> slotRects;
+    mutable int slotCols = 5;
+    void DrawSlotGrid(Canvas& c, int x0, int w0, int top, int bottom, float k) const;
     int FirstRow() const; // the first row that can be chosen (not a section's heading or the back button)
     // Where the settings page was last drawn: each item's row (y, -1 when not shown), the rows' x
     // and size, the controls' box on the right of them, and the back button.
