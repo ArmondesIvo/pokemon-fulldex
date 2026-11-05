@@ -91,26 +91,33 @@ inline void MakeBackdrop(std::vector<uint32_t>& out, const uint32_t* src, int w,
         const float l = 0.3f * s[i] + 0.59f * s[i + 1] + 0.11f * s[i + 2];
         for (int k = 0; k < 3; k++) s[i + k] = (s[i + k] * 0.75f + l * 0.25f) * 0.58f;
     }
-    out.assign((size_t)w * h, 0xFF000000u);
+    // (Scaled back up in whole numbers, each column's two sources and weight worked out once: the
+    // live glass does this several times a second, so it must be quick.)
+    std::vector<int> small(s.size());
+    for (size_t i = 0; i < s.size(); i++) small[i] = std::clamp((int)s[i], 0, 255);
+    std::vector<int> cx0(w), cx1(w), cwx(w);
+    for (int x = 0; x < w; x++)
+    {
+        const float fx = std::clamp((x + 0.5f) / f - 0.5f, 0.0f, (float)(sw - 1));
+        cx0[x] = (int)fx * 3; cx1[x] = std::min(sw - 1, (int)fx + 1) * 3; cwx[x] = (int)((fx - (int)fx) * 256);
+    }
+    out.resize((size_t)w * h);
+    std::vector<int> row((size_t)sw * 3);
     for (int y = 0; y < h; y++)
     {
         const float fy = std::clamp((y + 0.5f) / f - 0.5f, 0.0f, (float)(sh - 1));
-        const int y0 = (int)fy, y1 = std::min(sh - 1, y0 + 1);
-        const float ty = fy - (float)y0;
+        const int y0 = (int)fy, y1 = std::min(sh - 1, y0 + 1), wy = (int)((fy - y0) * 256);
+        const int* r0 = &small[(size_t)y0 * sw * 3];
+        const int* r1 = &small[(size_t)y1 * sw * 3];
+        // (The row between the two small rows first, then across it.)
+        for (int i = 0; i < sw * 3; i++) row[i] = r0[i] * (256 - wy) + r1[i] * wy;
+        uint32_t* o = &out[(size_t)y * w];
         for (int x = 0; x < w; x++)
         {
-            const float fx = std::clamp((x + 0.5f) / f - 0.5f, 0.0f, (float)(sw - 1));
-            const int x0 = (int)fx, x1 = std::min(sw - 1, x0 + 1);
-            const float tx = fx - (float)x0;
-            uint32_t p = 0xFF000000u;
-            for (int k = 0; k < 3; k++)
-            {
-                const float a = s[((size_t)y0 * sw + x0) * 3 + k], b = s[((size_t)y0 * sw + x1) * 3 + k];
-                const float c2 = s[((size_t)y1 * sw + x0) * 3 + k], d = s[((size_t)y1 * sw + x1) * 3 + k];
-                const float v = (a * (1 - tx) + b * tx) * (1 - ty) + (c2 * (1 - tx) + d * tx) * ty;
-                p |= (uint32_t)std::clamp((int)v, 0, 255) << (16 - 8 * k);
-            }
-            out[(size_t)y * w + x] = p;
+            const int a = cx0[x], b = cx1[x], wx = cwx[x];
+            const int r = (row[a] * (256 - wx) + row[b] * wx) >> 16, g = (row[a + 1] * (256 - wx) + row[b + 1] * wx) >> 16,
+                      bl = (row[a + 2] * (256 - wx) + row[b + 2] * wx) >> 16;
+            o[x] = 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)bl;
         }
     }
 }

@@ -4859,7 +4859,7 @@ int main(int argc, char** argv)
         for (bool b : snap.caught) cv.caught += b;
         cv.dexTotal = companionProfile.maxSpecies;
         cv.badges = snap.badges;
-        cv.place = title(companionMetadata.PlaceName(snap.map));
+        cv.place = snap.map > 0 ? title(companionMetadata.PlaceName(snap.map)) : std::string(); // (map 0: none yet, as before a game is loaded)
         cv.area = snap.locationLive ? "" : "Where you last went through a door";
         if (companionMetadata.regionMap.Ready())
         {
@@ -6841,7 +6841,8 @@ int main(int argc, char** argv)
             static unsigned liveFrame = 0;
             if (!menu.open && !g.wanted.empty() && j.outW > 0 && j.outH > 0 && (liveFrame++ % 3 == 0 || !g.Ready(canvas)))
             {
-                if (g.w != j.outW || g.h != j.outH) { g.px.assign((size_t)j.outW * j.outH, 0xFF000000u); g.w = j.outW; g.h = j.outH; }
+                const bool firstRead = g.w != j.outW || g.h != j.outH; // (every piece read the first time)
+                if (firstRead) { g.px.assign((size_t)j.outW * j.outH, 0xFF000000u); g.w = j.outW; g.h = j.outH; }
                 // (The pieces near one another read as one: the HUD's cards together.)
                 std::vector<Glass::LiveGlass::Rect> groups;
                 for (auto r : g.wanted)
@@ -6857,15 +6858,30 @@ int main(int argc, char** argv)
                 }
                 std::vector<uint32_t> shot, blurred;
                 bool readOk = true;
+                // (FULLDEX_PERF_LOG: how long reading the game back and blurring it take, every 100 reads.)
+                static const bool perfLog = getenv("FULLDEX_PERF_LOG") != nullptr;
+                static double readMs = 0, blurMs = 0, pixels = 0; static int reads = 0;
+                // (One piece read each time, in turn: each read makes the graphics card finish its
+                // work first, so two in one frame cost twice that wait.)
+                static size_t nextGroup = 0;
+                if (groups.size() > 1 && !firstRead) { const auto one = groups[nextGroup++ % groups.size()]; groups.assign(1, one); }
                 for (auto r : groups)
                 {
                     const int x0 = std::max(0, r.x), y0 = std::max(0, r.y), x1 = std::min(j.outW, r.x + r.w), y1 = std::min(j.outH, r.y + r.h);
                     if (x1 - x0 < 8 || y1 - y0 < 8) continue;
                     const SDL_Rect rect = { x0, y0, x1 - x0, y1 - y0 };
                     shot.resize((size_t)rect.w * rect.h);
+                    const double t0 = perfLog ? perfNow() : 0;
                     if (SDL_RenderReadPixels(renderer, &rect, SDL_PIXELFORMAT_ARGB8888, shot.data(), rect.w * 4) != 0) { readOk = false; break; }
+                    const double t1 = perfLog ? perfNow() : 0;
                     Glass::MakeBackdrop(blurred, shot.data(), rect.w, rect.h);
+                    if (perfLog) { readMs += t1 - t0; blurMs += perfNow() - t1; pixels += (double)rect.w * rect.h; }
                     for (int y = 0; y < rect.h; y++) std::copy(&blurred[(size_t)y * rect.w], &blurred[(size_t)y * rect.w] + rect.w, &g.px[(size_t)(rect.y + y) * g.w + rect.x]);
+                }
+                if (perfLog && ++reads == 100)
+                {
+                    fprintf(stderr, "[glass] per read: %zu pieces, %.0f pixels, read back %.2f ms, blurred %.2f ms\n", groups.size(), pixels / 100, readMs / 100, blurMs / 100);
+                    readMs = blurMs = pixels = 0; reads = 0;
                 }
                 if (!readOk) { g.px.clear(); g.w = g.h = 0; g.wanted.clear(); } // (a renderer that cannot be read: dark glass)
             }
