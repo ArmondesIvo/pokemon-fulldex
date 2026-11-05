@@ -503,13 +503,31 @@ struct Metadata
     {
         if(!profile.supported)return;
         gen5=profile.gen5;
-        bool hg=code=="IPKE"||code=="IPGE";hgss=hg;
+        const std::string family=code.substr(0,std::min<size_t>(3,code.size()));
+        bool hg=family=="IPK"||family=="IPG";hgss=hg;
+        const bool ss=family=="IPG";
+        // (Black 2 and White 2: UPR ZX's gen5_offsets.ini text banks and archives, each bank checked
+        // by what it holds and else looked for.)
+        const bool b2=family=="IRE"||family=="IRD";
         auto msg=Narc(RomFile(rom,gen5?"a/0/0/2":hg?"a/0/2/7":"msgdata/pl_msg.narc"));
         auto bank=[&](int n){return n>=0&&n<(int)msg.size()?Text(msg[n],gen5):std::vector<std::string>{};};
-        species=bank(gen5?70:hg?237:412);moves=bank(gen5?203:hg?750:647);items=bank(gen5?54:hg?222:392);
+        auto upper=[](std::string t){for(char& ch:t)ch=(char)std::toupper((unsigned char)ch);return t;};
+        auto checked=[&](int n,int entry,const char* want)
+        {
+            auto b=bank(n);
+            if(entry<(int)b.size()&&upper(b[entry]).find(want)!=std::string::npos)return b;
+            for(size_t i=0;i<msg.size();i++){b=bank((int)i);if(entry<(int)b.size()&&b.size()>100&&upper(b[entry])==want)return b;}
+            return std::vector<std::string>{};
+        };
+        if(b2)
+        {
+            species=checked(90,1,"BULBASAUR");moves=checked(403,1,"POUND");items=checked(64,1,"MASTER BALL");
+            places=bank(109);
+        }
+        else {species=bank(gen5?70:hg?237:412);moves=bank(gen5?203:hg?750:647);items=bank(gen5?54:hg?222:392);
         // HGSS item.c LoadItemDescription: msg_0221; Platinum TEXT_BANK_ITEM_DESCRIPTIONS: 391.
         // Black (U) text bank 53 is also identified by UPR ZX's gen5_offsets.ini.
-        places=bank(gen5?89:hg?279:433);
+        places=bank(gen5?89:hg?279:433);}
         regionMap=ReferenceMap(Narc(RomFile(rom,gen5?"a/0/8/5":hg?"a/1/4/4":"graphic/tmap_gra.narc")),gen5,hg);
         if(!gen5){monIcons=Narc(RomFile(rom,hg?"a/0/2/0":"poketool/icongra/pl_poke_icon.narc"));if(!monIcons.empty())iconPalettes=CompanionIcons::Palettes(monIcons[0]);}
         else
@@ -526,15 +544,34 @@ struct Metadata
             if(!zones.empty()&&zones[0].size()%48==0&&zones[0].size()/48<=4096)
                 for(size_t at=0;Range(zones[0].size(),at,48);at+=48)
                 {
-                    MapRecord record;record.place=zones[0][at+0x1A];int set=U16(zones[0].data()+at+0x14);record.encounter=set==65535?-1:set;
+                    // (Black 2 and White 2 keep flags in the top three bits; 0x1FFF there: none.)
+                    MapRecord record;record.place=zones[0][at+0x1A];int set=U16(zones[0].data()+at+0x14);
+                    if(b2)set=(set&0x1FFF)==0x1FFF?65535:set&0x1FFF;
+                    record.encounter=set==65535?-1:set;
                     mapPlaces.push_back(record.place);mapRecords.push_back(record);
                 }
         }
+        const size_t wildRecordCount=Narc(RomFile(rom,b2?"a/1/2/7":gen5?"a/1/2/6":hg?(ss?"a/1/3/6":"a/0/3/7"):"fielddata/encountdata/pl_enc_data.narc")).size();
         if(!gen5)
         {
             auto arm=RomArm9(rom),names=RomFile(rom,"fielddata/maptable/mapname.bin");
             LoadItemIcons(rom,arm,hg);
             size_t offset=hg?0xF6BE0:0xE601C,count=names.size()/16;
+            // (Another revision: the headers looked for, each place a name and each encounter table
+            // one of the ROM's or none.)
+            auto fits=[&](size_t at)
+            {
+                if(!Range(arm.size(),at,count*24))return false;
+                for(size_t n=0;n<count;n++)
+                {
+                    const auto* h=arm.data()+at+n*24;
+                    if(h[18]>=places.size())return false;
+                    const int e=hg?(h[0]==255?-1:h[0]):(U16(h+14)==65535?-1:U16(h+14));
+                    if(e>=(int)wildRecordCount)return false;
+                }
+                return true;
+            };
+            if(count>0&&!fits(offset))for(size_t at=0;at+count*24<=arm.size();at+=4)if(fits(at)){offset=at;break;}
             // UPR ZX gen4_offsets.ini/loadWildMapNames: fixed 24-byte headers, place at +18.
             if(names.size()%16==0&&count>0&&count<=4096&&Range(arm.size(),offset,count*24))
             {
@@ -560,14 +597,14 @@ struct Metadata
                     if(map<(int)mapPlaces.size()&&mapPlaces[map]<(int)placePoints.size()&&x<regionMap.width&&y<regionMap.height)placePoints[mapPlaces[map]]={x,y};
                 }
         }
-        wildRecords=Narc(RomFile(rom,gen5?"a/1/2/6":hg?(code=="IPGE"?"a/1/3/6":"a/0/3/7"):"fielddata/encountdata/pl_enc_data.narc"));
-        itemDescriptions=bank(gen5?53:hg?221:391);
-        descriptions=bank(gen5?235:hg?(code=="IPGE"?804:803):706);abilities=bank(gen5?182:hg?720:610);
+        wildRecords=Narc(RomFile(rom,b2?"a/1/2/7":gen5?"a/1/2/6":hg?(ss?"a/1/3/6":"a/0/3/7"):"fielddata/encountdata/pl_enc_data.narc"));
+        itemDescriptions=bank(b2?63:gen5?53:hg?221:391);
+        descriptions=bank(b2?442:gen5?235:hg?(ss?804:803):706);abilities=b2?checked(374,1,"STENCH"):bank(gen5?182:hg?720:610);
         // Trainer layouts and name banks are documented by UPR ZX Gen4/Gen5RomHandler.
-        trainerData=Narc(RomFile(rom,gen5?"a/0/9/2":hg?"a/0/5/5":"poketool/trainer/trdata.narc"));
-        trainerTeams=Narc(RomFile(rom,gen5?"a/0/9/3":hg?"a/0/5/6":"poketool/trainer/trpoke.narc"));
-        trainerNames=bank(gen5?190:hg?729:618);
-        auto trainerClasses=bank(gen5?191:hg?730:619);
+        trainerData=Narc(RomFile(rom,b2?"a/0/9/1":gen5?"a/0/9/2":hg?"a/0/5/5":"poketool/trainer/trdata.narc"));
+        trainerTeams=Narc(RomFile(rom,b2?"a/0/9/2":gen5?"a/0/9/3":hg?"a/0/5/6":"poketool/trainer/trpoke.narc"));
+        trainerNames=bank(b2?382:gen5?190:hg?729:618);
+        auto trainerClasses=bank(b2?383:gen5?191:hg?730:619);
         for(size_t id=1;id<trainerNames.size();id++)if(id<trainerData.size()&&trainerData[id].size()>=2)
         {
             int cls=trainerData[id][1];

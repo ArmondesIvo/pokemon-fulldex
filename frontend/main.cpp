@@ -4797,7 +4797,9 @@ int main(int argc, char** argv)
         if(getenv("SSR_COMPANION_DIAGNOSTICS") && (companionDiagnosticReady!=(int)companionSnapshot.ready || companionDiagnosticCount!=(int)companionSnapshot.party.size()))
         {
             companionDiagnosticReady=companionSnapshot.ready;companionDiagnosticCount=(int)companionSnapshot.party.size();
-            fprintf(stderr,"[companion] ready=%d party=%zu invalid=%d bag=%zu dex=%d\n",companionDiagnosticReady,companionSnapshot.party.size(),companionSnapshot.invalidSlots,companionSnapshot.items.size(),companionSnapshot.dexReady);
+            fprintf(stderr,"[companion] ready=%d party=%zu invalid=%d bag=%zu dex=%d map=%d (%s) money=%lld badges=%d live=%d battlers=%zu first=%s Lv%d %s\n",companionDiagnosticReady,companionSnapshot.party.size(),companionSnapshot.invalidSlots,companionSnapshot.items.size(),companionSnapshot.dexReady,
+                    companionSnapshot.map,companionMetadata.PlaceName(companionSnapshot.map).c_str(),(long long)companionSnapshot.money,companionSnapshot.badges,(int)companionSnapshot.locationLive,companionSnapshot.battlers.size(),
+                    companionSnapshot.party.empty()?"-":companionMetadata.Species(companionSnapshot.party[0].species).c_str(),companionSnapshot.party.empty()?0:companionSnapshot.party[0].level,companionSnapshot.message.c_str());
         }
     };
     // COMPANION's pictures (Menu::CompanionView) from the latest read: the pause menu's previews and the

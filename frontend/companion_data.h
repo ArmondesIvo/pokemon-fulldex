@@ -197,16 +197,35 @@ struct Profile
     uint32_t pointer=0,body=0,party=0,bag=0,dex=0,location=0,trainer=0,repel=0;
     int maxSpecies=493;
     std::vector<int> pockets;
+    // (pointer 0: a version whose addresses in memory are not known (White, Black 2, White 2, other
+    // revisions): its save found by looking for it (FindSave); no live position or battle.)
+    bool hgss=false;
+    uint32_t misc=0; // (Gen 5: the money, then the badges)
 };
 inline Profile ProfileFor(const std::string& code, int revision)
 {
     Profile p;
+    const std::string family=code.size()>=3?code.substr(0,3):code;
+    // (The US carts, whose addresses are known; then each game's other carts and revisions, the
+    // same save layout found in memory by looking.)
     if((code=="IPKE" || code=="IPGE") && revision==0)
         p={true,false,0x021D2228,0x10,0x90,0x644,0x12B8,0x1234,0x64,0x6909,493,{165,50,101,12,40,64,24,30}};
+    else if(family=="IPK" || family=="IPG")
+        p={true,false,0,0x10,0x90,0x644,0x12B8,0x1234,0x64,0x6909,493,{165,50,101,12,40,64,24,30}};
     else if(code=="CPUE" && revision==1)
         p={true,false,0x021C0794,0x14,0x98,0x630,0x1328,0x1280,0x68,0x8073,493,{165,50,100,12,40,64,15,30}};
+    else if(family=="CPU")
+        p={true,false,0,0x14,0x98,0x630,0x1328,0x1280,0x68,0x8073,493,{165,50,100,12,40,64,15,30}};
     else if(code=="IRBO" && revision==0)
         p={true,true,0x020A7298,0,0x18E00,0x18400,0x21600,0x19500,0x19400,0x21B31,649,{310,83,109,48,64}};
+    else if(family=="IRB" || family=="IRA")
+        p={true,true,0,0,0x18E00,0x18400,0x21600,0x19500,0x19400,0x21B31,649,{310,83,109,48,64}};
+    // (Black 2 and White 2: PKHeX's SAV5B2W2: the Pokedex at 0x21400, the money and badges at
+    // 0x21100; the Repel's steps not known, so not read.)
+    else if(family=="IRE" || family=="IRD")
+        p={true,true,0,0,0x18E00,0x18400,0x21400,0x19500,0x19400,0,649,{310,83,109,48,64}};
+    p.hgss=family=="IPK" || family=="IPG";
+    p.misc=family=="IRE" || family=="IRD" ? 0x21100 : 0x21200;
     return p;
 }
 struct Item {int id=0,quantity=0,pocket=0;};
@@ -247,16 +266,58 @@ struct Snapshot
 };
 using Reader=std::function<bool(uint32_t,void*,size_t)>;
 inline bool MainRange(uint32_t at,size_t size) { return at>=0x02000000 && at<0x02400000 && size<=0x02400000-at; }
+// Where the save is in memory, for a cart whose addresses are not known: the party's header (its
+// size, 6, then how many, 1 to 6) where the save keeps it, with the Pokedex's mark (0xBEEFCAFE) where
+// the save keeps that. Looked for at most once a second (Read is called often); kept while it holds.
+inline uint32_t FindSave(const Profile& p,const Reader& read)
+{
+    static uint32_t found=0,tries=0;
+    auto at=[&](uint32_t a,size_t n){std::vector<uint8_t> v(n);return read(a,v.data(),n)?v:std::vector<uint8_t>();};
+    auto holds=[&](uint32_t base)
+    {
+        if(!MainRange(base,p.dex+8)||!MainRange(base,p.party+8))return false;
+        auto head=at(base+p.party,8),dex=at(base+p.dex,4);
+        return head.size()==8&&dex.size()==4&&U32(head.data())==6&&U32(head.data()+4)>=1&&U32(head.data()+4)<=6&&U32(dex.data())==0xBEEFCAFE;
+    };
+    if(found&&holds(found))return found;
+    found=0;
+    if(tries++%2)return 0; // (Read: every half second; a look: once a second)
+    const uint32_t chunk=0x40000;
+    for(uint32_t start=0x02000000;start<0x02400000;start+=chunk)
+    {
+        auto block=at(start,std::min<uint32_t>(chunk+8,0x02400000-start));
+        if(block.size()<8)continue;
+        for(uint32_t o=0;o+8<=block.size();o+=4)
+        {
+            if(U32(block.data()+o)!=6)continue;
+            const uint32_t count=U32(block.data()+o+4);
+            if(count<1||count>6)continue;
+            const uint32_t base=start+o-p.party; // (the party's place less its offset: where the save starts)
+            if(start+o<p.party+0x02000000)continue;
+            if(holds(base)){found=base;return found;}
+        }
+    }
+    return 0;
+}
 inline Snapshot Read(const Profile& p,const Reader& read)
 {
     Snapshot s;s.supported=p.supported;
     if(!p.supported){s.message="NO VERIFIED COMPANION PROFILE FOR THIS VERSION";return s;}
     auto bytes=[&](uint32_t at,size_t count){Bytes v;if(!count||!MainRange(at,count))return v;v.resize(count);if(!read(at,v.data(),count))v.clear();return v;};
     auto pointer=[&](uint32_t at){auto v=bytes(at,4);return v.size()==4?U32(v.data()):0u;};
-    uint32_t base=pointer(p.pointer);
-    if(p.gen5){if(!MainRange(base,0x14))base=0;else{base=pointer(base+0x10);if(MainRange(base,0x38))base=pointer(base+0x34);else base=0;}}
-    if(!MainRange(base, p.gen5?0x24000:0x20000)){s.message="START OR LOAD A GAME TO READ ITS DATA";return s;}
-    base+=p.body;
+    uint32_t base=0;
+    if(p.pointer)
+    {
+        base=pointer(p.pointer);
+        if(p.gen5){if(!MainRange(base,0x14))base=0;else{base=pointer(base+0x10);if(MainRange(base,0x38))base=pointer(base+0x34);else base=0;}}
+        if(!MainRange(base, p.gen5?0x24000:0x20000)){s.message="START OR LOAD A GAME TO READ ITS DATA";return s;}
+        base+=p.body;
+    }
+    else
+    {
+        base=FindSave(p,read);
+        if(!base){s.message="START OR LOAD A GAME TO READ ITS DATA";return s;}
+    }
     auto head=bytes(base+p.party,8);
     if(head.size()!=8||U32(head.data())!=6||U32(head.data()+4)>6){s.message="PARTY DATA IS NOT READY";return s;}
     int count=U32(head.data()+4),stride=p.gen5?0xDC:0xEC;
@@ -275,25 +336,25 @@ inline Snapshot Read(const Profile& p,const Reader& read)
     }
     if(p.gen5)
     {
-        auto badge=bytes(base+0x21204,1);if(!badge.empty())s.badges=badge[0];
-        auto cash=bytes(base+0x21200,4);if(cash.size()==4)s.money=U32(cash.data()); // (PKHeX SAV5: the trainer's money, before the badges)
-        uint32_t system=pointer(0x02146248),data=MainRange(system,0x20)?pointer(system+0x1C):0;
+        auto badge=bytes(base+p.misc+4,1);if(!badge.empty())s.badges=badge[0];
+        auto cash=bytes(base+p.misc,4);if(cash.size()==4)s.money=U32(cash.data()); // (PKHeX SAV5: the trainer's money, before the badges)
+        uint32_t system=p.pointer?pointer(0x02146248):0,data=MainRange(system,0x20)?pointer(system+0x1C):0;
         auto live=MainRange(data,0x124)?bytes(data+0x114,16):Bytes{};
         if(!live.empty()){s.map=U16(live.data());s.x=(int32_t)U32(live.data()+4)>>16;s.y=(int32_t)U32(live.data()+12)>>16;s.locationLive=true;}
     }
     else
     {
-        auto trainer=bytes(base+p.trainer,0x20);if(!trainer.empty())s.badges=trainer[0x1A]|(p.pointer==0x021D2228?trainer[0x1F]<<8:0);
+        auto trainer=bytes(base+p.trainer,0x20);if(!trainer.empty())s.badges=trainer[0x1A]|(p.hgss?trainer[0x1F]<<8:0);
         if(trainer.size()>=0x18)s.money=U32(trainer.data()+0x14); // (PKHeX SAV4: the trainer's money, at 0x14 in its block)
         const bool hg=p.pointer==0x021D2228;
-        uint32_t field=pointer(hg?0x021D4158:0x021C07DC),avatar=MainRange(field,0x44)?pointer(field+(hg?0x40:0x3C)):0;
+        uint32_t field=p.pointer?pointer(hg?0x021D4158:0x021C07DC):0,avatar=MainRange(field,0x44)?pointer(field+(hg?0x40:0x3C)):0;
         uint32_t object=MainRange(avatar,0x34)?pointer(avatar+0x30):0;
         auto coordinates=MainRange(object,0x70)?bytes(object+0x64,12):Bytes{};
         uint32_t location=MainRange(field,0x24)?pointer(field+(hg?0x20:0x1C)):0;
         auto current=MainRange(location,0x14)?bytes(location,0x14):Bytes{};
         if(!coordinates.empty()&&!current.empty()){s.map=U32(current.data());s.x=(int32_t)U32(coordinates.data());s.y=(int32_t)U32(coordinates.data()+8);s.locationLive=true;}
     }
-    auto repel=bytes(base+p.repel,1);if(!repel.empty())s.repel=repel[0];
+    auto repel=p.repel?bytes(base+p.repel,1):Bytes{};if(!repel.empty())s.repel=repel[0];
     const int setBytes=p.gen5?84:64;
     auto dex=bytes(base+p.dex,p.gen5?8+setBytes*5:0x340);
     if(!dex.empty()&&U32(dex.data())==0xBEEFCAFE){s.dexReady=true;s.seen.resize(p.maxSpecies+1);s.caught.resize(p.maxSpecies+1);auto bit=[&](int at,int id){return (dex[at+(id-1)/8]>>((id-1)%8))&1;};for(int id=1;id<=p.maxSpecies;id++){bool seen=p.gen5?false:bit(4+64,id);bool caught=bit(p.gen5?8:4,id);if(p.gen5)for(int set=1;set<=4;set++)seen=seen||bit(8+set*setBytes,id);s.seen[id]=seen||caught;s.caught[id]=caught;}}
@@ -319,7 +380,7 @@ inline Snapshot Read(const Profile& p,const Reader& read)
             s.battlers.push_back(m);
         }
     }
-    if(p.gen5)
+    if(p.gen5 && p.pointer)
     {
         uint32_t system=pointer(0x02146248),procSys=MainRange(system,12)?pointer(system+8):0;
         uint32_t proc=MainRange(procSys,12)?pointer(procSys+8):0;
