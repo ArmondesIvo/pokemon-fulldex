@@ -978,6 +978,14 @@ inline int Menu::SettingsItemAt(int x, int y) const
 inline void Menu::SettingsTap(int item, int x, MenuInput& input)
 {
     if (item == -2) { input.back = true; return; }
+    // (A card of the preview tapped: that choice, for the chosen row.)
+    if (item < 0 && selected >= 0 && selected < (int)items.size())
+        for (const auto& r : pickRects)
+            if (x >= r[0] && x < r[0] + r[2] && pickY >= r[1] && pickY < r[1] + r[3])
+            {
+                if (r[4] != items[selected].choice) pickWanted = r[4];
+                return;
+            }
     if (item < 0) return;
     selected = item;
     const MenuItem& it = items[item];
@@ -996,6 +1004,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     using namespace SettingsArt;
     const bool solid = Glass::Backdrop(c);
     const int n = (int)items.size();
+    pickRects.clear();
     if (selected < 0 || selected >= n) return;
     const bool wide = c.w >= c.h * 1.2f;
     float pw, ph, k;
@@ -1064,12 +1073,15 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     // The rows: their places down the list, a section's heading (and a line before every one but
     // the first) taking a little more room than a row.
     // (Closer together, down to nine tenths, before the list has to scroll.)
+    // (Phones: the rows larger than the rest of the page, to suit a finger: touchRows.)
+    const float kr = k * touchRows;
+    auto KR = [&](float v) { return (int)std::lround(v * kr); };
     const int avail = listBottom - top;
     std::vector<int> at(n, -1);
     int total = 0, pitch = 0, headH = 0, sepH = 0;
     for (float squeeze : { 1.0f, 0.95f, 0.9f })
     {
-        rowH = K(40 * squeeze); pitch = K(44 * squeeze); headH = K(46 * squeeze); sepH = K(14 * squeeze);
+        rowH = KR(40 * squeeze); pitch = KR(44 * squeeze); headH = KR(46 * squeeze); sepH = KR(14 * squeeze);
         total = 0;
         bool firstSection = true;
         for (int i = 0; i < n; i++)
@@ -1086,6 +1098,20 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         }
         if (total <= avail) break;
     }
+    if (tallRows)
+    {
+        // (A few links, as SETTINGS: the rows share the list's height, up to 130 high each.)
+        int rows = 0;
+        for (int i = 0; i < n; i++) if (items[i].kind != K_BACK && items[i].kind != K_SECTION) rows++;
+        if (rows > 0)
+        {
+            pitch = std::min(KR(130), avail / rows);
+            rowH = pitch - KR(12);
+            total = 0;
+            for (int i = 0; i < n; i++)
+                if (items[i].kind != K_BACK && items[i].kind != K_SECTION) { at[i] = total; total += pitch; }
+        }
+    }
     rowX = listX; rowW = listW;
     if (total <= avail) scrollPx = 0;
     else if (at[selected] >= 0)
@@ -1100,8 +1126,8 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         scrollPx = std::clamp(scrollPx, 0, total - avail);
     }
     rowY.assign(n, -1);
-    ctlW = K(186);
-    ctlX = listX + listW - K(14) - ctlW;
+    ctlW = KR(186);
+    ctlX = listX + listW - KR(14) - ctlW;
     bool firstSection = true;
     for (int i = 0; i < n; i++)
     {
@@ -1110,49 +1136,79 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         const int y = top + at[i] - scrollPx;
         const bool isSection = it.kind == K_SECTION;
         if (isSection && !firstSection && y - sepH / 2 >= top && y - sepH / 2 < listBottom)
-            Rule(c, listX, y - sepH / 2 - 1, listW, std::max(1, K(1)), Line);
+            Rule(c, listX, y - sepH / 2 - 1, listW, std::max(1, KR(1)), Line);
         if (isSection) firstSection = false;
         if (y < top || y + (isSection ? headH : rowH) > listBottom) continue; // (scrolled out of view)
         rowY[i] = y;
         if (isSection)
         {
-            if (it.icon >= 0) Glass::DrawIcon(c, it.icon, listX + K(22), y + headH * 0.52f, 12 * k, GlassText);
-            T(c, listX + K(50), y + headH * 2 / 3 + K(1), it.label, K(22), GlassText, true);
+            if (it.icon >= 0) Glass::DrawIcon(c, it.icon, listX + KR(22), y + headH * 0.52f, 12 * kr, GlassText);
+            T(c, listX + KR(50), y + headH * 2 / 3 + KR(1), it.label, KR(22), GlassText, true);
             continue;
         }
         const bool sel = i == selected, off = it.disabled;
-        if (sel) GlowRound(c, listX, y, listW, rowH, 10 * k, k);
-        Glass::Round(c, listX, y, listW, rowH, 10 * k, sel ? RowChosen : Row, sel ? ChosenEdge : 0, sel ? 2.2f * k : std::max(1.0f, k));
-        if (!sel) Glass::Rim(c, listX, y, listW, rowH, 10 * k, std::max(1.0f, k), 0x50, 0x14);
+        if (sel) GlowRound(c, listX, y, listW, rowH, 10 * kr, kr);
+        Glass::Round(c, listX, y, listW, rowH, 10 * kr, sel ? RowChosen : Row, sel ? ChosenEdge : 0, sel ? 2.2f * kr : std::max(1.0f, k));
+        if (!sel) Glass::Rim(c, listX, y, listW, rowH, 10 * kr, std::max(1.0f, k), 0x50, 0x14);
         const uint32_t ink = off ? GlassOff : GlassText;
-        const int in = it.indent * K(26); // (a row inside an open folder)
-        if (it.kind == K_FOLDER) Glass::DrawIcon(c, it.choice == 1 ? Glass::I_CHEVRON_D : Glass::I_CHEVRON_R, listX + K(36), y + rowH * 0.5f, 9 * k, ink);
-        else if (it.icon >= 0) Glass::DrawIcon(c, it.icon, listX + K(36) + in, y + rowH * 0.5f, 11 * k, ink);
-        const int base = y + rowH / 2 + K(7); // (the baseline of the row's text)
+        if (tallRows)
+        {
+            // (A tall row: its icon in a glass circle, the name large, a line under it, what it is
+            // set to now on the right before the arrow.)
+            const int d = std::min((int)(rowH * 0.62f), KR(64)), cxI = listX + KR(22) + d / 2, cyI = y + rowH / 2;
+            Glass::Round(c, cxI - d / 2, cyI - d / 2, d, d, d * 0.5f, 0x400A111C);
+            Glass::Rim(c, cxI - d / 2, cyI - d / 2, d, d, d * 0.5f, std::max(1.0f, kr), 0x60, 0x14);
+            if (it.icon >= 0) Glass::DrawIcon(c, it.icon, (float)cxI, (float)cyI, d * 0.27f, ink);
+            const int tx = cxI + d / 2 + KR(22);
+            const int vpx2 = std::min(KR(18), (int)(rowH * 0.2f));
+            const int vw = it.value.empty() ? 0 : W(it.value, vpx2) + KR(20);
+            const int maxW = listX + listW - KR(50) - vw - tx;
+            const bool twoLines = !it.sub.empty() && rowH >= KR(54);
+            // (Sizes from the row's height, so they sit the same on a PC and a phone.)
+            const int lpx = std::min(KR(26), (int)(rowH * 0.28f)), spx = std::min(KR(17), (int)(rowH * 0.18f));
+            T(c, tx, twoLines ? y + (int)(rowH * 0.47f) : y + rowH / 2 + lpx * 7 / 20, it.label, lpx, ink, true);
+            if (twoLines)
+            {
+                std::string sub = UiLang::Tr(it.sub);
+                if (W(sub, spx, false, false) > maxW)
+                {
+                    while (sub.size() > 1 && W(sub + "...", spx, false, false) > maxW) { sub.pop_back(); while (!sub.empty() && (sub.back() & 0xC0) == 0x80) sub.pop_back(); }
+                    sub += "...";
+                }
+                T(c, tx, y + (int)(rowH * 0.77f), sub, spx, Desc, false, false);
+            }
+            Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - KR(28), y + rowH * 0.5f, 10 * kr, ink);
+            if (!it.value.empty()) T(c, listX + listW - KR(48) - W(it.value, vpx2), y + rowH / 2 + vpx2 * 7 / 20, it.value, vpx2, GlassHint);
+            continue;
+        }
+        const int in = it.indent * KR(26); // (a row inside an open folder)
+        if (it.kind == K_FOLDER) Glass::DrawIcon(c, it.choice == 1 ? Glass::I_CHEVRON_D : Glass::I_CHEVRON_R, listX + KR(36), y + rowH * 0.5f, 9 * kr, ink);
+        else if (it.icon >= 0) Glass::DrawIcon(c, it.icon, listX + KR(36) + in, y + rowH * 0.5f, 11 * kr, ink);
+        const int base = y + rowH / 2 + KR(7); // (the baseline of the row's text)
         {
             // (A long name cut to fit before the controls on the right.)
-            const int maxW = (it.kind == K_TOGGLE || it.kind == K_PICKER ? ctlX : listX + listW - K(90)) - (listX + K(76) + in) - K(12);
+            const int maxW = (it.kind == K_TOGGLE || it.kind == K_PICKER ? ctlX : listX + listW - KR(90)) - (listX + KR(76) + in) - KR(12);
             std::string label = it.label;
             const bool bold = it.kind == K_FOLDER;
-            if (W(label, K(20), bold) > maxW)
+            if (W(label, KR(20), bold) > maxW)
             {
-                while (label.size() > 1 && W(label + "...", K(20), bold) > maxW) label.pop_back();
+                while (label.size() > 1 && W(label + "...", KR(20), bold) > maxW) label.pop_back();
                 label += "...";
             }
-            T(c, listX + K(76) + in, base, label, K(20), ink, bold);
+            T(c, listX + KR(76) + in, base, label, KR(20), ink, bold);
         }
         if (it.kind == K_FOLDER && !it.value.empty())
-            T(c, listX + listW - K(20) - W(it.value, K(17)), base, it.value, K(17), GlassHint);
+            T(c, listX + listW - KR(20) - W(it.value, KR(17)), base, it.value, KR(17), GlassHint);
         if (it.kind == K_TOGGLE)
         {
-            const int hw = (ctlW - K(6)) / 2, ph2 = std::min(rowH - K(6), K(32)), py = y + (rowH - ph2) / 2;
+            const int hw = (ctlW - KR(6)) / 2, ph2 = std::min(rowH - KR(6), KR(32)), py = y + (rowH - ph2) / 2;
             for (int s = 0; s < 2; s++)
             {
                 const bool on = s == it.choice;
-                const int x = ctlX + s * (hw + K(6));
+                const int x = ctlX + s * (hw + KR(6));
                 Glass::Round(c, x, py, hw, ph2, ph2 * 0.5f, on ? (off ? 0x50FFFFFF : Pill) : PillOff, on ? (off ? 0x40FFFFFF : PillEdge) : PillOffEdge, std::max(1.0f, k));
                 const std::string& name = s < (int)it.choices.size() ? it.choices[s] : (s ? std::string("ON") : std::string("OFF"));
-                TCentred(c, x + hw / 2, py + ph2 / 2 + K(6), name, K(18), off ? GlassOff : on ? PillInk : 0xFFDCE2EA, on);
+                TCentred(c, x + hw / 2, py + ph2 / 2 + KR(6), name, KR(18), off ? GlassOff : on ? PillInk : 0xFFDCE2EA, on);
             }
         }
         else if (it.kind == K_PICKER || (it.kind == K_PLAIN && !it.value.empty()))
@@ -1160,25 +1216,25 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             const bool arrows = it.kind == K_PICKER && !off;
             if (arrows)
             {
-                Glass::DrawIcon(c, Glass::I_CHEVRON_L, ctlX + K(14), y + rowH * 0.5f, 9 * k, GlassText);
-                Glass::DrawIcon(c, Glass::I_CHEVRON_R, ctlX + ctlW - K(14), y + rowH * 0.5f, 9 * k, GlassText);
+                Glass::DrawIcon(c, Glass::I_CHEVRON_L, ctlX + KR(14), y + rowH * 0.5f, 9 * kr, GlassText);
+                Glass::DrawIcon(c, Glass::I_CHEVRON_R, ctlX + ctlW - KR(14), y + rowH * 0.5f, 9 * kr, GlassText);
             }
-            int vpx = K(19);
-            while (vpx > 8 && W(it.value, vpx, true) > ctlW - K(56)) vpx--;
+            int vpx = KR(19);
+            while (vpx > 8 && W(it.value, vpx, true) > ctlW - KR(56)) vpx--;
             if (it.kind == K_PICKER) TCentred(c, ctlX + ctlW / 2, base, it.value, vpx, ink, true);
             else T(c, ctlX + ctlW - W(it.value, vpx), base, it.value, vpx, off ? GlassOff : GlassHint);
         }
         else if (it.kind == K_LINK)
         {
-            Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - K(26), y + rowH * 0.5f, 9 * k, ink);
-            if (!it.value.empty()) T(c, listX + listW - K(44) - W(it.value, K(17)), base, it.value, K(17), GlassHint);
+            Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - KR(26), y + rowH * 0.5f, 9 * kr, ink);
+            if (!it.value.empty()) T(c, listX + listW - KR(44) - W(it.value, KR(17)), base, it.value, KR(17), GlassHint);
         }
     }
     if (total > avail) // (a thin bar: where the rows in view are among them all)
     {
-        const int bx = listX + listW + K(6), bw = std::max(2, K(3));
+        const int bx = listX + listW + KR(6), bw = std::max(2, KR(3));
         Glass::Round(c, bx, top, bw, avail, bw * 0.5f, 0x18FFFFFF);
-        const int th = std::max(K(24), avail * avail / total), ty = top + (avail - th) * scrollPx / std::max(1, total - avail);
+        const int th = std::max(KR(24), avail * avail / total), ty = top + (avail - th) * scrollPx / std::max(1, total - avail);
         Glass::Round(c, bx, ty, bw, th, bw * 0.5f, 0x70FFFFFF);
     }
 
@@ -1282,6 +1338,8 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             int cy = y0 + row * (rowH + gapY);
             const int ci = onlyOn ? (i == choices - 1 ? it.choice : 0) : i; // (the choice this card shows)
             const bool on = ci == it.choice;
+            if (!onlyOn && !it.disabled && (it.kind == K_PICKER || it.kind == K_TOGGLE)) // (a card to tap: its whole cell)
+                pickRects.push_back({ side ? sideX : cx - cellW / 2, cy - K(6), side ? sideW + gapX + picW : cellW, rowH + K(12), ci });
             if (pictures)
             {
                 const int x = side ? sideX + sideW + gapX : cx - picW / 2, py = side ? cy + (rowH - picH) / 2 : cy;
@@ -1321,6 +1379,16 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         }
         TCentred(c, pvX + pvW / 2, by + bh + K(32), it.value, K(22), GlassText, true);
     }
+    else if (it.kind == K_LINK && it.icon >= 0 && it.preview <= P_NONE && regionBottom - regionTop > K(120))
+    {
+        // (A page of its own, as on the SETTINGS page: its icon large in a glass circle, and what it
+        // is set to now under it.)
+        const int d = K(120), cx = pvX + pvW / 2, cy = regionTop + (regionBottom - regionTop - d - K(50)) / 2;
+        Glass::Round(c, cx - d / 2, cy, d, d, d * 0.5f, 0x400A111C);
+        Glass::Rim(c, cx - d / 2, cy, d, d, d * 0.5f, std::max(1.0f, 1.4f * k), 0x80, 0x18);
+        Glass::DrawIcon(c, it.icon, (float)cx, cy + d * 0.5f, 30 * k, GlassText);
+        if (!it.value.empty()) TCentred(c, cx, cy + d + K(40), it.value, K(20), GlassText, true);
+    }
     else if (it.kind != K_BACK && !it.value.empty() && regionBottom - regionTop > K(40))
     {
         // (No pictures, as for LANGUAGE: the choice on now, large.)
@@ -1347,14 +1415,14 @@ inline void Menu::DrawDialog(Canvas& c, const std::string& title, const std::str
     auto K = [&](float v) { return (int)std::lround(v * k); };
     if (solid) Glass::Frost(c, 0, 0, c.w, c.h, 0);
     else Glass::Round(c, 0, 0, c.w, c.h, 0, GlassShade);
-    Glass::Round(c, 0, 0, c.w, c.h, 0, 0x40000000); // (the game a little darker behind the card)
+    Glass::Round(c, 0, 0, c.w, c.h, 0, 0x1C000000); // (the game a touch darker behind the card)
     const int pw = std::min(c.w - K(32), K(520)), innerW = pw - K(64);
     const auto lines = text.empty() ? std::vector<std::string>() : Wrap(text, K(17), innerW, 4);
     const int ph = K(250) + (int)lines.size() * K(25);
     const int px = (c.w - pw) / 2, py = (c.h - ph) / 2;
     Glass::Shadow(c, px, py, pw, ph, 26 * k, 30 * k, 0x90);
     if (solid) Glass::Frost(c, px, py, pw, ph, 26 * k);
-    Glass::Round(c, px, py, pw, ph, 26 * k, 0xB0101826);
+    Glass::Round(c, px, py, pw, ph, 26 * k, Panel); // (the same glass as the settings pages)
     Glass::Rim(c, px, py, pw, ph, 26 * k, std::max(1.2f, 1.8f * k));
     if (dialogIcon >= 0)
     {

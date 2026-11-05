@@ -2318,6 +2318,10 @@ int main(int argc, char** argv)
         // The home bar at the bottom fades away, and a swipe up from the bottom edge (where the
         // DS's SELECT and START are) needs a second swipe to leave the game.
         SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+        // The player's own music (Spotify, Apple Music) keeps playing with the game's sound mixed in,
+        // not stopped when the game starts (the Ambient audio session; the silent switch still
+        // silences the game, as before).
+        SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
 #endif
 #ifdef __SWITCH__
         // The touch screen is read from its finger events (see switchFinger), not as a mouse.
@@ -4771,7 +4775,7 @@ int main(int argc, char** argv)
         M_WIDELINES, M_AUTODETAIL, M_WIDEGPU, M_GPU3D, M_SHOWFPS, M_BUTTONS, M_PADTOUCH, M_EMULATION,
         M_CONTROLS, M_TOUCHLAYOUT, M_STARTBTN, M_FAST, M_FFLOWRES, M_SAVESTATE, M_LOADSTATE, M_RESET, M_QUIT,
         M_DISPLAY, M_LANGUAGE, M_SOUND, M_GRAPHICS, M_CONTROLMENU, M_BACK, M_CHEATS, M_NOTHING,
-        M_VOLUME, M_MUSIC, M_EFFECTS, M_MUSICQUIET, M_FFMUTE, M_ASPECT, M_RA, M_RA_ON, M_RA_ACCOUNT, M_RA_GAME, M_RA_LOGIN, M_RA_TYPED, M_RA_CANCEL, M_BOTHVER,
+        M_VOLUME, M_MUSIC, M_EFFECTS, M_MUSICQUIET, M_SONGNAMES, M_FFMUTE, M_ASPECT, M_RA, M_RA_ON, M_RA_ACCOUNT, M_RA_GAME, M_RA_LOGIN, M_RA_TYPED, M_RA_CANCEL, M_BOTHVER,
         M_RA_LIST, M_ACH_POINTS, M_ACH_STATUS, M_ACH_RARITY,
         M_CSEARCH, M_SEARCH_LETTER, M_SEARCH_DELETE, M_SEARCH_SPACE, M_SEARCH_CLEAR, M_SEARCH_DONE,
         M_CDETAIL_TOGGLE, M_CINFO, M_BACKUPS, M_RESTORE_CONFIRM, M_LOAD_CONFIRM,
@@ -4881,6 +4885,7 @@ int main(int argc, char** argv)
         focus.manualFlip = false;
     };
 #endif
+    TouchPad* touchPadForMenu = nullptr; // (the on-screen controls, for CONTROLS' preview: set once they exist)
     auto buildMenu = [&]() {
         menu.columns = menuPage == PAGE_MAIN ? 4 : 0; // (the first page: eight glass tiles)
         menu.style = 0; // (a list; settings pages set 1 below)
@@ -4889,6 +4894,10 @@ int main(int argc, char** argv)
         menu.padNote.clear();
         menu.headerNote.clear();
         menu.listShare = 0.605f;
+        menu.tallRows = false;
+        #ifdef SSR_PHONE
+        menu.touchRows = 1.5f; // (settings rows big enough for a finger)
+        #endif
         if (menuPage == PAGE_KEYS)
         {
             // A settings page (ui_settings.h): KEYBOARD / CONTROLLER, the DS's buttons, Fulldex's own
@@ -5066,15 +5075,40 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_HUB_SETTINGS)
         {
-            add(M_DISPLAY, "DISPLAY", "");
-            add(M_GRAPHICS, "GRAPHICS", "");
-            add(M_PLAYBACK, "PLAYBACK", fastLock ? "FAST FORWARD ON" : "", true); // (fast forward, speed, slow motion, turbo, rewind)
-            add(M_SOUND, "SOUND", "");
-            add(M_CONTROLMENU, "CONTROLS", "");
-            // (OPTIONAL FEATURES is gone from here: LIVE UPDATES, QUICK ACTIONS and TYPE MATCHUPS are in
-            // COMPANION, STATE THUMBNAILS in SAVE and LOAD; the rest work in the game list only and are
-            // in its SETTINGS.)
-            add(M_BACK, "BACK", "");
+            // (A settings page of five tall rows (Menu::tallRows): each page's icon, a line on what is
+            // in it, and what it is set to now; the chosen one's icon large in the preview.
+            // OPTIONAL FEATURES is gone from here: LIVE UPDATES, QUICK ACTIONS and TYPE MATCHUPS are in
+            // COMPANION, STATE THUMBNAILS in SAVE and LOAD; the rest work in the game list only.)
+            settingsPage(Glass::I_GEAR);
+            menu.tallRows = true;
+            auto link = [&](int id, const char* label, int icon, const std::string& value, const char* sub, const char* desc) {
+                add(id, label, value, true);
+                MenuItem& it = menu.items.back();
+                it.kind = Menu::K_LINK;
+                it.icon = icon;
+                it.sub = sub;
+                it.desc = desc;
+            };
+            static const char* const layouts[] = { "WIDESCREEN", "BIG + SMALL", "BIG TOP", "BIG BOTTOM", "SIDE BY SIDE", "STACKED", "TOP ONLY", "BOTTOM ONLY" };
+            const int lc = layoutChoice();
+            link(M_DISPLAY, "DISPLAY", Glass::I_MONITOR, lc >= 0 && lc < 8 ? layouts[lc] : "", "Screen layout, language, overlays",
+                 "How the two screens are shown, the language, the shape of the picture and what shows over the game: battle buttons, FPS, the companion window and party HUD.");
+#ifdef __SWITCH__
+            static const char* const res[] = { "192", "288", "384", "540", "720", "1080", "1440", "2160" };
+#else
+            static const char* const res[] = { "192P", "288P", "384P", "540P", "720P", "1080P", "1440P", "2160P" };
+#endif
+            const int ri = detailIndex();
+            link(M_GRAPHICS, "GRAPHICS", Glass::I_SPARKLE, std::string(ri >= 0 && ri < 8 ? res[ri] : "") + "  \xC2\xB7  " + (cfg.fps60 ? "60 FPS" : "30 FPS"),
+                 "Frame rate, widescreen, 3D resolution", "How the game is drawn: its frame rate, the widescreen world, how sharp the 3D is and what does the work.");
+            link(M_PLAYBACK, "PLAYBACK", Glass::I_FAST, fastLock ? "FAST FORWARD ON" : std::to_string(cfg.fastSpeed) + "X", "Fast forward, rewind, reset",
+                 "Fast forward and its speed, slow motion, turbo A, rewind, and resetting the game.");
+            link(M_SOUND, "SOUND", Glass::I_SPEAKER, cfg.volume == 0 ? std::string("OFF") : std::to_string(cfg.volume) + "%", "Volume, music, your own music",
+                 "The game's volume, its music and sound effects each on their own, and how it plays alongside your own music.");
+            std::string padName = pads.Current() ? Controls::KindName(Controls::KindOf(pads.Current())) : "KEYBOARD";
+            if (padName.size() > 11 && padName.compare(padName.size() - 11, 11, " CONTROLLER") == 0) padName.resize(padName.size() - 11);
+            link(M_CONTROLMENU, "CONTROLS", Glass::I_PAD, padName, "Keys and buttons, shortcuts, touch",
+                 "Your keys and controller buttons, Fulldex's shortcuts, the START button and the touch controls.");
         }
         else if (menuPage == PAGE_HUB_QUIT)
         {
@@ -5170,6 +5204,17 @@ int main(int argc, char** argv)
             picker(M_EFFECTS, "SOUND EFFECTS", Glass::I_SPEAKER, Menu::P_NONE, {}, -1, "How loud everything else is: footsteps, menus, moves and cries.", "Left and right change it in steps of 10%.");
             menu.items.back().value = cfg.effects == 0 ? std::string("OFF") : std::to_string(cfg.effects) + "%";
             menu.items.back().slider = cfg.effects / 10;
+#ifdef __ANDROID__
+            // (Android shows other apps' songs only to an app given notification access.)
+            add(M_SONGNAMES, "SHOW SONG NAMES", NowPlaying::Now().needAccess ? "OFF" : "ON", true);
+            {
+                MenuItem& it = menu.items.back();
+                it.kind = Menu::K_LINK;
+                it.icon = Glass::I_NOTE;
+                it.desc = "Show the song your music app is playing in the pause menu. Android asks you to allow Fulldex in its Notification access settings.";
+                it.tip = "Fulldex reads no notifications: this only lets it see your music app's song.";
+            }
+#endif
             if (NowPlaying::Supported())
                 toggle(M_MUSICQUIET, "QUIET GAME MUSIC", Glass::I_NOTE, Menu::P_NONE, cfg.musicQuiet,
                        "While your own music app is playing, turn the game's music off and keep its sound effects.", "Its music comes back when yours stops or pauses.");
@@ -5785,9 +5830,11 @@ int main(int argc, char** argv)
             menu.items.back().desc = "Move and resize the on-screen buttons.";
             menu.items.back().tip = "Drag them where your thumbs fall, then save.";
             // (The preview: the on-screen buttons where they are now, in parts of the screen.)
+            // (touchPadForMenu: the on-screen controls, made after this function; null until then.)
             menu.touchShapes.clear();
-            if (touchPad.w > 0 && touchPad.h > 0)
+            if (touchPadForMenu && touchPadForMenu->w > 0 && touchPadForMenu->h > 0)
             {
+                const TouchPad& touchPad = *touchPadForMenu;
                 const float tw = (float)touchPad.w, th = (float)touchPad.h;
                 menu.touchShapes.push_back({ touchPad.dpadX / tw, touchPad.dpadY / th, touchPad.dpadR / th, 0, 0, "" });
                 for (const TouchPad::Button& b : touchPad.buttons)
@@ -5980,6 +6027,7 @@ int main(int argc, char** argv)
     int mouseX = 0, mouseY = 0;
     // On-screen controls (touch screens): shown while no controller is connected.
     TouchPad touchPad;
+    touchPadForMenu = &touchPad;
     const std::string touchLayoutPath = TouchLayout::Profile::Path(opt.config, "ds");
     touchPad.profile.Load(touchLayoutPath);
     bool touchPadUsed = false, touchMenuHeld = false, prevTouchMenu = false;
@@ -7210,6 +7258,23 @@ int main(int argc, char** argv)
         }
         heldNav = heldNow;
 
+        // A choice card tapped in a settings page's preview (Menu::pickWanted): left or right pressed
+        // on the row, a step a frame, the shorter way round, until it is that choice.
+        {
+            static int pickGuard = 0;
+            if (menu.pickWanted >= 0 && menu.open && menu.style == 1 && menu.selected >= 0 && menu.selected < (int)menu.items.size())
+            {
+                const MenuItem& it = menu.items[menu.selected];
+                const int nc = (int)it.choices.size();
+                if (pickGuard == 0) pickGuard = 2 * nc + 2;
+                if (it.choice == menu.pickWanted || nc <= 0 || --pickGuard <= 0) { menu.pickWanted = -1; pickGuard = 0; }
+                else if (it.kind == Menu::K_TOGGLE) nav.accept = true;
+                else if ((menu.pickWanted - it.choice + nc) % nc <= (it.choice - menu.pickWanted + nc) % nc) nav.right = true;
+                else nav.left = true;
+            }
+            else { menu.pickWanted = -1; pickGuard = 0; }
+        }
+
         // NOW PLAYING: looked at often while the tiles show, otherwise now and then (for QUIET GAME
         // MUSIC, and so the bar is ready when the menu opens); a button pressed on the bar goes to
         // the music app.
@@ -7227,13 +7292,23 @@ int main(int argc, char** argv)
             // (Always there where the system can tell us: the tiles never change size. With nothing
             // playing it says so, its buttons dimmed.)
             menu.nowPlaying.shown = NowPlaying::Supported();
-            menu.nowPlaying.idle = !np.active;
+            menu.nowPlaying.idle = !np.active && !np.needAccess;
+            menu.nowPlaying.blind = np.needAccess;
             menu.nowPlaying.playing = np.playing;
-            menu.nowPlaying.canPrev = np.canPrev;
-            menu.nowPlaying.canNext = np.canNext;
+            // (Without notification access the buttons are media keys: always there.)
+            menu.nowPlaying.canPrev = np.canPrev || np.needAccess;
+            menu.nowPlaying.canNext = np.canNext || np.needAccess;
             menu.nowPlaying.title = np.title;
             menu.nowPlaying.artist = np.artist;
             menu.nowPlaying.app = np.app;
+            static unsigned artShown = ~0u; // (the art copied only when it changes)
+            if (np.artVersion != artShown)
+            {
+                artShown = np.artVersion;
+                menu.nowPlaying.art = np.art;
+                menu.nowPlaying.artW = np.artW;
+                menu.nowPlaying.artH = np.artH;
+            }
         }
 
         if (toggleMenu)
@@ -7783,6 +7858,9 @@ int main(int argc, char** argv)
             }
             case M_MUSICQUIET:
                 cfg.musicQuiet = !cfg.musicQuiet;
+                break;
+            case M_SONGNAMES:
+                NowPlaying::OpenSettings();
                 break;
             case M_FFMUTE:
                 cfg.ffMute = !cfg.ffMute;

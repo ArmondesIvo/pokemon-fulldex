@@ -2,6 +2,7 @@
 // Drawn into an ARGB buffer the size of the output, so the window and the
 // headless screenshots show the same thing.
 #pragma once
+#include <array>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -179,6 +180,7 @@ struct MenuItem
     // preview names them and which is on now, the picture drawn for each (Menu::P_*, art: the
     // picture's variant for each choice), and the preview's description and tip.
     int kind = 0;
+    std::string sub; // (Menu::tallRows: a short line under the row's name)
     std::vector<std::string> choices;
     std::vector<int> art;
     int choice = -1;
@@ -215,6 +217,13 @@ struct Menu
     std::vector<std::string> padLabels;
     std::string padNote; // (under the labelled controller: how else the menu opens, START + SELECT)
     float listShare = 0.605f;
+    float touchRows = 1.0f; // (phones: the settings rows this much larger, for a finger)
+    bool tallRows = false;
+    // (Touch: the preview's choice cards as drawn, each x, y, w, h and the choice it shows; one tapped
+    // is pickWanted, which the caller reaches by pressing left or right on the row, a step a frame.)
+    mutable std::vector<std::array<int, 5>> pickRects;
+    int pickWanted = -1;
+    int pickY = 0; // (the tap's y, for SettingsTap)  // (a page of a few links, as SETTINGS: rows sharing the list's height, a line under each name)
     // P_SHORTCUTS (CONTROLS): Fulldex's four shortcuts, FAST, SWAP, SAVE, LOAD, each with its key
     // and its controller button ("" where there is none). P_TOUCH: the on-screen controls, each
     // a circle (r) or a pill (w, h), in parts of the screen.
@@ -347,7 +356,7 @@ struct Menu
             return;
         }
         const int item=ItemAt(x,y);
-        if(style==1){SettingsTap(item,x,input);return;}
+        if(style==1){pickY=y;SettingsTap(item,x,input);return;}
         if(item==-2)input.back=true;
         else if(item>=0)
         {
@@ -395,6 +404,7 @@ struct Menu
     {
         bool shown = false, playing = false, canPrev = true, canNext = true;
         bool idle = false; // no music app playing: "No music playing", the buttons dimmed
+        bool blind = false; // the buttons work but the song cannot be seen (Android without notification access)
         std::string title, artist, app;
         std::vector<uint32_t> art; int artW = 0, artH = 0; // the album art, ARGB, if the app gives it
     } nowPlaying;
@@ -461,8 +471,10 @@ struct Menu
             while (!t.empty() && width(t + "...", px, bold) > tw) { t.pop_back(); while (!t.empty() && (t.back() & 0xC0) == 0x80) t.pop_back(); }
             return t + "...";
         };
-        const std::string line1 = idle ? UiLang::Tr("No music playing") : nowPlaying.title;
+        const bool blind = nowPlaying.blind && !idle;
+        const std::string line1 = idle ? UiLang::Tr("No music playing") : blind ? UiLang::Tr("Your music") : nowPlaying.title;
         const std::string line2 = idle ? UiLang::Tr("Play something in any music app to control it here")
+            : blind ? UiLang::Tr("To see the song: Settings, Sound, Show Song Names")
             : nowPlaying.artist.empty() ? nowPlaying.app : nowPlaying.artist + "  \xC2\xB7  " + nowPlaying.app;
         if (UseClean())
         {
@@ -540,6 +552,7 @@ struct Menu
         if (columns > 0) { DrawTiles(c, hint); return; }
         int scale = std::min(c.w, c.h) / 240;
         if (scale < 1) scale = 1;
+        if (touchRows > 1.0f) scale = std::max(scale, (int)std::lround(scale * touchRows * 0.9f)); // (phones: bigger for a finger)
         int lineH = (UiLang::Tall() ? 16 : 11) * scale;
         // (Rows closer together if they would not all fit on the screen, down to 9 * scale.)
         // With no title the box starts with the first item.
