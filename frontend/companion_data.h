@@ -210,12 +210,14 @@ inline Profile ProfileFor(const std::string& code, int revision)
     // same save layout found in memory by looking.)
     if((code=="IPKE" || code=="IPGE") && revision==0)
         p={true,false,0x021D2228,0x10,0x90,0x644,0x12B8,0x1234,0x64,0x6909,493,{165,50,101,12,40,64,24,30}};
+    // (Other HeartGold and SoulSilver revisions tested (rev 10) keep the save and the field where
+    // the US carts do: the same addresses tried first, the save looked for if they do not hold.)
     else if(family=="IPK" || family=="IPG")
-        p={true,false,0,0x10,0x90,0x644,0x12B8,0x1234,0x64,0x6909,493,{165,50,101,12,40,64,24,30}};
+        p={true,false,0x021D2228,0x10,0x90,0x644,0x12B8,0x1234,0x64,0x6909,493,{165,50,101,12,40,64,24,30}};
     else if(code=="CPUE" && revision==1)
         p={true,false,0x021C0794,0x14,0x98,0x630,0x1328,0x1280,0x68,0x8073,493,{165,50,100,12,40,64,15,30}};
     else if(family=="CPU")
-        p={true,false,0,0x14,0x98,0x630,0x1328,0x1280,0x68,0x8073,493,{165,50,100,12,40,64,15,30}};
+        p={true,false,0x021C0794,0x14,0x98,0x630,0x1328,0x1280,0x68,0x8073,493,{165,50,100,12,40,64,15,30}};
     else if(code=="IRBO" && revision==0)
         p={true,true,0x020A7298,0,0x18E00,0x18400,0x21600,0x19500,0x19400,0x21B31,649,{310,83,109,48,64}};
     else if(family=="IRB" || family=="IRA")
@@ -310,14 +312,12 @@ inline Snapshot Read(const Profile& p,const Reader& read)
     {
         base=pointer(p.pointer);
         if(p.gen5){if(!MainRange(base,0x14))base=0;else{base=pointer(base+0x10);if(MainRange(base,0x38))base=pointer(base+0x34);else base=0;}}
-        if(!MainRange(base, p.gen5?0x24000:0x20000)){s.message="START OR LOAD A GAME TO READ ITS DATA";return s;}
-        base+=p.body;
+        if(MainRange(base, p.gen5?0x24000:0x20000))base+=p.body;else base=0;
+        // (A revision that keeps it elsewhere: the party's header not there; looked for instead.)
+        if(base){auto head=bytes(base+p.party,4);if(head.size()!=4||U32(head.data())!=6)base=FindSave(p,read);}
     }
-    else
-    {
-        base=FindSave(p,read);
-        if(!base){s.message="START OR LOAD A GAME TO READ ITS DATA";return s;}
-    }
+    else base=FindSave(p,read);
+    if(!base){s.message="START OR LOAD A GAME TO READ ITS DATA";return s;}
     auto head=bytes(base+p.party,8);
     if(head.size()!=8||U32(head.data())!=6||U32(head.data()+4)>6){s.message="PARTY DATA IS NOT READY";return s;}
     int count=U32(head.data()+4),stride=p.gen5?0xDC:0xEC;
