@@ -205,7 +205,7 @@ struct Menu
     enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK, K_FOLDER };
     std::string headerNote; // (settings pages: a few words at the header's right, CHEATS' counts)
     // A preview's pictures (MenuItem::preview), one per choice (its art: which variant).
-    enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER, P_MOTION, P_WIDE, P_RES, P_PAD, P_KEY, P_SHORTCUTS, P_TOUCH, P_CPARTY, P_CBAG, P_CDEX, P_CPLACE, P_CBATTLE };
+    enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER, P_MOTION, P_WIDE, P_RES, P_PAD, P_KEY, P_SHORTCUTS, P_TOUCH, P_CPARTY, P_CBAG, P_CDEX, P_CPLACE, P_CBATTLE, P_CMON, P_CITEM, P_CDEXMON, P_CGUIDE, P_CBFOE, P_CBMOVE, P_CBCOVER };
     // P_PAD and P_KEY (CONTROLS): the controller drawn in its maker's layout (padStyle: Controls::Style;
     // a choice's art is the input lit, Controls::IN_*), the inputs held now lit too (padLive, a bit
     // per input), or a keyboard's key.
@@ -219,14 +219,54 @@ struct Menu
     float listShare = 0.605f;
     float touchRows = 1.0f; // (phones: the settings rows this much larger, for a finger)
     bool tallRows = false;
+    float rowTall = 1.0f; // (a settings page's rows this many times as high, their text and icons a little larger: BAG)
     // COMPANION's previews (P_CPARTY, P_CBAG, P_CDEX, P_CPLACE): what the game holds now, read by
     // the companion (companion_data.h); icons and the map from the player's own ROM, ARGB.
     struct CompanionView
     {
-        struct Mon { std::string name, item; int level = 0, hp = 0, maxHp = 0, status = 0; bool egg = false; std::vector<uint32_t> icon; int iconW = 0, iconH = 0; };
+        struct Mon
+        {
+            std::string name, item; int level = 0, hp = 0, maxHp = 0, status = 0; bool egg = false; std::vector<uint32_t> icon; int iconW = 0, iconH = 0;
+            // (PARTY's summary, P_CMON: its types (CompanionTypes numbers, -1 none), nature, ability,
+            // stats with IVs and EVs (HP, Attack, Defence, Speed, Sp. Atk, Sp. Def), moves.)
+            int type1 = -1, type2 = -1;
+            std::string nature, ability;
+            int stats[6] = {}, iv[6] = {}, ev[6] = {};
+            struct Move { std::string name; int type = -1, pp = 0, maxPp = 0; };
+            std::vector<Move> moves;
+            std::vector<std::string> upcoming; // (moves it learns next: "Lv 40 Flamethrower")
+        };
         std::vector<Mon> party;
         struct Pocket { std::string name; int stacks = 0, total = 0; };
         std::vector<Pocket> pockets;
+        // (BAG's items in the pocket shown, P_CITEM: what the game says of each, how many, and
+        // which of the party hold one.)
+        struct BagItem { std::string name, desc, pocket; int quantity = 0; std::vector<int> heldBy; std::vector<uint32_t> icon; }; // (icon: 32 x 32 from the ROM, or none)
+        std::vector<BagItem> bag;
+        // (POKEDEX's entries as listed, P_CDEXMON: number, types, seen or caught, the Pokedex's
+        // words, base stats, abilities, how it evolves, its icon from the ROM.)
+        struct DexEntry
+        {
+            int id = 0, type1 = -1, type2 = -1, base[6] = {}; bool seen = false, caught = false, hidden = false; // (hidden: not seen, not yet shown)
+            std::string name, desc; std::vector<std::string> abilities, evolutions; std::vector<uint32_t> icon;
+            struct Learn { int level = 0, type = -1; std::string move; };
+            std::vector<Learn> learns; // (moves it learns by level, in order)
+        };
+        std::vector<DexEntry> dex;
+        // (GUIDE's answers, P_CGUIDE: each shown once chosen with Enter or a tap.)
+        struct GuideAnswer { std::string text; bool shown = false; };
+        std::vector<GuideAnswer> guide;
+        bool dexMoves = false;
+        // (BATTLE INFO, in a battle: the foe (P_CBFOE: its types, ability, item, HP and what hits it
+        // hard), your Pokemon's moves against it (P_CBMOVE) and how each of your party matches up
+        // (P_CBCOVER: its best move against the foe, the foe's worst known move against it).
+        // Percentages as CompanionTypes': 200 twice as strong; -1 not known.)
+        Mon foe;
+        std::string mine;
+        struct BattleMove { std::string name, note; int type = -1, category = -1, power = 0, accuracy = 0, pp = 0, maxPp = 0, percent = -1; };
+        std::vector<BattleMove> moves;
+        struct Coverage { int party = -1, out = -1, in = -1; };
+        std::vector<Coverage> coverage; // (P_CDEXMON shows the moves it learns, not its entry: Enter on a seen one)
         int seen = 0, caught = 0, dexTotal = 0, badges = -1;
         std::string place, area;
         std::vector<uint32_t> map; int mapW = 0, mapH = 0;

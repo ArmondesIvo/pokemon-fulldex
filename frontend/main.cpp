@@ -4811,12 +4811,37 @@ int main(int argc, char** argv)
             m.level = mon.level; m.hp = mon.hp; m.maxHp = mon.maxHp; m.status = (int)mon.status; m.egg = mon.egg;
             if (mon.item) m.item = title(companionMetadata.ItemName(mon.item));
             if (companionMetadata.MonIcon(mon.species, mon.egg, m.icon)) m.iconW = m.iconH = 32; // (from the ROM)
+            if (!mon.egg)
+            {
+                static const char* const natures[25] = { "Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile",
+                    "Relaxed", "Impish", "Lax", "Timid", "Hasty", "Serious", "Jolly", "Naive", "Modest", "Mild", "Quiet",
+                    "Bashful", "Rash", "Calm", "Gentle", "Sassy", "Careful", "Quirky" };
+                m.type1 = companionMetadata.Type(mon.species, 0);
+                m.type2 = companionMetadata.Type(mon.species, 1);
+                if (m.type2 == m.type1) m.type2 = -1;
+                if (mon.nature >= 0 && mon.nature < 25) m.nature = natures[mon.nature];
+                if (mon.ability > 0 && mon.ability < (int)companionMetadata.abilities.size()) m.ability = title(companionMetadata.abilities[mon.ability]);
+                for (int i = 0; i < 6; i++) { m.stats[i] = mon.stats[i]; m.iv[i] = mon.iv[i]; m.ev[i] = mon.ev[i]; }
+                for (int i = 0; i < 4; i++)
+                {
+                    if (mon.moves[i] <= 0) continue;
+                    Menu::CompanionView::Mon::Move mv;
+                    mv.name = title(companionMetadata.Move(mon.moves[i]));
+                    const auto info = companionMetadata.MoveData(mon.moves[i]);
+                    if (info.ready) mv.type = info.type;
+                    mv.pp = mon.pp[i]; mv.maxPp = std::max(info.ready ? info.pp : 0, mon.pp[i]);
+                    m.moves.push_back(mv);
+                }
+                for (const auto& up : companionMetadata.Upcoming(mon))
+                    m.upcoming.push_back("Lv " + std::to_string(up.level) + " " + title(companionMetadata.Move(up.move)));
+            }
             cv.party.push_back(m);
         }
         for (size_t pk = 0; pk < companionProfile.pockets.size(); pk++)
         {
             Menu::CompanionView::Pocket pocket;
             pocket.name = title(Companion::PocketName(companionProfile, (int)pk));
+            if (pocket.name == "TMS / HMS") pocket.name = "TMs / HMs";
             for (const auto& item : snap.items) if (item.pocket == (int)pk) { pocket.stacks++; pocket.total += item.quantity; }
             cv.pockets.push_back(pocket);
         }
@@ -4856,8 +4881,11 @@ int main(int argc, char** argv)
     };
     const auto companionGuide=Companion::GuideFor(gameCode);
     int companionGuideChoice=0;bool companionGuideReveal=false;
+    std::set<int> companionGuideShown; // (GUIDE: the answers the player chose to show)
     readCompanion();
     int companionMon=0, companionSpecies=1, companionPocket=-1, companionDexFilter=0, companionItem=0;
+    std::set<int> companionRevealed; // (POKEDEX: entries not yet seen that the player chose to show)
+    bool companionDexMoves = false;  // (POKEDEX: the preview showing moves, not the entry; Enter switches)
     Canvas canvas;
     Menu menu;
     // The pause menu's items (menuIds: the item in each row) and its pages (menuPage): the menu
@@ -5466,6 +5494,55 @@ int main(int argc, char** argv)
                 for (const auto& line : Cheats::Lines(text,38)) add(M_NOTHING,line.c_str(),"",true);
             };
             auto species = [&](int id) { return companionMetadata.Species(id); };
+            // (POKEDEX's entry for one Pokemon, P_CDEXMON, as POKEDEX and LOCATION list them: not seen
+            // and not chosen yet, hidden.)
+            auto dexEntry = [&](int id) {
+                auto title = [](const std::string& t) { return CleanFont::Title(t); };
+                const auto& snap = companionSnapshot;
+                const bool seen = snap.dexReady && id < (int)snap.seen.size() && snap.seen[id];
+                const bool caught = snap.dexReady && id < (int)snap.caught.size() && snap.caught[id];
+                Menu::CompanionView::DexEntry e;
+                e.id = id; e.seen = seen; e.caught = caught;
+                e.hidden = !seen && !companionRevealed.count(id);
+                e.name = title(species(id));
+                companionMetadata.MonIcon(id, false, e.icon);
+                if (!e.hidden)
+                {
+                    e.type1 = companionMetadata.Type(id, 0);
+                    e.type2 = companionMetadata.Type(id, 1);
+                    if (id < (int)companionMetadata.descriptions.size()) e.desc = companionMetadata.descriptions[id];
+                    for (char& ch : e.desc) if (ch == '\n' || ch == '\r') ch = ' ';
+                    if (id < (int)companionMetadata.personal.size() && companionMetadata.personal[id].size() >= 6)
+                        for (int i = 0; i < 6; i++) e.base[i] = companionMetadata.personal[id][i];
+                    for (const auto& detail : companionMetadata.AbilityDetails(id))
+                    {
+                        const bool hiddenAbility = detail.rfind("HIDDEN ", 0) == 0;
+                        const size_t colon = detail.find(": ");
+                        const std::string name = title(colon == std::string::npos ? detail : detail.substr(colon + 2));
+                        e.abilities.push_back(hiddenAbility ? name + " (hidden)" : name);
+                    }
+                    for (const auto& move : companionMetadata.LearnedMoves(id))
+                    {
+                        if (move.move <= 0) continue;
+                        Menu::CompanionView::DexEntry::Learn l;
+                        l.level = move.level; l.move = title(companionMetadata.Move(move.move));
+                        const auto info = companionMetadata.MoveData(move.move);
+                        if (info.ready) l.type = info.type;
+                        e.learns.push_back(l);
+                    }
+                    std::stable_sort(e.learns.begin(), e.learns.end(), [](const auto& a, const auto& b) { return a.level < b.level; });
+                    for (const auto& detail : companionMetadata.EvolutionDetails(id))
+                    {
+                        // ("EVOLVES TO QUILAVA: LEVEL 14" as "Evolves into Quilava: Level 14")
+                        std::string line = title(detail);
+                        const size_t to = line.find(' ');
+                        const size_t name = line.find(' ', to + 1);
+                        if (to != std::string::npos && name != std::string::npos) line = "Evolves into" + line.substr(name);
+                        e.evolutions.push_back(line);
+                    }
+                }
+                return e;
+            };
             if (menuPage == PAGE_COMPANION)
             {
                 // A settings page (ui_settings.h): YOUR GAME, HELP and OPTIONS, each row's preview
@@ -5592,13 +5669,27 @@ int main(int argc, char** argv)
             }
             else if (menuPage == PAGE_CPARTY)
             {
-                for(size_t i=0;i<companionSnapshot.party.size();i++)
+                // A settings page of tall rows, one per Pokemon (its icon from the ROM, level, HP, held
+                // item), the chosen one's summary in the preview (P_CMON: types, nature, ability,
+                // stats with IVs and EVs, moves with PP, what it learns next). Open one for more.
+                settingsPage(Glass::I_PEOPLE);
+                menu.tallRows = true;
+                fillCompanionView(menu.companion);
+                const auto& party = menu.companion.party;
+                for (size_t i = 0; i < party.size(); i++)
                 {
-                    const auto& mon=companionSnapshot.party[i];
-                    add(M_CPARTY0+(int)i,Cheats::Fit(species(mon.species),20).c_str(),"L"+std::to_string(mon.level)+" "+std::to_string(mon.hp)+"/"+std::to_string(mon.maxHp),true);
+                    const auto& m = party[i];
+                    add(M_CPARTY0 + (int)i, m.name.c_str(), m.egg ? "" : m.item, true);
+                    MenuItem& it = menu.items.back();
+                    it.kind = Menu::K_LINK;
+                    it.icon = Glass::I_POKEBALL;
+                    it.preview = Menu::P_CMON;
+                    it.choice = (int)i;
+                    it.sub = m.egg ? std::string("Egg")
+                           : std::string("Lv ") + std::to_string(m.level) + "  \xC2\xB7  " +
+                             (m.hp ? std::to_string(m.hp) + " / " + std::to_string(m.maxHp) + " HP" : std::string("Fainted"));
                 }
-                if(companionSnapshot.party.empty())info("NO POKEMON IN THE PARTY YET");
-                if(companionSnapshot.invalidSlots)info("UNVERIFIED SLOTS ARE OMITTED");
+                if (party.empty()) info("NO POKEMON IN THE PARTY YET");
             }
             else if (menuPage == PAGE_CMON && companionMon>=0 && companionMon<(int)companionSnapshot.party.size())
             {
@@ -5623,12 +5714,42 @@ int main(int argc, char** argv)
             }
             else if(menuPage == PAGE_CBAG)
             {
-                add(M_CPOCKET,"POCKET",Companion::PocketName(companionProfile,companionPocket));
-                int count=0;
-                for(const auto& item:companionSnapshot.items)if(companionPocket<0||item.pocket==companionPocket)
-                {add(M_CITEM0+item.id,Cheats::Fit(companionMetadata.ItemName(item.id),28).c_str(),std::to_string(item.quantity),true);count++;}
-                if(!count)info("THIS POCKET IS EMPTY");
-                info("VIEW ONLY. USE ITEMS THROUGH THE GAME.");
+                // A settings page: POCKET a picker whose preview is the pockets as cards (P_CBAG, the
+                // one shown lit, each tapped to show it), then the pocket's items as tall-ish rows,
+                // each with its icon from the ROM and how many; the chosen one's summary in the
+                // preview (P_CITEM: what the game says of it, how many, who holds one).
+                settingsPage(Glass::I_LOAD);
+                menu.rowTall = 1.5f;
+                fillCompanionView(menu.companion);
+                Menu::CompanionView& cv = menu.companion;
+                const int pockets = (int)cv.pockets.size();
+                if (pockets > 0 && (companionPocket < 0 || companionPocket >= pockets)) companionPocket = 0;
+                std::vector<std::string> pocketNames;
+                for (const auto& pk : cv.pockets) pocketNames.push_back(pk.name);
+                picker(M_CPOCKET, "POCKET", Glass::I_LOAD, Menu::P_CBAG, pocketNames, companionPocket,
+                       "The pocket of your bag shown below. Tap a pocket to show it.", "View only: use items through the game.");
+                const std::string pocketName = companionPocket >= 0 && companionPocket < pockets ? cv.pockets[companionPocket].name : std::string();
+                if (!pocketName.empty()) section(pocketName.c_str(), Glass::I_LOAD);
+                for (const auto& item : companionSnapshot.items)
+                {
+                    if (item.pocket != companionPocket) continue;
+                    Menu::CompanionView::BagItem b;
+                    b.name = CleanFont::Title(companionMetadata.ItemName(item.id));
+                    b.desc = companionMetadata.ItemDescription(item.id);
+                    for (char& ch : b.desc) if (ch == '\n' || ch == '\r') ch = ' ';
+                    b.pocket = pocketName;
+                    b.quantity = item.quantity;
+                    for (size_t i = 0; i < companionSnapshot.party.size(); i++)
+                        if (companionSnapshot.party[i].item == item.id) b.heldBy.push_back((int)i);
+                    companionMetadata.ItemIcon(item.id, b.icon);
+                    cv.bag.push_back(b);
+                    add(M_CITEM0 + item.id, b.name.c_str(), std::to_string(item.quantity), true);
+                    MenuItem& it = menu.items.back();
+                    it.kind = Menu::K_LINK;
+                    it.preview = Menu::P_CITEM;
+                    it.choice = (int)cv.bag.size() - 1;
+                }
+                if (cv.bag.empty()) info("THIS POCKET IS EMPTY");
             }
             else if(menuPage == PAGE_CITEM)
             {
@@ -5641,20 +5762,37 @@ int main(int argc, char** argv)
             }
             else if(menuPage == PAGE_CDEX)
             {
-                static const char* filters[]={"ALL","SEEN","CAUGHT"};
-                add(M_CDEX_FILTER,"SHOW",filters[companionDexFilter]);
-                if(companionSnapshot.dexReady)
+                // A settings page: SHOW a picker whose preview is All, Seen and Caught as cards over
+                // the seen and caught bars (P_CDEX), then the entries, each with its icon from the
+                // ROM; the chosen one's summary in the preview (P_CDEXMON). An entry not yet seen
+                // is hidden (a silhouette, "???") until chosen with Enter or a tap.
+                settingsPage(Glass::I_INFO);
+                menu.rowTall = 1.5f;
+                fillCompanionView(menu.companion);
+                Menu::CompanionView& cv = menu.companion;
+                cv.dexMoves = companionDexMoves;
+                const auto& snap = companionSnapshot;
+                picker(M_CDEX_FILTER, "SHOW", Glass::I_INFO, Menu::P_CDEX, { "All", "Seen", "Caught" }, companionDexFilter,
+                       "Which entries the list shows. Tap a card to choose.", "Entries you have not seen are hidden until you choose one.");
+                section("NATIONAL POKEDEX", Glass::I_INFO);
+                auto title = [](const std::string& t) { return CleanFont::Title(t); };
+                for (int id = 1; id <= companionProfile.maxSpecies; id++)
                 {
-                    int seen=std::count(companionSnapshot.seen.begin(),companionSnapshot.seen.end(),true);
-                    int caught=std::count(companionSnapshot.caught.begin(),companionSnapshot.caught.end(),true);
-                    info("SEEN "+std::to_string(seen)+"   CAUGHT "+std::to_string(caught));
+                    const bool seen = snap.dexReady && id < (int)snap.seen.size() && snap.seen[id];
+                    const bool caught = snap.dexReady && id < (int)snap.caught.size() && snap.caught[id];
+                    if (companionDexFilter == 1 && !seen) continue;
+                    if (companionDexFilter == 2 && !caught) continue;
+                    Menu::CompanionView::DexEntry e = dexEntry(id);
+                    cv.dex.push_back(e);
+                    char label[64];
+                    snprintf(label, sizeof label, "%03d  %s", id, e.hidden ? "???" : e.name.c_str());
+                    add(M_CDEX0 + id, label, caught ? "Caught" : seen ? "Seen" : "", true);
+                    MenuItem& it = menu.items.back();
+                    it.kind = Menu::K_LINK;
+                    it.preview = Menu::P_CDEXMON;
+                    it.choice = (int)cv.dex.size() - 1;
                 }
-                for(int id=1;id<=companionProfile.maxSpecies;id++)
-                {
-                    bool seen=companionSnapshot.dexReady&&companionSnapshot.seen[id],caught=companionSnapshot.dexReady&&companionSnapshot.caught[id];
-                    if(companionDexFilter==1&&!seen)continue;if(companionDexFilter==2&&!caught)continue;
-                    add(M_CDEX0+id,Cheats::Fit(std::to_string(id)+" "+species(id),27).c_str(),caught?"CAUGHT":seen?"SEEN":"",true);
-                }
+                if (cv.dex.empty()) info(companionDexFilter == 2 ? "NOTHING CAUGHT YET" : "NOTHING SEEN YET");
             }
             else if(menuPage == PAGE_CDEXDETAIL)
             {
@@ -5676,22 +5814,135 @@ int main(int argc, char** argv)
             }
             else if(menuPage == PAGE_CBATTLE)
             {
-                if(companionSnapshot.battlers.size()<2 || !companionSnapshot.battlers[1].species)
-                    info("NO MAPPED LIVE BATTLE DATA FOR THIS SCENE / VERSION");
+                // A settings page: the FOE (its preview P_CBFOE: HP, types, ability, item and the types
+                // that hit it hard), your Pokemon's MOVES against it (P_CBMOVE) and YOUR PARTY, each
+                // with its best move against the foe and the foe's worst known move against it
+                // (P_CBCOVER). Static matchups (CompanionBattle), as PokeDaisy's.
+                settingsPage(Glass::I_GAUGE);
+                menu.rowTall = 1.5f;
+                menu.headerNote = "BASED ON POKEDAISY";
+                fillCompanionView(menu.companion);
+                Menu::CompanionView& cv = menu.companion;
+                const auto& snap = companionSnapshot;
+                auto title = [](const std::string& t) { return CleanFont::Title(t); };
+                const char* staticTip = "Matchups from types and abilities alone: weather, stat changes and damage are not worked out.";
+                if (snap.battlers.size() < 2 || !snap.battlers[1].species)
+                {
+                    section("NO BATTLE", Glass::I_GAUGE);
+                    info("A BATTLE SHOWS HERE AS IT HAPPENS: THE FOE, YOUR MOVES AGAINST IT AND YOUR PARTY.");
+                }
                 else
                 {
-                    const auto& foe=companionSnapshot.battlers[1];
-                    info("FOE: "+species(foe.species)+" L"+std::to_string(foe.level));
-                    info("HP "+std::to_string(foe.hp)+"/"+std::to_string(foe.maxHp));
-                    info(std::string(CompanionTypes::Name(foe.type1))+" / "+CompanionTypes::Name(foe.type2));
-                    for(const auto& line:CompanionBattle::Lines(companionSnapshot,companionMetadata))info(line);
+                    const auto& own = snap.battlers[0];
+                    const auto& foe = snap.battlers[1];
+                    auto& f = cv.foe;
+                    f.name = title(species(foe.species));
+                    f.level = foe.level; f.hp = foe.hp; f.maxHp = foe.maxHp;
+                    f.type1 = foe.type1; f.type2 = foe.type2 == foe.type1 ? -1 : foe.type2;
+                    if (foe.ability) f.ability = title(Companion::Metadata::Name(companionMetadata.abilities, foe.ability, "ABILITY"));
+                    if (foe.item) f.item = title(companionMetadata.ItemName(foe.item));
+                    if (companionMetadata.MonIcon(foe.species, false, f.icon)) f.iconW = f.iconH = 32;
+                    section("FOE", Glass::I_GAUGE);
+                    add(M_NOTHING, f.name.c_str(), "Lv " + std::to_string(f.level), true);
+                    {
+                        MenuItem& it = menu.items.back();
+                        it.kind = Menu::K_LINK;
+                        it.preview = Menu::P_CBFOE;
+                        it.desc = snap.trainerBattle ? "The trainer's Pokemon you are fighting." : "The wild Pokemon you are fighting.";
+                        it.tip = staticTip;
+                    }
+                    // (Your Pokemon in battle, and its moves.)
+                    if (own.species)
+                    {
+                        cv.mine = title(species(own.species));
+                        section((CompanionBattle::Upper(species(own.species)) + "'S MOVES").c_str(), Glass::I_GAUGE);
+                        for (int slot = 0; slot < 4; slot++)
+                        {
+                            if (!own.moves[slot]) continue;
+                            Menu::CompanionView::BattleMove mv;
+                            mv.name = title(companionMetadata.Move(own.moves[slot]));
+                            const auto data = companionMetadata.MoveData(own.moves[slot]);
+                            if (data.ready) { mv.type = data.type; mv.category = data.category; mv.power = data.power; mv.accuracy = data.accuracy; mv.maxPp = std::max(data.pp, own.pp[slot]); }
+                            mv.pp = own.pp[slot];
+                            const auto m = CompanionBattle::Evaluate(own.moves[slot], companionMetadata, own, foe);
+                            mv.percent = m.known ? m.percent : -1;
+                            if (!m.note.empty()) mv.note = CleanFont::Title(m.note) + ".";
+                            cv.moves.push_back(mv);
+                            const std::string value = mv.category == 2 ? std::string("Status") : mv.pp == 0 ? std::string("No PP") : MatchText(mv.percent);
+                            add(M_NOTHING, mv.name.c_str(), value, true);
+                            MenuItem& it = menu.items.back();
+                            it.kind = Menu::K_LINK;
+                            it.preview = Menu::P_CBMOVE;
+                            it.choice = (int)cv.moves.size() - 1;
+                            it.tip = staticTip;
+                        }
+                    }
+                    // (Your party: the best of each one's moves against the foe, the worst of the foe's
+                    // known moves against it, as CompanionBattle::PartyCoverage.)
+                    section("YOUR PARTY", Glass::I_PEOPLE);
+                    for (size_t i = 0; i < snap.party.size() && i < cv.party.size(); i++)
+                    {
+                        const auto& mon = snap.party[i];
+                        if (mon.egg) continue;
+                        Companion::Battler candidate;
+                        candidate.species = mon.species; candidate.type1 = companionMetadata.Type(mon.species, 0); candidate.type2 = companionMetadata.Type(mon.species, 1);
+                        candidate.ability = mon.ability; candidate.item = mon.item; candidate.status = mon.status; candidate.statusKnown = true;
+                        Menu::CompanionView::Coverage cov;
+                        cov.party = (int)i;
+                        for (int slot = 0; slot < 4; slot++)
+                            if (mon.moves[slot] && mon.pp[slot] > 0)
+                            {
+                                const auto m = CompanionBattle::Evaluate(mon.moves[slot], companionMetadata, candidate, foe);
+                                if (m.known) cov.out = std::max(cov.out, m.percent);
+                            }
+                        for (int move : foe.moves)
+                            if (move)
+                            {
+                                const auto m = CompanionBattle::Evaluate(move, companionMetadata, foe, candidate);
+                                if (m.known) cov.in = std::max(cov.in, m.percent);
+                            }
+                        cv.coverage.push_back(cov);
+                        const std::string value = mon.hp <= 0 ? std::string("Fainted") : "Hits " + MatchText(cov.out) + "  \xC2\xB7  Takes " + MatchText(cov.in);
+                        add(M_NOTHING, cv.party[i].name.c_str(), value, true);
+                        MenuItem& it = menu.items.back();
+                        it.kind = Menu::K_LINK;
+                        it.preview = Menu::P_CBCOVER;
+                        it.choice = (int)cv.coverage.size() - 1;
+                        it.tip = staticTip;
+                    }
                 }
             }
             else if(menuPage == PAGE_CGUIDE)
             {
-                info("OPEN AN ENTRY FOR A HINT. ANSWERS REQUIRE REVEAL.");
-                info("BADGES: "+std::to_string(std::bitset<16>(companionSnapshot.badges).count()));
-                for(size_t i=0;i<companionGuide.size();i++)add(M_GUIDE0+(int)i,Cheats::Fit(companionGuide[i].title,36).c_str(),"");
+                // A settings page: each question a row, its hint in the preview and its answer under
+                // it once chosen with Enter or a tap (and hidden again the same way). PokeDaisy's
+                // pages, credited in the header.
+                settingsPage(Glass::I_CHEATS);
+                menu.rowTall = 1.5f;
+                menu.headerNote = "BASED ON POKEDAISY";
+                // (The pages' capitals as the rest of the menus: "ILEX FOREST" as "Ilex Forest".)
+                auto guideText = [](std::string t) {
+                    auto swap = [&](const std::string& a, const std::string& b) { for (size_t at = t.find(a); at != std::string::npos; at = t.find(a, at + b.size())) t.replace(at, a.size(), b); };
+                    swap("POKeMON", "POKEMON"); swap("POKeDEX", "POKEDEX"); swap("POKe", "POKE");
+                    t = CleanFont::Title(t);
+                    swap("Poke Ball", "Pok\xC3\xA9 Ball"); swap("Poke Mart", "Pok\xC3\xA9 Mart"); swap("S.s.", "S.S.");
+                    return t;
+                };
+                section("QUESTIONS", Glass::I_CHEATS);
+                for (size_t i = 0; i < companionGuide.size(); i++)
+                {
+                    Menu::CompanionView::GuideAnswer answer;
+                    answer.text = guideText(companionGuide[i].answer);
+                    answer.shown = companionGuideShown.count((int)i) > 0;
+                    menu.companion.guide.push_back(answer);
+                    add(M_GUIDE0 + (int)i, guideText(companionGuide[i].title).c_str(), answer.shown ? "Shown" : "", true);
+                    MenuItem& it = menu.items.back();
+                    it.kind = Menu::K_LINK;
+                    it.preview = Menu::P_CGUIDE;
+                    it.icon = answer.shown ? Glass::I_SPARKLE : Glass::I_INFO; // (shown: a sparkle)
+                    it.choice = (int)i;
+                    it.desc = "Hint: " + guideText(companionGuide[i].hint);
+                }
             }
             else if(menuPage == PAGE_CGUIDEENTRY && companionGuideChoice<(int)companionGuide.size())
             {
@@ -5711,12 +5962,52 @@ int main(int argc, char** argv)
             }
             else if(menuPage == PAGE_CLOCATION)
             {
-                info(companionSnapshot.locationLive?"LIVE POSITION":"LAST WARP LOCATION");
-                info(companionMetadata.PlaceName(companionSnapshot.map)+"  X "+std::to_string(companionSnapshot.x)+"  Y "+std::to_string(companionSnapshot.y));
-                info("REPEL STEPS: "+std::to_string(companionSnapshot.repel));
-                if(companionMetadata.regionMap.Ready())add(M_CMAP,"SHOW FULL REFERENCE MAP","");
-                add(M_CENCOUNTERS,"ENCOUNTERS HERE","");
-                info("FULL MAP INCLUDES UNVISITED PLACES. UNLOCKS ARE NOT FILTERED.");
+                // A settings page: WHERE YOU ARE (the region's map with you on it, P_CPLACE; Enter for
+                // the full map), then what can be found here, a section for each way (grass, surf,
+                // each rod), each Pokemon with its icon and levels, its POKEDEX entry in the preview
+                // (hidden until chosen if not seen yet, as POKEDEX).
+                settingsPage(Glass::I_GLOBE);
+                menu.rowTall = 1.5f;
+                fillCompanionView(menu.companion);
+                Menu::CompanionView& cv = menu.companion;
+                cv.dexMoves = companionDexMoves;
+                const auto& snap = companionSnapshot;
+                std::string where = snap.locationLive ? "Where you are now." : "Where you last went through a door: the game is not telling where you are exactly.";
+                where += snap.repel > 0 ? " Repel: " + std::to_string(snap.repel) + " steps left." : " No Repel on.";
+                add(M_CMAP, "WHERE YOU ARE", cv.place, true);
+                {
+                    MenuItem& it = menu.items.back();
+                    it.kind = Menu::K_LINK;
+                    it.icon = Glass::I_GLOBE;
+                    it.preview = Menu::P_CPLACE;
+                    it.desc = where;
+                    it.tip = companionMetadata.regionMap.Ready() ? "Enter: the full map." : "";
+                }
+                std::string method;
+                const auto found = companionMetadata.Encounters(snap.map);
+                for (const auto& enc : found)
+                {
+                    if (enc.method != method)
+                    {
+                        method = enc.method;
+                        std::string head = method;
+                        if (head == "GRASS / CAVE") head = "GRASS AND CAVES";
+                        section(head.c_str(), Glass::I_POKEBALL);
+                    }
+                    Menu::CompanionView::DexEntry e = dexEntry(enc.species);
+                    cv.dex.push_back(e);
+                    const std::string lv = enc.low == 0 ? std::string("Lv varies") : "Lv " + std::to_string(enc.low) + (enc.high != enc.low ? "-" + std::to_string(enc.high) : "");
+                    add(M_CDEX0 + enc.species, e.hidden ? "???" : e.name.c_str(), lv, true);
+                    MenuItem& it = menu.items.back();
+                    it.kind = Menu::K_LINK;
+                    it.preview = Menu::P_CDEXMON;
+                    it.choice = (int)cv.dex.size() - 1;
+                }
+                if (found.empty())
+                {
+                    section("FOUND HERE", Glass::I_POKEBALL);
+                    info("NO WILD POKEMON HERE, OR NONE THE ROM LISTS FOR THIS PLACE.");
+                }
             }
             if (menuPage != PAGE_COMPANION) add(M_BACK,"BACK",""); // (COMPANION, a settings page, has its own)
         }
@@ -7549,14 +7840,33 @@ int main(int argc, char** argv)
             const int id = backTo >= 0 ? M_BACK : hit >= 0 && hit < (int)menuIds.size() ? menuIds[hit] : -1;
             if (backTo >= 0) hit = 0;
             if(id>=M_GUIDE0 && id<M_GUIDE0+(int)companionGuide.size() && dir==0)
-            {companionGuideChoice=id-M_GUIDE0;companionGuideReveal=false;goPage(PAGE_CGUIDEENTRY,-1);hit=-1;}
+            {
+                // (GUIDE: the answer shown or hidden again, in the preview.)
+                const int i=id-M_GUIDE0;
+                if(!companionGuideShown.erase(i))companionGuideShown.insert(i);
+                goPage(PAGE_CGUIDE,id);hit=-1;
+            }
             if(id>=M_SLOT0&&id<M_SLOT0+10&&dir==0)
             {stateSlot=id-M_SLOT0;goPage(PAGE_SLOT,M_SLOT_SAVE);hit=-1;}
             if(id>=M_CPARTY0 && id<M_CPARTY0+6 && dir==0)
             {companionMon=id-M_CPARTY0;goPage(PAGE_CMON,-1);hit=-1;}
             if(id>M_CDEX0 && id<=M_CDEX0+649 && dir==0)
-            {companionSpecies=id-M_CDEX0;goPage(PAGE_CDEXDETAIL,-1);hit=-1;}
-            if(id>M_CITEM0 && id<M_CITEM0+2048 && dir==0)
+            {
+                // (POKEDEX: an entry not yet seen shown when chosen; the rest is all in the preview.
+                // Opened from elsewhere, as the reference, the entry's own page.)
+                companionSpecies=id-M_CDEX0;
+                if(menuPage==PAGE_CDEX||menuPage==PAGE_CLOCATION)
+                {
+                    // (Not seen and hidden: shown. Otherwise the preview between the entry and its moves.)
+                    const bool seen=companionSnapshot.dexReady&&companionSpecies<(int)companionSnapshot.seen.size()&&companionSnapshot.seen[companionSpecies];
+                    if(!seen&&!companionRevealed.count(companionSpecies))companionRevealed.insert(companionSpecies);
+                    else companionDexMoves=!companionDexMoves;
+                    goPage(menuPage,id);
+                }
+                else goPage(PAGE_CDEXDETAIL,-1);
+                hit=-1;
+            }
+            if(id>M_CITEM0 && id<M_CITEM0+2048 && dir==0 && menuPage!=PAGE_CBAG) // (BAG: all of it is in the preview)
             {companionItem=id-M_CITEM0;goPage(PAGE_CITEM,-1);hit=-1;}
             if(id>=M_RRESULT0 && id<M_RRESULT0+4096 && menuPage==PAGE_REFERENCE && dir==0)
             {
@@ -7726,8 +8036,12 @@ int main(int argc, char** argv)
             case M_CMAP:goPage(PAGE_CMAP,M_BACK);hit=-1;break;
             case M_CENCOUNTERS:goPage(PAGE_CENCOUNTERS,-1);hit=-1;break;
             case M_CPOCKET:
-                companionPocket=Companion::StepPocket(companionProfile,companionPocket,dir);
+            {
+                // (Pockets only, round in both directions: the cards show them all at once.)
+                const int count=(int)companionProfile.pockets.size();
+                if(count>0)companionPocket=((std::max(companionPocket,0)+(dir<0?-1:1))%count+count)%count;
                 break;
+            }
             case M_CDEX_FILTER:companionDexFilter=(companionDexFilter+(dir<0?2:1))%3;break;
             case M_SECOND_SCREEN:
                 secondDisplay.SetMode((DsDisplayState::Mode(secondDisplay.State()) + (dir < 0 ? 4 : 1)) % 5);

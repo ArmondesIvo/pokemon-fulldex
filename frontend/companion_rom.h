@@ -146,6 +146,38 @@ struct Metadata
         if(pal>=(int)iconPalettes.size())return false;
         return CompanionIcons::Icon(monIcons[7+id],iconPalettes[pal],out);
     }
+    // (Item icons, HGSS and Platinum: the ROM's item icon archive, and the ARM9's table of each
+    // item's {data, icon, palette, Gen 3 id}, found by its shape (item i's data file is i).)
+    std::vector<Bytes> itemIcons;
+    std::vector<std::array<int,2>> itemIconIds;
+    bool ItemIcon(int item,std::vector<uint32_t>& out)const
+    {
+        if(item<=0||item>=(int)itemIconIds.size())return false;
+        const auto ids=itemIconIds[item];
+        if(ids[0]>=(int)itemIcons.size()||ids[1]>=(int)itemIcons.size())return false;
+        const auto pals=CompanionIcons::Palettes(itemIcons[ids[1]]);
+        return !pals.empty()&&CompanionIcons::Icon(itemIcons[ids[0]],pals[0],out);
+    }
+    void LoadItemIcons(const Bytes& rom,const Bytes& arm,bool hg)
+    {
+        itemIcons=Narc(RomFile(rom,hg?"a/0/1/8":"itemtool/itemdata/item_icon.narc"));
+        const int n=(int)itemIcons.size();
+        if(n<2||arm.size()<8*64)return;
+        auto u16=[&](size_t o){return (int)U16(arm.data()+o);};
+        for(size_t o=0;o+8*64<=arm.size();o+=4)
+        {
+            if(u16(o)!=0||u16(o+2)>=n||u16(o+4)>=n)continue;
+            bool ok=true;
+            for(int i=1;i<60&&ok;i++){const size_t e=o+8*i;ok=u16(e)==i&&u16(e+2)<n&&u16(e+4)<n;}
+            if(!ok)continue;
+            for(size_t e=o;e+8<=arm.size()&&itemIconIds.size()<std::max<size_t>(items.size(),1);e+=8)
+            {
+                if(u16(e+2)>=n||u16(e+4)>=n)break;
+                itemIconIds.push_back({u16(e+2),u16(e+4)});
+            }
+            return;
+        }
+    }
     std::vector<std::string> places;
     std::vector<int> mapPlaces;
     struct MapRecord {int place=-1,matrix=-1,worldX=-1,worldY=-1,encounter=-1;};
@@ -446,6 +478,7 @@ struct Metadata
         if(!gen5)
         {
             auto arm=RomArm9(rom),names=RomFile(rom,"fielddata/maptable/mapname.bin");
+            LoadItemIcons(rom,arm,hg);
             size_t offset=hg?0xF6BE0:0xE601C,count=names.size()/16;
             // UPR ZX gen4_offsets.ini/loadWildMapNames: fixed 24-byte headers, place at +18.
             if(names.size()%16==0&&count>0&&count<=4096&&Range(arm.size(),offset,count*24))

@@ -10,6 +10,7 @@
 // the 1400 x 788 design), so it looks the same on a PC window, a phone and the Switch.
 // Included at the end of ui.h.
 #pragma once
+#include "companion_types.h"
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -999,9 +1000,416 @@ inline void Menu::SettingsTap(int item, int x, MenuInput& input)
     else input.accept = true;
 }
 
+// A type's colour (the games' own, as fans know them), for its chip and a move's edge.
+inline uint32_t TypeColour(int type)
+{
+    static const uint32_t c[] = { 0xFFA8A77A, 0xFFC22E28, 0xFFA98FF3, 0xFFA33EA1, 0xFFE2BF65, 0xFFB6A136, 0xFFA6B91A, 0xFF735797,
+        0xFFB7B7CE, 0xFF68A090, 0xFFEE8130, 0xFF6390F0, 0xFF7AC74C, 0xFFF7D02C, 0xFFF95587, 0xFF96D9D6, 0xFF6F35FC, 0xFF705746 };
+    return type >= 0 && type < 18 ? c[type] : 0xFF8A93A0;
+}
+// An icon from the ROM (ARGB, colour 0 clear) as large as size, each pixel a block.
+inline void MonIcon(Canvas& c, const std::vector<uint32_t>& icon, int iw, int ih, int x, int y, int size, int alpha = 255, uint32_t tint = 0)
+{
+    if (icon.empty() || iw <= 0 || ih <= 0) return;
+    for (int yy = 0; yy < size; yy++)
+        for (int xx = 0; xx < size; xx++)
+        {
+            const int X = x + xx, Y = y + yy;
+            if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
+            const uint32_t p = icon[(size_t)(yy * ih / size) * iw + xx * iw / size];
+            if (p >> 24) c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], tint ? tint : p | 0xFF000000u, alpha); // (tint: a silhouette)
+        }
+    Glass::Mark(c, x, y, x + size, y + size);
+}
+// A type as a small coloured pill with its name.
+inline int TypeChip(Canvas& c, int type, int x, int y, float k)
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    const std::string name = CleanFont::Title(CompanionTypes::Name(type));
+    const int px = K(12), w = W(name, px, true, false) + K(18), h = K(22);
+    Glass::Round(c, x, y, w, h, h * 0.5f, TypeColour(type));
+    T(c, x + K(9), y + h / 2 + px * 7 / 20, name, px, 0xFFFFFFFF, true, false);
+    return w;
+}
+
+// PARTY's summary of one Pokemon (P_CMON): its icon, name, level, types, nature, item and ability;
+// its stats as bars, IVs beside them; its moves, each edged in its type's colour, with PP.
+inline void MonSummary(Canvas& c, const Menu::CompanionView::Mon& m, int x0, int top, int w0, int bottom, float k, bool showName = true)
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    const uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
+    int y = top;
+    const int is = K(64);
+    Glass::Round(c, x0, y, is, is, 14 * k, 0x400A111C);
+    Glass::Rim(c, x0, y, is, is, 14 * k, std::max(1.0f, k), 0x60, 0x14);
+    if (!m.icon.empty()) MonIcon(c, m.icon, m.iconW, m.iconH, x0, y, is);
+    else Glass::DrawIcon(c, Glass::I_POKEBALL, x0 + is * 0.5f, y + is * 0.5f, is * 0.28f, GlassText);
+    const int tx = x0 + is + K(14);
+    const std::string lv = m.egg ? std::string("Egg") : "Lv " + std::to_string(m.level);
+    if (showName)
+    {
+        T(c, tx, y + K(24), m.name, K(22), GlassText, true, false);
+        T(c, x0 + w0 - W(lv, K(15), true, false), y + K(24), lv, K(15), GlassHint, true, false);
+    }
+    else T(c, tx, y + K(24), lv + (m.egg ? "" : "  \xC2\xB7  " + std::to_string(m.hp) + " / " + std::to_string(m.maxHp) + " HP"), K(16), GlassText, true, false);
+    int cx = tx;
+    if (CompanionTypes::Valid(m.type1)) cx += TypeChip(c, m.type1, cx, y + K(34), k) + K(6);
+    if (CompanionTypes::Valid(m.type2) && m.type2 != m.type1) TypeChip(c, m.type2, cx, y + K(34), k);
+    y += is + K(14);
+    std::string line;
+    if (!m.nature.empty()) line = m.nature + " nature";
+    if (!m.ability.empty()) line += (line.empty() ? "" : "  \xC2\xB7  ") + m.ability;
+    if (!line.empty()) { T(c, x0, y + K(12), line, K(13), Desc, false, false); y += K(20); }
+    T(c, x0, y + K(12), "Holding " + (m.item.empty() ? std::string("nothing") : m.item), K(13), Desc, false, false);
+    y += K(26);
+    if (m.egg) return;
+    // (Stats: each a bar, the longest the highest of the six; its IV after.)
+    static const char* const names[] = { "HP", "Attack", "Defence", "Speed", "Sp. Atk", "Sp. Def" };
+    static const int order[] = { 0, 1, 2, 4, 5, 3 }; // (the games' summary order)
+    int best = 1;
+    for (int i = 0; i < 6; i++) best = std::max(best, m.stats[i]);
+    const int rowH = std::min(K(22), (bottom - y - K(140)) / 6), labelW = K(64), numW = K(40), ivW = K(44);
+    if (rowH >= K(12))
+    {
+        for (int n = 0; n < 6; n++)
+        {
+            const int i = order[n];
+            T(c, x0, y + rowH / 2 + K(4), names[i], K(12), GlassHint, false, false);
+            const std::string v = std::to_string(m.stats[i]);
+            T(c, x0 + labelW + numW - K(8) - W(v, K(13), true, false), y + rowH / 2 + K(4), v, K(13), GlassText, true, false);
+            const int bx = x0 + labelW + numW, bw = w0 - labelW - numW - ivW, bh = std::max(3, K(6)), by = y + (rowH - bh) / 2;
+            Glass::Round(c, bx, by, bw, bh, bh * 0.5f, 0x22FFFFFF);
+            Glass::Round(c, bx, by, std::max(bh, bw * m.stats[i] / best), bh, bh * 0.5f, i == 0 ? 0xFF5BD47Au : 0xE6FFFFFFu);
+            const std::string iv = "IV " + std::to_string(m.iv[i]);
+            T(c, x0 + w0 - W(iv, K(11), false, false), y + rowH / 2 + K(4), iv, K(11), m.iv[i] >= 30 ? 0xFFF2C94Cu : GlassHint, false, false);
+            y += rowH;
+        }
+        y += K(10);
+    }
+    // (Moves: two across, each a card edged in its type's colour, its PP under its name.)
+    const int gap = K(8), mw = (w0 - gap) / 2, mh = std::min(K(50), (bottom - y - gap) / 2);
+    if (mh < K(28)) return;
+    for (size_t i = 0; i < m.moves.size() && i < 4; i++)
+    {
+        const auto& mv = m.moves[i];
+        const int mx = x0 + (int)(i % 2) * (mw + gap), my = y + (int)(i / 2) * (mh + gap);
+        Glass::Round(c, mx, my, mw, mh, 10 * k, Row);
+        Glass::Rim(c, mx, my, mw, mh, 10 * k, std::max(1.0f, k), 0x50, 0x14);
+        Glass::Round(c, mx + K(6), my + K(8), K(4), mh - K(16), K(2), TypeColour(mv.type));
+        std::string name = mv.name;
+        while (name.size() > 1 && W(name, K(14), true, false) > mw - K(26)) name.pop_back();
+        T(c, mx + K(18), my + mh / 2 - K(2), name, K(14), GlassText, true, false);
+        const std::string pp = "PP " + std::to_string(mv.pp) + (mv.maxPp > 0 ? " / " + std::to_string(mv.maxPp) : "");
+        T(c, mx + K(18), my + mh / 2 + K(14), pp, K(11), mv.pp == 0 ? 0xFFE5534Bu : GlassHint, false, false);
+    }
+}
+
+// BAG's summary of one item (P_CITEM): its name and pocket, what the game says of it, how many are
+// in the bag, and which of the party hold one (their icons).
+inline void ItemSummary(Canvas& c, const Menu::CompanionView& cv, const Menu::CompanionView::BagItem& item, int x0, int top, int w0, int bottom, float k)
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    const uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
+    int y = top;
+    const int is = K(64);
+    Glass::Round(c, x0, y, is, is, 14 * k, 0x400A111C);
+    Glass::Rim(c, x0, y, is, is, 14 * k, std::max(1.0f, k), 0x60, 0x14);
+    if (!item.icon.empty()) MonIcon(c, item.icon, 32, 32, x0, y, is);
+    else Glass::DrawIcon(c, Glass::I_LOAD, x0 + is * 0.5f, y + is * 0.5f, is * 0.26f, GlassText);
+    // (Beside it how many, large, and the pocket; the name is the preview's title.)
+    const int tx = x0 + is + K(16);
+    const std::string q = std::to_string(item.quantity);
+    T(c, tx, y + K(36), q, K(40), GlassText, true, false);
+    T(c, tx + W(q, K(40), true, false) + K(10), y + K(36), "in your bag", K(19), Desc, false, false);
+    T(c, tx, y + K(60), item.pocket, K(15), GlassHint, false, false);
+    y += is + K(26);
+    for (const auto& line : Wrap(item.desc, K(19), w0, 6)) { T(c, x0, y + K(18), line, K(19), Desc, false, false); y += K(28); }
+    y += K(18);
+    // (Held by: each one's icon and name, on a row.)
+    if (!item.heldBy.empty() && bottom - y > K(70))
+    {
+        T(c, x0, y + K(14), "Held by", K(15), GlassHint, true, false);
+        y += K(26);
+        int cx = x0;
+        for (int i : item.heldBy)
+        {
+            if (i < 0 || i >= (int)cv.party.size()) continue;
+            const auto& m = cv.party[i];
+            const int cw = K(44) + W(m.name, K(16), true, false) + K(16), ch = K(44);
+            if (cx + cw > x0 + w0) break;
+            Glass::Round(c, cx, y, cw, ch, ch * 0.5f, Row);
+            Glass::Rim(c, cx, y, cw, ch, ch * 0.5f, std::max(1.0f, k), 0x50, 0x14);
+            MonIcon(c, m.icon, m.iconW, m.iconH, cx + K(4), y + K(2), K(40));
+            T(c, cx + K(44), y + ch / 2 + K(6), m.name, K(16), GlassText, true, false);
+            cx += cw + K(8);
+        }
+        y += K(56);
+    }
+    if (bottom - y > K(28)) T(c, x0, bottom - K(6), "View only: use items through the game.", K(15), GlassHint, false, false);
+}
+
+// POKEDEX's summary of one entry (P_CDEXMON): its icon, number, types and whether seen or caught;
+// what the Pokedex says; base stats, two columns of bars; abilities; how it evolves; the moves it
+// learns by level, as chips edged in their type's colour, while they fit. One not yet seen and
+// not chosen: its silhouette and how to show it.
+inline void DexSummary(Canvas& c, const Menu::CompanionView::DexEntry& e, int x0, int top, int w0, int bottom, float k, bool moves = false)
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    const uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
+    int y = top;
+    const int is = K(64);
+    Glass::Round(c, x0, y, is, is, 14 * k, 0x400A111C);
+    Glass::Rim(c, x0, y, is, is, 14 * k, std::max(1.0f, k), 0x60, 0x14);
+    if (!e.icon.empty()) MonIcon(c, e.icon, 32, 32, x0, y, is, e.hidden ? 0xC0 : e.seen ? 255 : 0x50, e.hidden ? 0xFF05080Du : 0);
+    const int tx = x0 + is + K(16);
+    char num[16];
+    snprintf(num, sizeof num, "No. %03d", e.id);
+    T(c, tx, y + K(22), num, K(17), GlassText, true, false);
+    // (Caught: a white pill; seen: a glass one; neither: a hint.)
+    const std::string state = e.caught ? "Caught" : e.seen ? "Seen" : "Not seen yet";
+    const int sw = W(state, K(14), true, false) + K(20), sh = K(24), sx = x0 + w0 - sw;
+    if (e.seen) { Glass::Round(c, sx, y + K(4), sw, sh, sh * 0.5f, e.caught ? Pill : Row); if (!e.caught) Glass::Rim(c, sx, y + K(4), sw, sh, sh * 0.5f, std::max(1.0f, k), 0x60, 0x14); }
+    T(c, sx + K(10), y + K(4) + sh / 2 + K(5), state, K(14), e.caught ? PillInk : e.seen ? GlassText : GlassHint, true, false);
+    if (e.hidden)
+    {
+        y += is + K(30);
+        for (const auto& line : Wrap("You have not seen this Pokemon yet. Press Enter, or tap it, to show its entry anyway.", K(18), w0, 4))
+        { T(c, x0, y + K(16), line, K(18), Desc, false, false); y += K(27); }
+        return;
+    }
+    int cx = tx;
+    if (CompanionTypes::Valid(e.type1)) cx += TypeChip(c, e.type1, cx, y + K(36), k * 1.15f) + K(6);
+    if (CompanionTypes::Valid(e.type2) && e.type2 != e.type1) TypeChip(c, e.type2, cx, y + K(36), k * 1.15f);
+    y += is + K(18);
+    if (moves)
+    {
+        // (The moves it learns by level: two columns down the preview, each edged in its type's
+        // colour, the level before it; how many more if they do not all fit.)
+        T(c, x0, y + K(14), "Learns by level", K(15), GlassHint, true, false);
+        y += K(24);
+        const int foot = K(30), gap = K(14), colW = (w0 - gap) / 2, rowH = K(32);
+        const int perCol = std::max(1, (bottom - foot - y) / rowH);
+        const size_t fit = std::min(e.learns.size(), (size_t)perCol * 2);
+        const int rows = (int)std::min<size_t>(perCol, (fit + 1) / 2);
+        for (size_t i = 0; i < fit; i++)
+        {
+            const auto& l = e.learns[i];
+            const int mx = x0 + (int)(i / rows) * (colW + gap), my = y + (int)(i % rows) * rowH;
+            if (i / rows > 1) break;
+            Glass::Round(c, mx, my + K(2), colW, rowH - K(4), 8 * k, Row);
+            Glass::Round(c, mx + K(6), my + K(9), K(4), rowH - K(18), K(2), TypeColour(l.type));
+            const std::string lv = std::to_string(std::max(1, l.level)); // (the level; 1: knows it from the start)
+            T(c, mx + K(16), my + rowH / 2 + K(5), lv, K(14), GlassHint, false, false);
+            std::string name = l.move;
+            const int nx = mx + K(16) + K(26);
+            while (name.size() > 1 && W(name, K(14), true, false) > colW - (nx - mx) - K(4)) name.pop_back();
+            T(c, nx, my + rowH / 2 + K(5), name, K(14), GlassText, true, false);
+        }
+        if (fit < e.learns.size())
+            T(c, x0, y + rows * rowH + K(18), "+" + std::to_string(e.learns.size() - fit) + " more", K(14), GlassHint, true, false);
+        if (e.learns.empty()) T(c, x0, y + K(16), "None", K(16), Desc, false, false);
+        T(c, x0, bottom - K(6), "Enter or tap: back to the entry", K(15), GlassHint, false, false);
+        return;
+    }
+    for (const auto& line : Wrap(e.desc, K(17), w0, 3)) { T(c, x0, y + K(16), line, K(17), Desc, false, false); y += K(25); }
+    y += K(10);
+    // (Base stats: two columns of three, each a bar out of 160, the total in the heading.)
+    static const char* const names[] = { "HP", "Attack", "Defence", "Speed", "Sp. Atk", "Sp. Def" };
+    static const int order[] = { 0, 1, 2, 4, 5, 3 };
+    int total = 0;
+    for (int i = 0; i < 6; i++) total += e.base[i];
+    if (total > 0 && bottom - y > K(110))
+    {
+        T(c, x0, y + K(14), "Base stats", K(15), GlassHint, true, false);
+        const std::string t = "Total " + std::to_string(total);
+        T(c, x0 + w0 - W(t, K(15), true, false), y + K(14), t, K(15), GlassText, true, false);
+        y += K(24);
+        const int gap = K(18), colW = (w0 - gap) / 2, rowH = K(26), labelW = K(62), numW = K(34);
+        for (int n = 0; n < 6; n++)
+        {
+            const int i = order[n], col = n / 3, bx0 = x0 + col * (colW + gap), ry = y + (n % 3) * rowH;
+            T(c, bx0, ry + rowH / 2 + K(6), names[i], K(15), GlassHint, false, false);
+            const std::string v = std::to_string(e.base[i]);
+            T(c, bx0 + labelW + numW - K(8) - W(v, K(16), true, false), ry + rowH / 2 + K(6), v, K(16), GlassText, true, false);
+            const int bx = bx0 + labelW + numW, bw = colW - labelW - numW, bh = std::max(3, K(6)), by = ry + (rowH - bh) / 2;
+            Glass::Round(c, bx, by, bw, bh, bh * 0.5f, 0x22FFFFFF);
+            const uint32_t colr = e.base[i] >= 100 ? 0xFF5BD47Au : e.base[i] >= 60 ? 0xE6FFFFFFu : 0xFFF2C94Cu;
+            Glass::Round(c, bx, by, std::max(bh, bw * std::min(e.base[i], 160) / 160), bh, bh * 0.5f, colr);
+        }
+        y += 3 * rowH + K(12);
+    }
+    // (Abilities and evolutions, a line each while they fit.)
+    std::vector<std::string> lines;
+    if (!e.abilities.empty())
+    {
+        std::string a;
+        for (const auto& ab : e.abilities) a += (a.empty() ? "" : "  \xC2\xB7  ") + ab;
+        lines.push_back((e.abilities.size() > 1 ? "Abilities: " : "Ability: ") + a);
+    }
+    for (const auto& ev : e.evolutions) lines.push_back(ev);
+    for (const auto& line : lines)
+    {
+        if (y + K(26) > bottom) break;
+        std::string l = line;
+        while (l.size() > 1 && W(l, K(16), false, false) > w0) l.pop_back();
+        T(c, x0, y + K(16), l, K(16), Desc, false, false);
+        y += K(25);
+    }
+    if (bottom - y > K(30))
+        T(c, x0, bottom - K(6), "Enter or tap: the moves it learns", K(15), GlassHint, false, false);
+}
+
+// BATTLE INFO: how strong a hit is (CompanionTypes' percent) as "2x", and its colour: green for
+// strong, amber for weak, red for none, white for even; "?" when not known.
+inline std::string MatchText(int pct)
+{
+    if (pct < 0) return "?";
+    if (pct == 0) return "0x";
+    if (pct == 25) return "0.25x";
+    if (pct == 50) return "0.5x";
+    return std::to_string(pct / 100) + "x";
+}
+inline uint32_t MatchColour(int pct)
+{
+    return pct < 0 ? Menu::GlassHint : pct == 0 ? 0xFFE5534Bu : pct < 100 ? 0xFFF2C94Cu : pct > 100 ? 0xFF5BD47Au : Menu::GlassText;
+}
+inline const char* MatchWords(int pct)
+{
+    return pct < 0 ? "Not known" : pct == 0 ? "No effect" : pct < 100 ? "Not very effective" : pct > 100 ? "Super effective" : "Normal damage";
+}
+// BATTLE INFO's foe (P_CBFOE): its icon, level and HP; types; ability and item; then the types that
+// hit it hard, that it resists and that do nothing, as chips (from its types alone).
+inline void BattleFoeSummary(Canvas& c, const Menu::CompanionView::Mon& m, int x0, int top, int w0, int bottom, float k)
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    const uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
+    int y = top;
+    const int is = K(64);
+    Glass::Round(c, x0, y, is, is, 14 * k, 0x400A111C);
+    Glass::Rim(c, x0, y, is, is, 14 * k, std::max(1.0f, k), 0x60, 0x14);
+    if (!m.icon.empty()) MonIcon(c, m.icon, m.iconW, m.iconH, x0, y, is);
+    const int tx = x0 + is + K(16), tw = x0 + w0 - tx;
+    const std::string lv = "Lv " + std::to_string(m.level);
+    T(c, tx, y + K(20), lv, K(17), GlassText, true, false);
+    const std::string hp = m.maxHp ? std::to_string(m.hp) + " / " + std::to_string(m.maxHp) + " HP" : std::string();
+    if (!hp.empty()) T(c, x0 + w0 - W(hp, K(15), false, false), y + K(20), hp, K(15), Desc, false, false);
+    const int bh = std::max(4, K(8)), by = y + K(32);
+    const float f = m.maxHp > 0 ? std::clamp((float)m.hp / m.maxHp, 0.0f, 1.0f) : 0.0f;
+    Glass::Round(c, tx, by, tw, bh, bh * 0.5f, 0x26FFFFFF);
+    if (f > 0) Glass::Round(c, tx, by, std::max(bh, (int)(tw * f)), bh, bh * 0.5f, f > 0.5f ? 0xFF5BD47Au : f > 0.2f ? 0xFFF2C94Cu : 0xFFE5534Bu);
+    int cx = tx;
+    if (CompanionTypes::Valid(m.type1)) cx += TypeChip(c, m.type1, cx, y + K(44), k * 1.1f) + K(6);
+    if (CompanionTypes::Valid(m.type2) && m.type2 != m.type1) TypeChip(c, m.type2, cx, y + K(44), k * 1.1f);
+    y += is + K(24);
+    if (!m.ability.empty()) { T(c, x0, y + K(14), "Ability: " + m.ability, K(17), Desc, false, false); y += K(26); }
+    T(c, x0, y + K(14), "Holding " + (m.item.empty() ? std::string("nothing") : m.item), K(17), Desc, false, false);
+    y += K(36);
+    if (!CompanionTypes::Valid(m.type1)) return;
+    // (Each group: a heading, then the types as chips with how strong, wrapping while they fit.)
+    struct Group { const char* name; bool (*in)(int); };
+    const Group groups[] = { { "Weak to", [](int p) { return p > 100; } }, { "Resists", [](int p) { return p > 0 && p < 100; } }, { "No effect", [](int p) { return p == 0; } } };
+    for (const auto& g : groups)
+    {
+        std::vector<std::pair<int, int>> list;
+        for (int a = 0; a < 18; a++)
+            if (CompanionTypes::Valid(a))
+            {
+                const int p = CompanionTypes::Multiplier(a, m.type1, m.type2);
+                if (g.in(p)) list.push_back({ a, p });
+            }
+        if (list.empty()) continue;
+        std::stable_sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+        if (y + K(56) > bottom) break;
+        T(c, x0, y + K(14), g.name, K(15), GlassHint, true, false);
+        y += K(24);
+        int chx = x0;
+        for (const auto& [type, p] : list)
+        {
+            const std::string name = CleanFont::Title(CompanionTypes::Name(type)) + (p == 400 ? " 4x" : p == 25 ? " 0.25x" : "");
+            const int px = K(13), cw = W(name, px, true, false) + K(18), chh = K(24);
+            if (chx + cw > x0 + w0) { chx = x0; y += chh + K(6); if (y + chh > bottom) break; }
+            Glass::Round(c, chx, y, cw, chh, chh * 0.5f, TypeColour(type));
+            T(c, chx + K(9), y + chh / 2 + px * 7 / 20, name, px, 0xFFFFFFFF, true, false);
+            chx += cw + K(6);
+        }
+        y += K(36);
+    }
+}
+// BATTLE INFO's moves (P_CBMOVE): the move's type, kind, power, accuracy and PP, then how strong it
+// is against the foe, large, in its colour, and anything that changes that.
+inline void BattleMoveSummary(Canvas& c, const Menu::CompanionView::BattleMove& mv, const std::string& foe, int x0, int top, int w0, int bottom, float k)
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    const uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
+    int y = top;
+    int cx = x0;
+    if (CompanionTypes::Valid(mv.type)) cx += TypeChip(c, mv.type, cx, y, k * 1.2f) + K(10);
+    static const char* const kinds[] = { "Physical", "Special", "Status" };
+    if (mv.category >= 0 && mv.category < 3) T(c, cx, y + K(19), kinds[mv.category], K(16), Desc, false, false);
+    y += K(46);
+    // (Power, accuracy and PP: three numbers across.)
+    const std::string vals[] = { mv.power > 1 ? std::to_string(mv.power) : std::string("-"), mv.accuracy > 0 && mv.accuracy <= 100 ? std::to_string(mv.accuracy) : std::string("-"),
+                                 std::to_string(mv.pp) + (mv.maxPp ? " / " + std::to_string(mv.maxPp) : "") };
+    static const char* const heads[] = { "Power", "Accuracy", "PP" };
+    const int colW = w0 / 3;
+    for (int i = 0; i < 3; i++)
+    {
+        T(c, x0 + i * colW, y + K(14), heads[i], K(14), GlassHint, true, false);
+        T(c, x0 + i * colW, y + K(46), vals[i], K(26), i == 2 && mv.pp == 0 ? 0xFFE5534Bu : GlassText, true, false);
+    }
+    y += K(76);
+    T(c, x0, y + K(14), "Against " + foe, K(15), GlassHint, true, false);
+    y += K(26);
+    const std::string big = mv.category == 2 ? std::string("Status move") : MatchText(mv.percent);
+    T(c, x0, y + K(38), big, K(40), mv.category == 2 ? GlassText : MatchColour(mv.percent), true, false);
+    if (mv.category != 2) T(c, x0 + W(big, K(40), true, false) + K(14), y + K(38), MatchWords(mv.percent), K(18), Desc, false, false);
+    y += K(58);
+    if (mv.pp == 0) { T(c, x0, y + K(14), "No PP left.", K(17), 0xFFE5534Bu, false, false); y += K(26); }
+    if (!mv.note.empty() && mv.category != 2)
+        for (const auto& line : Wrap(mv.note, K(17), w0, 3)) { if (y + K(24) > bottom) break; T(c, x0, y + K(14), line, K(17), Desc, false, false); y += K(25); }
+}
+// BATTLE INFO's party (P_CBCOVER): one of your party against the foe: its best move's strength and
+// the foe's worst known move's against it, two large numbers with what they mean.
+inline void CoverageSummary(Canvas& c, const Menu::CompanionView::Mon& m, const Menu::CompanionView::Coverage& cov, const std::string& foe, int x0, int top, int w0, int bottom, float k)
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    const uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
+    int y = top;
+    const int is = K(64);
+    Glass::Round(c, x0, y, is, is, 14 * k, 0x400A111C);
+    Glass::Rim(c, x0, y, is, is, 14 * k, std::max(1.0f, k), 0x60, 0x14);
+    if (!m.icon.empty()) MonIcon(c, m.icon, m.iconW, m.iconH, x0, y, is, m.hp == 0 ? 0x70 : 255);
+    const int tx = x0 + is + K(16);
+    T(c, tx, y + K(24), "Lv " + std::to_string(m.level) + "  \xC2\xB7  " + (m.hp ? std::to_string(m.hp) + " / " + std::to_string(m.maxHp) + " HP" : std::string("Fainted")), K(16), GlassText, true, false);
+    int cx = tx;
+    if (CompanionTypes::Valid(m.type1)) cx += TypeChip(c, m.type1, cx, y + K(36), k * 1.1f) + K(6);
+    if (CompanionTypes::Valid(m.type2) && m.type2 != m.type1) TypeChip(c, m.type2, cx, y + K(36), k * 1.1f);
+    y += is + K(26);
+    const struct { const char* head; int pct; std::string say; } rows[] = {
+        { "Its best move", cov.out, "against " + foe },
+        { "The foe's worst known move", cov.in, "against it" } };
+    for (const auto& r : rows)
+    {
+        if (y + K(80) > bottom) break;
+        T(c, x0, y + K(14), r.head, K(15), GlassHint, true, false);
+        const std::string big = MatchText(r.pct);
+        T(c, x0, y + K(56), big, K(40), MatchColour(r.pct), true, false);
+        T(c, x0 + W(big, K(40), true, false) + K(14), y + K(56), std::string(MatchWords(r.pct)) + " " + r.say, K(17), Desc, false, false);
+        y += K(84);
+    }
+}
+
 // COMPANION's pictures of what the game holds now (Menu::CompanionView), in the box x0..x0+w0,
 // top..bottom: a settings page's preview (DrawSettings), the Companion Window and the HUD.
-inline bool CompanionPicture(Canvas& c, const Menu::CompanionView& cv, int kind, int x0, int top, int w0, int bottom, float k)
+inline bool CompanionPicture(Canvas& c, const Menu::CompanionView& cv, int kind, int x0, int top, int w0, int bottom, float k,
+                             int chosen = -1, std::vector<std::array<int, 5>>* picks = nullptr)
 {
     using namespace SettingsArt;
     constexpr uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
@@ -1072,12 +1480,14 @@ inline bool CompanionPicture(Canvas& c, const Menu::CompanionView& cv, int kind,
         for (int i = 0; i < n; i++)
         {
             const int cx = x0 + (i % cols) * (cw + gap), cy = y0 + (i / cols) * (ch + gap);
-            const bool empty = pk[i].stacks == 0;
-            Glass::Round(c, cx, cy, cw, ch, 12 * k, empty ? 0x0CFFFFFF : Row);
-            if (!empty) Glass::Rim(c, cx, cy, cw, ch, 12 * k, std::max(1.0f, k), 0x60, 0x14);
-            T(c, cx + K(14), cy + ch / 2 - K(2), pk[i].name, K(15), empty ? GlassHint : GlassText, true, false);
+            const bool empty = pk[i].stacks == 0, on = i == chosen;
+            // (BAG's POCKET row: the pocket shown lit as a choice card, each card tapped to show it.)
+            Glass::Round(c, cx, cy, cw, ch, 12 * k, on ? Pill : empty ? 0x0CFFFFFF : Row);
+            if (!empty || on) Glass::Rim(c, cx, cy, cw, ch, 12 * k, std::max(1.0f, k), on ? 0x90 : 0x60, 0x14);
+            if (picks) picks->push_back({ cx, cy, cw, ch, i });
+            T(c, cx + K(14), cy + ch / 2 - K(2), pk[i].name, K(15), on ? PillInk : empty ? GlassHint : GlassText, true, false);
             const std::string sub = empty ? "Empty" : std::to_string(pk[i].stacks) + (pk[i].stacks == 1 ? " kind" : " kinds") + "  \xC2\xB7  " + std::to_string(pk[i].total) + " in all";
-            T(c, cx + K(14), cy + ch / 2 + K(16), sub, K(12), GlassHint, false, false);
+            T(c, cx + K(14), cy + ch / 2 + K(16), sub, K(12), on ? 0xB30B1018u : GlassHint, false, false);
         }
     }
     else if (kind == Menu::P_CDEX && bottom - top > K(80))
@@ -1086,6 +1496,23 @@ inline bool CompanionPicture(Canvas& c, const Menu::CompanionView& cv, int kind,
         const int total = std::max(1, cv.dexTotal);
         const int bh = K(10), gap = K(46), blockH = 2 * (K(40) + K(14) + bh) + gap;
         int y = top + std::max(0, (bottom - top - blockH) / 2);
+        if (picks)
+        {
+            // (POKEDEX's SHOW row: All, Seen and Caught as cards, the one shown lit, each tapped
+            // to show it; the seen and caught bars under them.)
+            const int g = K(10), cw = (w0 - 2 * g) / 3, ch = K(70);
+            const struct { const char* name; int n; } cards[] = { { "All", cv.dexTotal }, { "Seen", cv.seen }, { "Caught", cv.caught } };
+            for (int i = 0; i < 3; i++)
+            {
+                const int cx = x0 + i * (cw + g), on = i == chosen;
+                Glass::Round(c, cx, top, cw, ch, 12 * k, on ? Pill : Row);
+                Glass::Rim(c, cx, top, cw, ch, 12 * k, std::max(1.0f, k), on ? 0x90 : 0x60, 0x14);
+                picks->push_back({ cx, top, cw, ch, i });
+                T(c, cx + K(14), top + K(30), cards[i].name, K(16), on ? PillInk : GlassText, true, false);
+                T(c, cx + K(14), top + K(54), std::to_string(cards[i].n), K(15), on ? 0xB30B1018u : GlassHint, false, false);
+            }
+            y = std::max(top + ch + K(30), y);
+        }
         const struct { const char* name; int n; } lines[] = { { "Seen", cv.seen }, { "Caught", cv.caught } };
         for (const auto& l : lines)
         {
@@ -1262,7 +1689,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     int total = 0, pitch = 0, headH = 0, sepH = 0;
     for (float squeeze : { 1.0f, 0.95f, 0.9f })
     {
-        rowH = KR(40 * squeeze); pitch = KR(44 * squeeze); headH = KR(46 * squeeze); sepH = KR(14 * squeeze);
+        rowH = KR(40 * squeeze * rowTall); pitch = rowH + KR(4 * squeeze); headH = KR(46 * squeeze); sepH = KR(14 * squeeze);
         total = 0;
         bool firstSection = true;
         for (int i = 0; i < n; i++)
@@ -1339,7 +1766,12 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             const int d = std::min((int)(rowH * 0.62f), KR(64)), cxI = listX + KR(22) + d / 2, cyI = y + rowH / 2;
             Glass::Round(c, cxI - d / 2, cyI - d / 2, d, d, d * 0.5f, 0x400A111C);
             Glass::Rim(c, cxI - d / 2, cyI - d / 2, d, d, d * 0.5f, std::max(1.0f, kr), 0x60, 0x14);
-            if (it.icon >= 0) Glass::DrawIcon(c, it.icon, (float)cxI, (float)cyI, d * 0.27f, ink);
+            if (it.preview == P_CMON && it.choice >= 0 && it.choice < (int)companion.party.size() && !companion.party[it.choice].icon.empty())
+            {
+                const auto& pm = companion.party[it.choice];
+                MonIcon(c, pm.icon, pm.iconW, pm.iconH, cxI - d / 2, cyI - d / 2, d, pm.hp == 0 && !pm.egg ? 0x70 : 255);
+            }
+            else if (it.icon >= 0) Glass::DrawIcon(c, it.icon, (float)cxI, (float)cyI, d * 0.27f, ink);
             const int tx = cxI + d / 2 + KR(22);
             const int vpx2 = std::min(KR(18), (int)(rowH * 0.2f));
             const int vw = it.value.empty() ? 0 : W(it.value, vpx2) + KR(20);
@@ -1364,19 +1796,45 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         }
         const int in = it.indent * KR(26); // (a row inside an open folder)
         if (it.kind == K_FOLDER) Glass::DrawIcon(c, it.choice == 1 ? Glass::I_CHEVRON_D : Glass::I_CHEVRON_R, listX + KR(36), y + rowH * 0.5f, 9 * kr, ink);
+        else if (it.preview == P_CITEM && it.choice >= 0 && it.choice < (int)companion.bag.size() && !companion.bag[it.choice].icon.empty())
+        {
+            const int d = std::min(rowH - KR(4), KR(36 * rowTall)); // (BAG: the item's own icon from the ROM)
+            MonIcon(c, companion.bag[it.choice].icon, 32, 32, listX + KR(36) + in - d / 2, y + (rowH - d) / 2, d);
+        }
+        else if (it.preview == P_CDEXMON && it.choice >= 0 && it.choice < (int)companion.dex.size() && !companion.dex[it.choice].icon.empty())
+        {
+            const auto& e = companion.dex[it.choice]; // (POKEDEX: its icon, faint until seen)
+            const int d = std::min(rowH, KR(40 * rowTall));
+            MonIcon(c, e.icon, 32, 32, listX + KR(36) + in - d / 2, y + (rowH - d) / 2, d, e.hidden ? 0xC0 : e.seen ? 255 : 0x50, e.hidden ? 0xFF05080Du : 0);
+        }
+        else if ((it.preview == P_CBFOE || it.preview == P_CBCOVER) && it.choice >= -1)
+        {
+            // (BATTLE INFO: the foe's icon, or that of one of your party)
+            const Menu::CompanionView::Mon* pm = it.preview == P_CBFOE ? &companion.foe
+                : it.choice >= 0 && it.choice < (int)companion.coverage.size() && companion.coverage[it.choice].party >= 0 &&
+                  companion.coverage[it.choice].party < (int)companion.party.size() ? &companion.party[companion.coverage[it.choice].party] : nullptr;
+            const int d = std::min(rowH, KR(40 * rowTall));
+            if (pm && !pm->icon.empty()) MonIcon(c, pm->icon, pm->iconW, pm->iconH, listX + KR(36) + in - d / 2, y + (rowH - d) / 2, d, pm->hp == 0 ? 0x70 : 255);
+        }
+        else if (it.preview == P_CBMOVE && it.choice >= 0 && it.choice < (int)companion.moves.size())
+        {
+            const int bw = KR(8), bh = (int)(rowH * 0.5f); // (BATTLE INFO: the move's type as a bar of its colour)
+            Glass::Round(c, listX + KR(36) + in - bw / 2, y + (rowH - bh) / 2, bw, bh, bw * 0.5f, TypeColour(companion.moves[it.choice].type));
+        }
         else if (it.icon >= 0) Glass::DrawIcon(c, it.icon, listX + KR(36) + in, y + rowH * 0.5f, 11 * kr, ink);
-        const int base = y + rowH / 2 + KR(7); // (the baseline of the row's text)
+        const int lpx = KR(rowTall > 1 ? 22 : 20); // (the name's size)
+        const int base = y + rowH / 2 + lpx * 7 / 20; // (the baseline of the row's text)
         {
             // (A long name cut to fit before the controls on the right.)
             const int maxW = (it.kind == K_TOGGLE || it.kind == K_PICKER ? ctlX : listX + listW - KR(90)) - (listX + KR(76) + in) - KR(12);
             std::string label = it.label;
             const bool bold = it.kind == K_FOLDER;
-            if (W(label, KR(20), bold) > maxW)
+            if (W(label, lpx, bold) > maxW)
             {
-                while (label.size() > 1 && W(label + "...", KR(20), bold) > maxW) label.pop_back();
+                while (label.size() > 1 && W(label + "...", lpx, bold) > maxW) label.pop_back();
                 label += "...";
             }
-            T(c, listX + KR(76) + in, base, label, KR(20), ink, bold);
+            T(c, listX + KR(76) + in, base, label, lpx, ink, bold);
         }
         if (it.kind == K_FOLDER && !it.value.empty())
             T(c, listX + listW - KR(20) - W(it.value, KR(17)), base, it.value, KR(17), GlassHint);
@@ -1407,8 +1865,13 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         }
         else if (it.kind == K_LINK)
         {
-            Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - KR(26), y + rowH * 0.5f, 9 * kr, ink);
-            if (!it.value.empty()) T(c, listX + listW - KR(44) - W(it.value, KR(17)), base, it.value, KR(17), GlassHint);
+            const bool opens = it.preview != P_CITEM && it.preview != P_CDEXMON && it.preview != P_CGUIDE &&
+                               it.preview != P_CBFOE && it.preview != P_CBMOVE && it.preview != P_CBCOVER; // (BAG's items, POKEDEX's entries: all in the preview)
+            if (opens) Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - KR(26), y + rowH * 0.5f, 9 * kr, ink);
+            const int vpx = KR(rowTall > 1 ? 20 : 17); // (BAG: how many, as large as the name)
+            if (!it.value.empty()) T(c, listX + listW - KR(opens ? 44 : 24) - W(it.value, vpx, rowTall > 1), base, it.value, vpx,
+                                     it.preview == P_CBMOVE && it.choice >= 0 && it.choice < (int)companion.moves.size() && companion.moves[it.choice].category != 2
+                                         ? MatchColour(companion.moves[it.choice].percent) : rowTall > 1 ? GlassText : GlassHint, rowTall > 1);
         }
     }
     if (total > avail) // (a thin bar: where the rows in view are among them all)
@@ -1432,8 +1895,15 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     const int pad = K(20), innerW = pvW - 2 * pad;
     const std::string name = it.kind == K_BACK ? std::string("BACK") : it.label;
     const std::string desc = it.kind == K_BACK ? std::string("Back to Settings.") : Sentence(it.desc);
-    T(c, pvX + pad, pvY + K(42), name, K(25), GlassText, true);
+    // (A long name, as GUIDE's questions: on two lines, the rest moved down.)
     int y = pvY + K(80);
+    if (W(name, K(25), true) > innerW)
+    {
+        const auto nameLines = Wrap(name, K(25), innerW - K(30), 2);
+        for (size_t i = 0; i < nameLines.size(); i++) T(c, pvX + pad, pvY + K(42) + (int)i * K(32), nameLines[i], K(25), GlassText, true);
+        y += (int)(nameLines.size() - 1) * K(32);
+    }
+    else T(c, pvX + pad, pvY + K(42), name, K(25), GlassText, true);
     for (const std::string& line : Wrap(desc, K(18), innerW, wide ? 7 : 5))
     {
         T(c, pvX + pad, y, line, K(18), Desc, false, false);
@@ -1474,8 +1944,51 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             if (!pd.empty()) { T(c, tx + K(16), ly, "BUTTON", K(13), GlassHint); T(c, tx + tw - K(14) - W(pd, K(15), true), ly, pd, K(15), GlassText, true); }
         }
     }
+    else if (it.preview == P_CMON && it.choice >= 0 && it.choice < (int)companion.party.size() && regionBottom - regionTop > K(120))
+        MonSummary(c, companion.party[it.choice], pvX + pad, regionTop, innerW, regionBottom, k, false);
+    else if (it.preview == P_CDEXMON && it.choice >= 0 && it.choice < (int)companion.dex.size() && regionBottom - regionTop > K(120))
+        DexSummary(c, companion.dex[it.choice], pvX + pad, regionTop, innerW, regionBottom, k, companion.dexMoves);
+    else if (it.preview == P_CBFOE && regionBottom - regionTop > K(120))
+        BattleFoeSummary(c, companion.foe, pvX + pad, regionTop, innerW, regionBottom, k);
+    else if (it.preview == P_CBMOVE && it.choice >= 0 && it.choice < (int)companion.moves.size() && regionBottom - regionTop > K(120))
+        BattleMoveSummary(c, companion.moves[it.choice], companion.foe.name, pvX + pad, regionTop, innerW, regionBottom, k);
+    else if (it.preview == P_CBCOVER && it.choice >= 0 && it.choice < (int)companion.coverage.size() && regionBottom - regionTop > K(120))
+    {
+        const auto& cov = companion.coverage[it.choice];
+        if (cov.party >= 0 && cov.party < (int)companion.party.size())
+            CoverageSummary(c, companion.party[cov.party], cov, companion.foe.name, pvX + pad, regionTop, innerW, regionBottom, k);
+    }
+    else if (it.preview == P_CGUIDE && it.choice >= 0 && it.choice < (int)companion.guide.size() && regionBottom - regionTop > K(60))
+    {
+        // (GUIDE: the answer under ANSWER once shown; until then a card saying how to show it.)
+        const auto& a = companion.guide[it.choice];
+        const int x0 = pvX + pad;
+        int gy = regionTop + K(6);
+        if (a.shown)
+        {
+            T(c, x0, gy + K(14), "Answer", K(15), GlassHint, true, false);
+            gy += K(26);
+            for (const auto& line : Wrap(a.text, K(19), innerW, 12))
+            {
+                if (gy + K(28) > regionBottom) break;
+                T(c, x0, gy + K(18), line, K(19), GlassText, false, false);
+                gy += K(28);
+            }
+        }
+        else
+        {
+            const int ch = std::min(K(110), regionBottom - gy);
+            Glass::Round(c, x0, gy, innerW, ch, 14 * k, 0x400A111C);
+            Glass::Rim(c, x0, gy, innerW, ch, 14 * k, std::max(1.0f, k), 0x60, 0x14);
+            TCentred(c, x0 + innerW / 2, gy + ch / 2 - K(4), "Answer hidden", K(18), GlassText, true);
+            TCentred(c, x0 + innerW / 2, gy + ch / 2 + K(22), "Enter or tap to show it", K(15), GlassHint, false);
+        }
+    }
+    else if (it.preview == P_CITEM && it.choice >= 0 && it.choice < (int)companion.bag.size() && regionBottom - regionTop > K(120))
+        ItemSummary(c, companion, companion.bag[it.choice], pvX + pad, regionTop, innerW, regionBottom, k);
     else if ((it.preview == P_CPARTY || it.preview == P_CBAG || it.preview == P_CDEX || it.preview == P_CPLACE) &&
-             CompanionPicture(c, companion, it.preview, pvX + pad, regionTop, innerW, regionBottom, k))
+             CompanionPicture(c, companion, it.preview, pvX + pad, regionTop, innerW, regionBottom, k,
+                              it.kind == K_PICKER ? it.choice : -1, it.kind == K_PICKER ? &pickRects : nullptr))
     {
     }
     else if (it.preview == P_TOUCH && regionBottom - regionTop > K(60))
