@@ -184,6 +184,7 @@ struct MenuItem
     int choice = -1;
     int preview = -1;
     std::string desc, tip;
+    int indent = 0; // (settings pages: a row inside an open folder, K_FOLDER, drawn further in)
 };
 
 struct Menu
@@ -199,7 +200,8 @@ struct Menu
     // rows in sections on the left and a preview of the chosen row on the right.
     int style = 0;
     int pageIcon = -1;
-    enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK };
+    enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK, K_FOLDER };
+    std::string headerNote; // (settings pages: a few words at the header's right, CHEATS' counts)
     // A preview's pictures (MenuItem::preview), one per choice (its art: which variant).
     enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER, P_MOTION, P_WIDE, P_RES, P_PAD, P_KEY, P_SHORTCUTS, P_TOUCH };
     // P_PAD and P_KEY (CONTROLS): the controller drawn in its maker's layout (padStyle: Controls::Style;
@@ -346,9 +348,13 @@ struct Menu
     static constexpr uint32_t FrostTint = 0x0FFFFFFF, FrostEdge = 0x5CFFFFFF, FrostChosen = 0x2EFFFFFF;
     static void FrostBox(Canvas& c, bool solid, int x, int y, int w, int h, float r, bool chosen = false, float edge = 1.0f)
     {
+        // (Raised glass, as the settings pages': a soft shadow, the frost with a deep tint, a lit rim.)
+        Glass::Shadow(c, x, y, w, h, r, std::max(6.0f, h * 0.06f), 0x70);
         if (solid) Glass::Frost(c, x, y, w, h, r);
         else Glass::Round(c, x, y, w, h, r, GlassShade);
-        Glass::Round(c, x, y, w, h, r, chosen ? FrostChosen : FrostTint, chosen ? GlassChosenEdge : FrostEdge, edge);
+        Glass::Round(c, x, y, w, h, r, chosen ? FrostChosen : 0x30101826);
+        if (chosen) Glass::Round(c, x, y, w, h, r, 0, GlassChosenEdge, edge);
+        else Glass::Rim(c, x, y, w, h, r, std::max(1.2f, edge * 1.4f));
     }
 
     // The first page's tiles (columns > 0): rows of glass squares, each an icon over its name,

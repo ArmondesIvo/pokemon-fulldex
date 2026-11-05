@@ -4797,6 +4797,7 @@ int main(int argc, char** argv)
     // CHEATS. -2: the folders (or every code, when there is no folder to open). -3: ON NOW.
     // 0 and up: that folder of the database, so its codes are listed on their own.
     int cheatWhere = -2; // -4: search results across all folders
+    std::vector<char> cheatOpen; // CHEATS: which folders are open (1), as the list shows them
     std::string cheatQuery,companionQuery;
     int companionReferenceKind=0,companionReferenceId=0;
     bool companionReferenceReturn=false;
@@ -4865,6 +4866,7 @@ int main(int argc, char** argv)
         menu.pageIcon = -1;
         menu.padLabels.clear();
         menu.padNote.clear();
+        menu.headerNote.clear();
         menu.listShare = 0.605f;
         if (menuPage == PAGE_KEYS)
         {
@@ -5013,7 +5015,7 @@ int main(int argc, char** argv)
             tile(M_RESUME, "RESUME", "", Glass::I_PLAY);
             tile(M_HUB_SAVE, "SAVE", "", Glass::I_SAVE);
             tile(M_HUB_LOAD, "LOAD", "", Glass::I_LOAD);
-            tile(M_HUB_CHEATS, "CHEATS", cheats.On() ? std::to_string(cheats.On()) + " ON" : "", Glass::I_CHEATS);
+            tile(M_CHEATS, "CHEATS", cheats.On() ? std::to_string(cheats.On()) + " ON" : "", Glass::I_CHEATS); // (straight to CHEATS: OTHER VERSION POKEMON is on its page)
             tile(M_COMPANION, "COMPANION", "", Glass::I_POKEBALL);
             tile(M_RA, "ACHIEVEMENTS", Achievements::Available() && cfg.ra.on ? "ON" : "", Glass::I_TROPHY, !Achievements::Available());
             tile(M_HUB_SETTINGS, "SETTINGS", "", Glass::I_GEAR);
@@ -5513,59 +5515,93 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_CHEATS)
         {
-            // A database is a set of folders, each with its own codes. Listing every code as
-            // "folder: name" in one row cut the name off, so the rows all looked alike (issue 32).
+            // A settings page (ui_settings.h): SEARCH, ON NOW and DATABASE INFO, then the codes: those
+            // in no folder, and each folder, opening in place with its codes under it; each code
+            // with OFF / ON, the preview saying what the database says about it. (Folders, counts
+            // and hold-to-scroll follow WeeabooGod's suggestions, GitHub #16.)
+            settingsPage(Glass::I_CHEATS);
+            menu.listShare = 0.62f;
             if (cheatWhere == -3 && cheats.On() == 0) cheatWhere = -2;
-            add(M_CSEARCH, "SEARCH", cheatQuery.empty() ? "" : Cheats::Fit(cheatQuery, 18), true);
-            add(M_CINFO, "DATABASE INFO", std::to_string(cheats.items.size()) + " CODES", true);
+            if (cheatWhere >= 0) cheatWhere = -2; // (folders open in place now)
+            if (cheatOpen.size() != cheats.folders.size()) cheatOpen.assign(cheats.folders.size(), 0);
+            menu.headerNote = std::to_string(cheats.On()) + " ON  \xC2\xB7  " + std::to_string(cheats.items.size()) + " CODES";
+            const std::string careful = "Cheats can change the game and its save: back up your save before trying them.";
+            auto cheatRow = [&](size_t i, int indent, bool showFolder) {
+                const Cheats::Cheat& c = cheats.items[i];
+                toggle(M_CHEAT0 + (int)i, c.name.c_str(), -1, Menu::P_NONE, c.on, "", "");
+                MenuItem& it = menu.items.back();
+                it.indent = indent;
+                std::string d = c.note.empty() ? std::string("The database says nothing more about this one.") : c.note;
+                if (showFolder && !c.category.empty()) d = "In " + c.category + ". " + d;
+                it.desc = d;
+                it.tip = c.group >= 0 ? "Only one in its folder can be on at a time. " + careful : careful;
+            };
+            section("FIND", Glass::I_CHEATS);
+            add(M_CSEARCH, "SEARCH", cheatQuery.empty() ? "" : Cheats::Fit(cheatQuery, 18));
+            menu.items.back().kind = Menu::K_LINK;
+            menu.items.back().icon = Glass::I_GLOBE;
+            menu.items.back().desc = "Find a code by name, in every folder.";
+            menu.items.back().tip = "Type, or choose letters with the controller.";
+            if (cheats.On() > 0)
+            {
+                add(M_CHEAT_ON, "ON NOW", std::to_string(cheats.On()));
+                menu.items.back().kind = Menu::K_LINK;
+                menu.items.back().icon = Glass::I_SPARKLE;
+                menu.items.back().desc = "Every code that is on, from any folder, to turn off in one place.";
+            }
+            add(M_CINFO, "DATABASE INFO", std::to_string(cheats.items.size()) + " CODES");
+            menu.items.back().kind = Menu::K_LINK;
+            menu.items.back().icon = Glass::I_INFO;
+            menu.items.back().desc = "Where the codes come from, and why a game might have none.";
+            menu.items.back().tip = "The folders, counts and hold-to-scroll here follow suggestions by WeeabooGod (GitHub #16).";
+            if (exclusives.Supported())
+            {
+                // (From the old CHEATS hub: not a code, but changes the game the same way.)
+                toggle(M_BOTHVER, "OTHER VERSION POKEMON", Glass::I_POKEBALL, Menu::P_NONE, exclusives.on,
+                       "Wild Pokémon of both versions appear, so ones only found in the other version can be caught here.",
+                       "Turn it off to play this version as it came.");
+            }
             if (cheatWhere == -4)
             {
+                section(("RESULTS: " + Cheats::Fit(cheatQuery, 24)).c_str(), Glass::I_GLOBE);
                 int matches = 0;
-                for (size_t i=0; i<cheats.items.size(); i++)
-                    if (Cheats::Matches(cheats.items[i], cheatQuery))
-                    {
-                        matches++;
-                        add(M_CHEAT0+(int)i, Cheats::Fit(cheats.items[i].name, Cheats::LabelChars).c_str(), cheats.items[i].on ? "ON" : "OFF");
-                    }
-                if (!matches) add(M_NOTHING, "NO MATCHING CODES", "", true);
-            }
-            else if (cheats.items.empty()) add(M_NOTHING, "NONE FOUND FOR THIS GAME", "", true);
-            else if (cheatBrowse() && cheatWhere == -2)
-            {
-                if (cheats.On() > 0)
-                    add(M_CHEAT_ON, "ON NOW", std::to_string(cheats.On()), true);
                 for (size_t i = 0; i < cheats.items.size(); i++)
-                {
-                    if (!cheats.items[i].category.empty()) continue;
-                    add(M_CHEAT0 + (int)i, Cheats::Fit(cheats.items[i].name, Cheats::LabelChars).c_str(),
-                        cheats.items[i].on ? "ON" : "OFF");
-                }
-                for (size_t i = 0; i < cheats.folders.size(); i++)
-                    add(M_CFOLDER0 + (int)i, Cheats::Fit(cheats.folders[i].name, 28).c_str(),
-                        cheats.FolderStatus(cheats.folders[i].name), true);
+                    if (Cheats::Matches(cheats.items[i], cheatQuery)) { matches++; cheatRow(i, 0, true); }
+                if (!matches) add(M_NOTHING, "NO MATCHING CODES", "", true);
             }
             else if (cheatWhere == -3)
             {
+                section("ON NOW", Glass::I_SPARKLE);
                 for (size_t i = 0; i < cheats.items.size(); i++)
-                {
-                    if (!cheats.items[i].on) continue;
-                    const Cheats::Cheat& c = cheats.items[i];
-                    const std::string both = c.category.empty() ? c.name : c.category + ": " + c.name;
-                    add(M_CHEAT0 + (int)i, Cheats::Fit(both.size() <= (size_t)Cheats::LabelChars ? both : c.name, Cheats::LabelChars).c_str(), "ON");
-                }
+                    if (cheats.items[i].on) cheatRow(i, 0, true);
+            }
+            else if (cheats.items.empty())
+            {
+                add(M_NOTHING, "NONE FOUND FOR THIS GAME", "", true);
+                menu.items.back().desc = "No codes were found for this game. Database Info says where Fulldex looked.";
             }
             else
             {
-                const std::string cat = (cheatWhere >= 0 && cheatWhere < (int)cheats.folders.size())
-                    ? cheats.folders[cheatWhere].name : std::string();
+                section("CODES", Glass::I_CHEATS);
                 for (size_t i = 0; i < cheats.items.size(); i++)
+                    if (cheats.items[i].category.empty()) cheatRow(i, 0, false);
+                for (size_t f = 0; f < cheats.folders.size(); f++)
                 {
-                    if (cheatWhere >= 0 && cheats.items[i].category != cat) continue;
-                    add(M_CHEAT0 + (int)i, Cheats::Fit(cheats.items[i].name, Cheats::LabelChars).c_str(),
-                        cheats.items[i].on ? "ON" : "OFF");
+                    const std::string& name = cheats.folders[f].name;
+                    int total = 0, on = 0;
+                    for (const Cheats::Cheat& c : cheats.items)
+                        if (c.category == name) { total++; on += c.on; }
+                    add(M_CFOLDER0 + (int)f, name.c_str(), on ? std::to_string(on) + " ON" : "");
+                    MenuItem& it = menu.items.back();
+                    it.kind = Menu::K_FOLDER;
+                    it.choice = cheatOpen[f] ? 1 : 0;
+                    it.desc = cheats.folders[f].note.empty() ? std::to_string(total) + " codes in this folder." : cheats.folders[f].note;
+                    it.tip = cheatOpen[f] ? "A: close the folder." : "A: open the folder.";
+                    if (cheatOpen[f])
+                        for (size_t i = 0; i < cheats.items.size(); i++)
+                            if (cheats.items[i].category == name) cheatRow(i, 1, false);
                 }
             }
-            add(M_BACK, "BACK", "");
             if (menu.selected >= (int)menu.items.size())
                 menu.selected = (int)menu.items.size() - 1;
         }
@@ -5745,7 +5781,6 @@ int main(int argc, char** argv)
         case M_SAVESTATE: return PAGE_HUB_SAVE;
         case M_LOADSTATE: return PAGE_HUB_LOAD;
         case M_STATES: case M_BACKUPS: return hubPage == PAGE_HUB_LOAD ? PAGE_HUB_LOAD : PAGE_HUB_SAVE;
-        case M_CHEATS: case M_BOTHVER: return PAGE_HUB_CHEATS;
         case M_DISPLAY: case M_GRAPHICS: case M_PLAYBACK: case M_FAST: case M_SOUND: case M_CONTROLMENU: case M_EXTRAS:
         case M_QUICK_ACTIONS: return PAGE_HUB_SETTINGS;
         case M_QUIT: case M_RESET: return PAGE_HUB_QUIT;
@@ -7242,13 +7277,17 @@ int main(int argc, char** argv)
             }
             else if (id >= M_CFOLDER0 && id < M_CFOLDER0 + (int)cheats.folders.size())
             {
-                cheatWhere = id - M_CFOLDER0;
-                goPage(PAGE_CHEATS, -1);
+                // (A folder opens or closes in place, its codes under it.)
+                const size_t f = (size_t)(id - M_CFOLDER0);
+                if (cheatOpen.size() != cheats.folders.size()) cheatOpen.assign(cheats.folders.size(), 0);
+                cheatOpen[f] = !cheatOpen[f];
+                buildMenu();
                 hit = -1;
             }
             else if (id >= M_CHEAT0 && id < M_ACH0 && id-M_CHEAT0 < (int)cheats.items.size())
             {
-                if(dir == 0) {cheatDetail=id-M_CHEAT0;goPage(PAGE_CDETAIL,M_CDETAIL_TOGGLE);hit=-1;}
+                // (A, a tap or left / right: on or off at once; the preview already says what it does.)
+                if(dir == 0 && menu.style != 1) {cheatDetail=id-M_CHEAT0;goPage(PAGE_CDETAIL,M_CDETAIL_TOGGLE);hit=-1;}
                 else
                 {
                     cheats.Toggle((size_t)(id-M_CHEAT0));

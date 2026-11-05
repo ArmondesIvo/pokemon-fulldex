@@ -160,6 +160,69 @@ inline void Frost(Canvas& c, int x, int y, int w, int h, float r)
     }
 }
 
+// A panel lifted off the game: a soft shadow round and below it (outside it only, so the glass
+// itself is not darkened), size pixels wide.
+inline void Shadow(Canvas& c, int x, int y, int w, int h, float r, float size, int alpha = 0x70)
+{
+    if (w <= 0 || h <= 0 || size <= 0) return;
+    const float drop = size * 0.35f; // (the light from above: the shadow a little lower)
+    const int s = (int)std::ceil(size);
+    Mark(c, x - s, y - s, x + w + s, y + h + s + (int)drop);
+    const float hx = w * 0.5f, hy = h * 0.5f, cx = x + hx, cy = y + hy + drop;
+    r = std::min(r, std::min(hx, hy));
+    for (int py = std::max(0, y - s); py < std::min(c.h, y + h + s + (int)drop); py++)
+    {
+        uint32_t* row = &c.px[(size_t)py * c.w];
+        const float qy = std::fabs(py + 0.5f - cy) - (hy - r);
+        // (Rows beside the panel's straight sides: only the bands left and right of it.)
+        const bool sides = py > y + r && py < y + h - r;
+        for (int px = std::max(0, x - s); px < std::min(c.w, x + w + s); px++)
+        {
+            if (sides && px >= x && px < x + w) { px = x + w - 1; continue; }
+            const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
+            const float d = std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+            // (Not under the panel itself: its own outline, undisplaced.)
+            const float qx0 = std::fabs(px + 0.5f - (x + hx)) - (hx - r), qy0 = std::fabs(py + 0.5f - (y + hy)) - (hy - r);
+            const float d0 = std::hypot(std::max(qx0, 0.0f), std::max(qy0, 0.0f)) + std::min(std::max(qx0, qy0), 0.0f) - r;
+            if (d0 <= 0.5f || d >= size) continue;
+            const float t = 1.0f - std::max(0.0f, d) / size;
+            row[px] = Over(row[px], (uint32_t)(alpha * t * t) << 24);
+        }
+    }
+}
+
+// The lit rim of raised glass: a bright edge at the top fading as it goes down (light from above),
+// and a faint second line just inside it, as the thickness of the glass catching the light.
+inline void Rim(Canvas& c, int x, int y, int w, int h, float r, float bw, int topAlpha = 0xD8, int bottomAlpha = 0x38)
+{
+    if (w <= 0 || h <= 0) return;
+    Mark(c, x, y, x + w, y + h);
+    const float hx = w * 0.5f, hy = h * 0.5f, cx = x + hx, cy = y + hy;
+    r = std::min(r, std::min(hx, hy));
+    const float band = bw * 3.5f + 1.0f;
+    for (int py = std::max(0, y); py < std::min(c.h, y + h); py++)
+    {
+        uint32_t* row = &c.px[(size_t)py * c.w];
+        const float qy = std::fabs(py + 0.5f - cy) - (hy - r);
+        const float t = (py - y) / (float)h;
+        const float edgeA = topAlpha + (bottomAlpha - topAlpha) * std::min(1.0f, t * 1.6f);
+        const float innerA = std::max(0.0f, 1.0f - t * 3.0f) * 0x30;
+        const bool sides = py > y + band + r && py < y + h - band - r;
+        for (int px = std::max(0, x); px < std::min(c.w, x + w); px++)
+        {
+            if (sides && px > x + band && px < x + w - band) { px = x + w - (int)band - 1; continue; }
+            const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
+            const float d = std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+            if (d > 0.5f || d < -band) continue;
+            const float outer = std::clamp(bw * 0.5f + 0.5f - std::fabs(d + bw * 0.5f), 0.0f, 1.0f);
+            const float inner = std::clamp(0.5f + 0.5f - std::fabs(d + bw * 2.6f), 0.0f, 1.0f);
+            uint32_t& p = row[px];
+            if (outer > 0) p = Over(p, (uint32_t)(edgeA) << 24 | 0xFFFFFF, (int)(outer * 255));
+            if (inner > 0 && innerA > 0) p = Over(p, (uint32_t)(innerA) << 24 | 0xFFFFFF, (int)(inner * 255));
+        }
+    }
+}
+
 // Text and anything else drawn with partial alpha made solid, over the opaque blurred game.
 inline void Opaque(Canvas& c)
 {

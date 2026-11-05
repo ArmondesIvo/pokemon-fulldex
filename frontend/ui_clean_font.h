@@ -100,6 +100,9 @@ inline float Kern(bool bold, int px, uint32_t a, uint32_t b)
 // The PlayStation button marks the hints use (\x01 cross, \x02 circle, \x03 square, \x04 triangle):
 // drawn as shapes the size of a capital letter.
 inline bool IsMark(uint32_t cp) { return cp >= 1 && cp <= 4; }
+// (Sized and placed from the font's own capital height, so a mark sits on the line like a letter.)
+inline float CapHeight(int px, bool bold);
+inline float MarkAdvance(int px, bool bold) { return CapHeight(px, bold) * 1.32f; }
 
 inline int Width(const std::string& s, int px, bool bold = false)
 {
@@ -109,12 +112,18 @@ inline int Width(const std::string& s, int px, bool bold = false)
     {
         uint32_t cp = Next(s, i);
         if (cp == 5) cp = 0xC9; // (the pixel font's É)
-        if (IsMark(cp)) { w += px * 0.78f; prev = 0; continue; }
+        if (IsMark(cp)) { w += MarkAdvance(px, bold); prev = 0; continue; }
         if (prev) w += Kern(bold, px, prev, cp);
         w += Get(bold, px, cp).advance;
         prev = cp;
     }
     return (int)(w + 0.5f);
+}
+
+inline float CapHeight(int px, bool bold)
+{
+    const Glyph& g = Get(bold, px, 'H');
+    return g.alpha.empty() ? px * 0.52f : (float)-g.y0;
 }
 
 // Draws s with its baseline at y.
@@ -128,7 +137,7 @@ inline void Draw(Canvas& c, int x, int y, const std::string& s, int px, uint32_t
         if (cp == 5) cp = 0xC9;
         if (IsMark(cp))
         {
-            const float size = px * 0.3f, cx = pen + px * 0.38f, cy = y - px * 0.36f;
+            const float cap = CapHeight(px, bold), size = cap * 0.5f, cx = pen + cap * 0.6f, cy = y - cap * 0.5f;
             const int icon = cp; // drawn with glass.h's shapes
             const int x0 = (int)(cx - size) - 2, y0 = (int)(cy - size) - 2, x1 = (int)(cx + size) + 3, y1 = (int)(cy + size) + 3;
             Glass::Mark(c, x0, y0, x1, y1);
@@ -144,7 +153,7 @@ inline void Draw(Canvas& c, int x, int y, const std::string& s, int px, uint32_t
                     const float cover = std::clamp(0.5f - d * size, 0.0f, 1.0f);
                     if (cover > 0) { uint32_t& p = c.px[(size_t)py * c.w + qx]; p = Glass::Over(p, argb, (int)(cover * 255)); }
                 }
-            pen += px * 0.78f;
+            pen += MarkAdvance(px, bold);
             prev = 0;
             continue;
         }

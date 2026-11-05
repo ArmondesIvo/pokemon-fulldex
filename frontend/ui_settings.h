@@ -19,7 +19,9 @@ namespace SettingsArt
 {
 // The settings colours: frosted glass (Glass::Frost) with white over it, and white for whatever is
 // chosen (the row's edge, the pill that is on, its picture), with dark text on a white pill.
-constexpr uint32_t Panel = 0x0FFFFFFF, PanelEdge = 0x5CFFFFFF, Row = 0x1AFFFFFF, RowEdge = 0x24FFFFFF;
+// (Raised glass: the panel a deep tint over the frost, lit at its rim; the rows and the preview
+// darker glass set into it, each with its own thin lit edge.)
+constexpr uint32_t Panel = 0x38101826, PanelEdge = 0x5CFFFFFF, Row = 0x400A111C, RowEdge = 0x2EFFFFFF;
 constexpr uint32_t RowChosen = 0x2EFFFFFF, Glow = 0xFFFFFF, ChosenEdge = 0xFFFFFFFF;
 constexpr uint32_t Pill = 0xF7FFFFFF, PillEdge = 0xFFFFFFFF, PillInk = 0xFF0B1018, PillOff = 0x1EFFFFFF, PillOffEdge = 0x33FFFFFF;
 constexpr uint32_t Desc = 0xFFD3DAE4, Line = 0x2EFFFFFF;
@@ -1015,9 +1017,11 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     drawnX = px0; drawnY = py0; drawnW = W0; drawnH = H0; drawnLineH = 0; drawnFirstY = 0;
 
     // The panel.
+    Glass::Shadow(c, px0, py0, W0, H0, 28 * k, 26 * k, 0x80);
     if (solid) Glass::Frost(c, px0, py0, W0, H0, 28 * k);
     else Glass::Round(c, px0, py0, W0, H0, 28 * k, GlassShade); // (no blurred game to frost: the old shade)
-    Glass::Round(c, px0, py0, W0, H0, 28 * k, Panel, PanelEdge, std::max(1.0f, 1.4f * k));
+    Glass::Round(c, px0, py0, W0, H0, 28 * k, Panel);
+    Glass::Rim(c, px0, py0, W0, H0, 28 * k, std::max(1.2f, 1.8f * k));
 
     // Header: back button, the page's icon, its title, a line under them.
     backS = K(54); backX = px0 + K(28); backY = py0 + K(18);
@@ -1029,6 +1033,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     Glass::Round(c, iconX, iconY, iconS, iconS, 15 * k, Row, PanelEdge, std::max(1.0f, k));
     if (pageIcon >= 0) Glass::DrawIcon(c, pageIcon, iconX + iconS * 0.5f, iconY + iconS * 0.5f, 17 * k, GlassText);
     T(c, iconX + iconS + K(20), iconY + K(41), title, K(34), GlassText, true);
+    if (!headerNote.empty()) T(c, px0 + W0 - K(32) - W(headerNote, K(17)), iconY + K(37), headerNote, K(17), GlassHint);
     FadeLine(c, px0 + K(28), px0 + W0 - K(28), py0 + K(92), std::max(1, K(1.5f)), 0xFFFFFF, 0x90);
 
     // Where the rows and the preview go.
@@ -1117,11 +1122,27 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         }
         const bool sel = i == selected, off = it.disabled;
         if (sel) GlowRound(c, listX, y, listW, rowH, 10 * k, k);
-        Glass::Round(c, listX, y, listW, rowH, 10 * k, sel ? RowChosen : Row, sel ? ChosenEdge : RowEdge, sel ? 2.2f * k : std::max(1.0f, k));
+        Glass::Round(c, listX, y, listW, rowH, 10 * k, sel ? RowChosen : Row, sel ? ChosenEdge : 0, sel ? 2.2f * k : std::max(1.0f, k));
+        if (!sel) Glass::Rim(c, listX, y, listW, rowH, 10 * k, std::max(1.0f, k), 0x50, 0x14);
         const uint32_t ink = off ? GlassOff : GlassText;
-        if (it.icon >= 0) Glass::DrawIcon(c, it.icon, listX + K(36), y + rowH * 0.5f, 11 * k, ink);
+        const int in = it.indent * K(26); // (a row inside an open folder)
+        if (it.kind == K_FOLDER) Glass::DrawIcon(c, it.choice == 1 ? Glass::I_CHEVRON_D : Glass::I_CHEVRON_R, listX + K(36), y + rowH * 0.5f, 9 * k, ink);
+        else if (it.icon >= 0) Glass::DrawIcon(c, it.icon, listX + K(36) + in, y + rowH * 0.5f, 11 * k, ink);
         const int base = y + rowH / 2 + K(7); // (the baseline of the row's text)
-        T(c, listX + K(76), base, it.label, K(20), ink);
+        {
+            // (A long name cut to fit before the controls on the right.)
+            const int maxW = (it.kind == K_TOGGLE || it.kind == K_PICKER ? ctlX : listX + listW - K(90)) - (listX + K(76) + in) - K(12);
+            std::string label = it.label;
+            const bool bold = it.kind == K_FOLDER;
+            if (W(label, K(20), bold) > maxW)
+            {
+                while (label.size() > 1 && W(label + "...", K(20), bold) > maxW) label.pop_back();
+                label += "...";
+            }
+            T(c, listX + K(76) + in, base, label, K(20), ink, bold);
+        }
+        if (it.kind == K_FOLDER && !it.value.empty())
+            T(c, listX + listW - K(20) - W(it.value, K(17)), base, it.value, K(17), GlassHint);
         if (it.kind == K_TOGGLE)
         {
             const int hw = (ctlW - K(6)) / 2, ph2 = std::min(rowH - K(6), K(32)), py = y + (rowH - ph2) / 2;
@@ -1148,7 +1169,10 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             else T(c, ctlX + ctlW - W(it.value, vpx), base, it.value, vpx, off ? GlassOff : GlassHint);
         }
         else if (it.kind == K_LINK)
+        {
             Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - K(26), y + rowH * 0.5f, 9 * k, ink);
+            if (!it.value.empty()) T(c, listX + listW - K(44) - W(it.value, K(17)), base, it.value, K(17), GlassHint);
+        }
     }
     if (total > avail) // (a thin bar: where the rows in view are among them all)
     {
@@ -1166,7 +1190,8 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     PadLiveNow() = padLive;
     std::copy(padAxes, padAxes + 6, PadAxesNow());
     KeyNow() = it.value;
-    Glass::Round(c, pvX, pvY, pvW, pvH, 18 * k, Row, 0x24FFFFFF, std::max(1.0f, k));
+    Glass::Round(c, pvX, pvY, pvW, pvH, 18 * k, Row);
+    Glass::Rim(c, pvX, pvY, pvW, pvH, 18 * k, std::max(1.0f, 1.2f * k), 0x70, 0x18);
     const int pad = K(20), innerW = pvW - 2 * pad;
     const std::string name = it.kind == K_BACK ? std::string("BACK") : it.label;
     const std::string desc = it.kind == K_BACK ? std::string("Back to Settings.") : Sentence(it.desc);
