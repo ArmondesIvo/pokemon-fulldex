@@ -417,18 +417,36 @@ inline void Picture(Canvas& c, int kind, int art, int x, int y, int w, int h, fl
             }
         }
         break;
-    case Menu::P_MOTION: // OFF (30 a second), ON (60): a Poke Ball's path drawn as the frames that show it
+    case Menu::P_MOTION: // 30 or 60: a film strip of the game moving along, frame by frame
     {
-        Whole(c, Frame(c), x, y, w, h, r);
-        Glass::Round(c, x, y, w, h, r, 0x8C000000);
-        // (The same throw: 30 pictures a second show half as many places along it as 60.)
-        const int steps = art == 1 ? 9 : 5;
-        for (int i = 0; i < steps; i++)
+        // (Six frames in a row, the view creeping right as the camera would. At 30 each frame is
+        // shown twice, the copy dimmed; at 60 the gap is a new in-between frame, edged in white.)
+        Glass::Round(c, x, y, w, h, r, 0xFF101419);
+        const Src f = Frame(c);
+        const int n = 4, holes = std::max(2, (int)(h * 0.08f)), band = holes * 2;
+        for (int i = 0; i < 2 * n; i++) // (the film's sprocket holes, above and below)
         {
-            const float t = i / (float)(steps - 1);
-            const float bx = x + w * (0.14f + 0.62f * t), by = y + h * (0.8f - 0.5f * std::sin(t * 3.14159f));
-            const uint32_t a = (uint32_t)(110 + 145 * t) << 24;
-            Glass::DrawIcon(c, Glass::I_POKEBALL, bx, by, h * 0.1f, a | 0xFFFFFF);
+            const int hx = x + (int)((i + 0.5f) * w / (2.0f * n)) - holes / 2;
+            Glass::Round(c, hx, y + holes / 2, holes, holes, holes * 0.25f, 0x50FFFFFF);
+            Glass::Round(c, hx, y + h - holes / 2 - holes, holes, holes, holes * 0.25f, 0x50FFFFFF);
+        }
+        const int gap = std::max(1, (int)(w * 0.012f)), fy = y + band, fh = h - 2 * band;
+        const int fw = (w - (n + 1) * gap) / n;
+        for (int i = 0; i < n; i++)
+        {
+            const bool copy = art == 0 && i % 2 == 1;     // (30: the same frame again)
+            const bool between = art == 1 && i % 2 == 1;  // (60: the frame made in between)
+            const float step = art == 0 ? (float)(i / 2 * 2) : (float)i;
+            const int fx = x + gap + i * (fw + gap);
+            if (f.p)
+            {
+                const float sw = f.w * 0.34f, sh = sw * fh / std::max(1, fw);
+                const float sx = f.w * 0.2f + step * f.w * 0.035f, sy = std::max(0.0f, f.h * 0.52f - sh / 2);
+                Image(c, f, sx, sy, sw, std::min(sh, (float)f.h), fx, fy, fw, fh, true, 2 * k);
+            }
+            else Glass::Round(c, fx, fy, fw, fh, 2 * k, 0xFF2A333F);
+            if (copy) Glass::Round(c, fx, fy, fw, fh, 2 * k, 0x8C000000);
+            if (between) Glass::Round(c, fx, fy, fw, fh, 2 * k, 0, 0xFFFFFFFF, std::max(1.0f, 1.4f * k));
         }
         break;
     }
@@ -718,7 +736,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     if (!it.tip.empty())
     {
         const int tipPx = K(17), tipLine = K(23);
-        const auto lines = Wrap(Sentence(it.tip), tipPx, innerW - K(34), 3);
+        const auto lines = Wrap(Sentence(it.tip), tipPx, innerW - K(34), 4);
         const int tipTop = pvY + pvH - pad - (int)lines.size() * tipLine;
         Rule(c, pvX + pad, tipTop - K(18), innerW, std::max(1, K(1)), Line);
         Glass::DrawIcon(c, Glass::I_INFO, pvX + pad + K(12), tipTop + K(6), 11 * k, Desc);
@@ -732,39 +750,55 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     const int choices = onlyOn ? (it.choice > 0 ? 2 : 1) : (int)it.choices.size();
     if (it.kind != K_BACK && it.kind != K_LINK && it.preview > P_NONE && choices > 0 && regionBottom - regionTop > K(60))
     {
-        const int cols = choices <= 3 ? choices : 3, rows = (choices + cols - 1) / cols;
-        const int gapX = K(14), gapY = K(12), labelH = K(28), labelGap = K(10);
-        const int regionW = innerW, regionH = regionBottom - regionTop;
+        // (FPS's film strips are wide: one above the other, each with its name beside it.)
+        const bool side = it.preview == P_MOTION;
+        const int cols = side ? 1 : choices <= 3 ? choices : 3, rows = (choices + cols - 1) / cols;
+        const int gapX = K(14), gapY = K(12), labelH = K(28), labelGap = K(10), sideW = side ? K(58) : 0;
+        const int captionH = side ? K(26) : 0; // (under the strips: what the white edge means)
+        const int regionW = innerW, regionH = regionBottom - regionTop - captionH;
         const int cellW = (regionW - (cols - 1) * gapX) / cols, cellH = (regionH - (rows - 1) * gapY) / rows;
-        const float aspect = it.preview == P_SECOND ? 0.95f : std::clamp((float)c.w / c.h, 1.3f, 2.1f);
-        int picW = std::min((int)(cellW * 0.94f), (int)((cellH - labelH - labelGap) * aspect));
+        const float aspect = it.preview == P_SECOND ? 0.95f : side ? 3.2f : std::clamp((float)c.w / c.h, 1.3f, 2.1f);
+        int picW = side ? std::min(cellW - sideW - gapX, (int)((cellH - K(8)) * aspect))
+                        : std::min((int)(cellW * 0.94f), (int)((cellH - labelH - labelGap) * aspect));
         // (Two side by side, as wide as a third of the panel each at most: the design's size.)
-        picW = std::min(picW, (int)(innerW * (cols <= 2 ? 0.44f : 0.32f)));
+        if (!side) picW = std::min(picW, (int)(innerW * (cols == 2 ? 0.44f : 0.32f)));
         const int picH = (int)(picW / aspect);
         const bool pictures = picH >= K(26);
-        const int blockH = rows * ((pictures ? picH + labelGap : 0) + labelH) + (rows - 1) * gapY;
-        const int y0 = regionTop + std::max(0, (regionH - blockH) / 2);
+        const int rowH = side ? std::max(picH + K(8), labelH) : (pictures ? picH + labelGap : 0) + labelH;
+        const int blockH = rows * rowH + (rows - 1) * gapY + (pictures ? captionH : 0);
+        const int y0 = regionTop + std::max(0, (regionH + captionH - blockH) / 2);
+        const int sideX = pvX + pad + (innerW - (sideW + gapX + picW)) / 2; // (strips and names centred)
         for (int i = 0; i < choices; i++)
         {
             const int col = i % cols, row = i / cols;
-            const int cx = pvX + pad + col * (cellW + gapX) + cellW / 2;
-            int cy = y0 + row * ((pictures ? picH + labelGap : 0) + labelH + gapY);
+            int cx = side ? sideX + sideW / 2 : pvX + pad + col * (cellW + gapX) + cellW / 2;
+            int cy = y0 + row * (rowH + gapY);
             const int ci = onlyOn ? (i == choices - 1 ? it.choice : 0) : i; // (the choice this card shows)
             const bool on = ci == it.choice;
             if (pictures)
             {
-                const int x = cx - picW / 2;
-                if (on && !it.disabled) GlowRound(c, x - K(4), cy - K(4), picW + K(8), picH + K(8), 12 * k, k);
-                Glass::Round(c, x - K(4), cy - K(4), picW + K(8), picH + K(8), 12 * k, on ? 0x30FFFFFF : 0x1A000000,
+                const int x = side ? sideX + sideW + gapX : cx - picW / 2, py = side ? cy + (rowH - picH) / 2 : cy;
+                if (on && !it.disabled) GlowRound(c, x - K(4), py - K(4), picW + K(8), picH + K(8), 12 * k, k);
+                Glass::Round(c, x - K(4), py - K(4), picW + K(8), picH + K(8), 12 * k, on ? 0x30FFFFFF : 0x1A000000,
                              on ? ChosenEdge : 0x48FFFFFF, on ? 2.4f * k : std::max(1.0f, 1.2f * k));
-                Picture(c, it.preview, ci < (int)it.art.size() ? it.art[ci] : ci, x, cy, picW, picH, k);
-                cy += picH + labelGap;
+                Picture(c, it.preview, ci < (int)it.art.size() ? it.art[ci] : ci, x, py, picW, picH, k);
+                if (!side) cy += picH + labelGap;
             }
+            if (side) cy += (rowH - labelH) / 2;
             int lpx = K(16);
-            while (lpx > 8 && W(it.choices[ci], lpx, on) + K(30) > cellW) lpx--;
-            const int lw = W(it.choices[ci], lpx, on) + K(30);
+            while (lpx > 8 && W(it.choices[ci], lpx, on) + K(30) > (side ? sideW + K(10) : cellW)) lpx--;
+            const int lw = side ? sideW : W(it.choices[ci], lpx, on) + K(30);
             Glass::Round(c, cx - lw / 2, cy, lw, labelH, labelH * 0.5f, on ? Pill : PillOff, on ? PillEdge : PillOffEdge, std::max(1.0f, k));
             TCentred(c, cx, cy + labelH / 2 + lpx * 7 / 20, it.choices[ci], lpx, on ? PillInk : 0xFFDCE2EA, on);
+        }
+        if (side && pictures)
+        {
+            const int ly = y0 + rows * rowH + (rows - 1) * gapY + K(20);
+            const int cxm = pvX + pvW / 2, lpx = K(14);
+            const std::string cap = "The added frames are edged in white.";
+            const int tw = W(cap, lpx, false, false) + K(22);
+            Glass::Round(c, cxm - tw / 2, ly - K(11), K(12), K(12), 2 * k, 0, 0xFFFFFFFF, std::max(1.0f, 1.4f * k));
+            T(c, cxm - tw / 2 + K(20), ly, cap, lpx, Desc, false, false);
         }
     }
     else if (it.slider >= 0 && regionBottom - regionTop > K(40))

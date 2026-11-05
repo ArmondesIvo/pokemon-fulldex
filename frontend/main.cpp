@@ -5023,8 +5023,8 @@ int main(int argc, char** argv)
             // 60 adds the in-between 3D picture, GPU3D.InterpolationEnabled. The FPS counter counts the
             // screen, which is 60 either way, hence the tip.)
             toggle(M_FPS60, "FPS", Glass::I_GAUGE, Menu::P_MOTION, cfg.fps60,
-                   "How smoothly the game moves. The original games run at 30 frames a second. 60 adds an extra frame between each one, so walking, the camera and battles look twice as smooth. The extra frame is drawn from the game's own 3D, halfway between two real frames: not AI, and not a guess from the picture.",
-                   "The game's speed doesn't change. The FPS counter shows 60 either way, as it counts the screen, not the game's pictures.");
+                   "How smoothly the game moves. The original games run at 30 frames a second. 60 adds an extra frame between each one, so walking, the camera and battles look twice as smooth.",
+                   "The extra frame is drawn from the game's own 3D, halfway between two real frames: not AI, and not a guess. The FPS counter shows 60 either way.");
             menu.items.back().choices = { "30", "60" };
             menu.items.back().value = cfg.fps60 ? "60" : "30";
             toggle(M_WIDE, "WIDESCREEN WORLD", Glass::I_RATIO, Menu::P_WIDE, cfg.wide,
