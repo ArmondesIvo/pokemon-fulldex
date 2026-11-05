@@ -273,6 +273,7 @@ struct Menu
         std::vector<uint32_t> map; int mapW = 0, mapH = 0;
         float markerX = -1, markerY = -1; // (the player on the map, in parts of it; -1: not known)
         int balls = -1; // (Poke Balls carried, for the status bar; -1: not known)
+        long long money = -1; // (the trainer's money, for the status bar and BAG; -1: not known)
         std::vector<Mon> battle; // (in a battle: the foe first, then yours)
         std::vector<std::string> battleLines; // (how the types match up, CompanionBattle::Lines)
     } companion;

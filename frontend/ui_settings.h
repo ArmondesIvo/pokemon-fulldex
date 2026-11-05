@@ -2382,7 +2382,18 @@ inline void PartyHud(Canvas& c, const Menu::CompanionView& cv)
 // The STATUS BAR, a slim glass strip at the top of the game while you play (as PokeDaisy's): where
 // you are, how many Poke Balls you carry, the time and, on battery, how much is left.
 // left: where its left end goes (beside the HUD's cards), 0 to centre it.
-inline void StatusBar(Canvas& c, const std::string& place, int balls, const std::string& clock, int battery)
+// Money as the games show it: "$12,345".
+inline std::string MoneyText(long long money)
+{
+    std::string digits = std::to_string(money < 0 ? 0 : money), out;
+    for (size_t i = 0; i < digits.size(); i++)
+    {
+        if (i && (digits.size() - i) % 3 == 0) out += ',';
+        out += digits[i];
+    }
+    return "$" + out;
+}
+inline void StatusBar(Canvas& c, const std::string& place, int balls, const std::string& clock, int battery, long long money = -1)
 {
     using namespace SettingsArt;
     const float k = std::max(0.42f, std::min(c.w, c.h) / 720.0f);
@@ -2393,6 +2404,7 @@ inline void StatusBar(Canvas& c, const std::string& place, int balls, const std:
     std::vector<Part> parts;
     if (!place.empty()) parts.push_back({ Glass::I_GLOBE, place });
     if (balls >= 0) parts.push_back({ Glass::I_POKEBALL, std::to_string(balls) });
+    if (money >= 0) parts.push_back({ -3, MoneyText(money) });
     if (!clock.empty()) parts.push_back({ -1, clock });
     if (battery >= 0) parts.push_back({ -2, std::to_string(battery) + "%" });
     if (parts.empty()) return;

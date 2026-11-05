@@ -239,6 +239,7 @@ struct Snapshot
     bool supported=false,ready=false,dexReady=false,locationLive=false,trainerBattle=false;
     std::string message;
     int map=0,x=0,y=0,exitMap=-1,exitX=-1,exitY=-1,repel=0,invalidSlots=0,badges=0;
+    int64_t money=-1; // (the trainer's money; -1 not read)
     std::vector<Mon> party;
     std::vector<Battler> battlers;
     std::vector<Item> items;
@@ -275,6 +276,7 @@ inline Snapshot Read(const Profile& p,const Reader& read)
     if(p.gen5)
     {
         auto badge=bytes(base+0x21204,1);if(!badge.empty())s.badges=badge[0];
+        auto cash=bytes(base+0x21200,4);if(cash.size()==4)s.money=U32(cash.data()); // (PKHeX SAV5: the trainer's money, before the badges)
         uint32_t system=pointer(0x02146248),data=MainRange(system,0x20)?pointer(system+0x1C):0;
         auto live=MainRange(data,0x124)?bytes(data+0x114,16):Bytes{};
         if(!live.empty()){s.map=U16(live.data());s.x=(int32_t)U32(live.data()+4)>>16;s.y=(int32_t)U32(live.data()+12)>>16;s.locationLive=true;}
@@ -282,6 +284,7 @@ inline Snapshot Read(const Profile& p,const Reader& read)
     else
     {
         auto trainer=bytes(base+p.trainer,0x20);if(!trainer.empty())s.badges=trainer[0x1A]|(p.pointer==0x021D2228?trainer[0x1F]<<8:0);
+        if(trainer.size()>=0x18)s.money=U32(trainer.data()+0x14); // (PKHeX SAV4: the trainer's money, at 0x14 in its block)
         const bool hg=p.pointer==0x021D2228;
         uint32_t field=pointer(hg?0x021D4158:0x021C07DC),avatar=MainRange(field,0x44)?pointer(field+(hg?0x40:0x3C)):0;
         uint32_t object=MainRange(avatar,0x34)?pointer(avatar+0x30):0;

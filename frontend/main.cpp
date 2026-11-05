@@ -4866,6 +4866,7 @@ int main(int argc, char** argv)
             const auto marker = companionMetadata.PlayerMarker(snap);
             if (marker.ready) { cv.markerX = (marker.x + 0.5f) / cv.mapW; cv.markerY = (marker.y + 0.5f) / cv.mapH; }
         }
+        if (snap.money >= 0 && snap.money <= 9999999) cv.money = snap.money;
         // (Poke Balls: Gen 4's BALLS pocket; Gen 5 keeps them among ITEMS: items 1 to 16, the Master
         // Ball to the Cherish Ball, and 576, the Dream Ball.)
         if (!companionProfile.gen5 && cv.pockets.size() > 6) cv.balls = cv.pockets[6].total;
@@ -5777,6 +5778,7 @@ int main(int argc, char** argv)
                 menu.rowTall = 1.5f;
                 fillCompanionView(menu.companion);
                 Menu::CompanionView& cv = menu.companion;
+                if (cv.money >= 0) menu.headerNote = MoneyText(cv.money); // (the money, as the games' bag shows it)
                 const int pockets = (int)cv.pockets.size();
                 if (pockets > 0 && (companionPocket < 0 || companionPocket >= pockets)) companionPocket = 0;
                 std::vector<std::string> pocketNames;
@@ -10021,7 +10023,7 @@ int main(int argc, char** argv)
                 char clock[8] = "";
                 const time_t now = time(nullptr);
                 if (const tm* t = localtime(&now)) snprintf(clock, sizeof(clock), "%02d:%02d", t->tm_hour, t->tm_min);
-                StatusBar(canvas, liveView.place, liveView.balls, clock, battery);
+                StatusBar(canvas, liveView.place, liveView.balls, clock, battery, liveView.money);
             }
             if (!cfg.companionOverlay) livePanel[2] = 0;
             Glass::Live().wanted = Glass::Live().want;
