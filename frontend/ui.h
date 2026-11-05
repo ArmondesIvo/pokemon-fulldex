@@ -237,10 +237,15 @@ struct Menu
         if (UseClean()) CleanFont::Draw(c, x, y + 7 * scale, CleanFont::Title(UiLang::Tr(s)), Px(scale, big), col, big);
         else c.Text(x, y, s, scale, col);
     }
-    static void TXRaw(Canvas& c, int x, int y, const std::string& s, int scale, uint32_t col)
+    static void TXRaw(Canvas& c, int x, int y, const std::string& s, int scale, uint32_t col, bool big = false)
     {
-        if (UseClean()) CleanFont::Draw(c, x, y + 7 * scale, s, Px(scale), col);
+        if (UseClean()) CleanFont::Draw(c, x, y + 7 * scale, s, Px(scale, big), col, big);
         else c.TextRaw(x, y, s, scale, col);
+    }
+    // (Text as it is given: a song's name, not put in title case or translated.)
+    static int TWRaw(const std::string& s, int scale, bool big = false)
+    {
+        return UseClean() ? CleanFont::Width(s, Px(scale, big), big) : Canvas::TextWidth(s, scale);
     }
 
     // Returns the index of an item that was activated this frame, or -1.
@@ -251,9 +256,26 @@ struct Menu
         if (!open || items.empty()) return -1;
         int n = (int)items.size();
         if (style == 1) return UpdateSettings(in, dir);
+        if (style == 2)
+        {
+            // (Two buttons side by side: any direction goes to the other.)
+            if (in.left || in.right || in.up || in.down) selected = selected == 0 ? n - 1 : 0;
+            return in.accept ? selected : -1;
+        }
         if (columns > 0)
         {
             const int columns = drawnColumns > 0 ? drawnColumns : this->columns;
+            if (!nowPlaying.shown || nowPlaying.idle) npFocus = -1;
+            if (npFocus >= 0)
+            {
+                // (On the NOW PLAYING bar: left and right between its buttons, up back to the tiles.)
+                if (in.left) npFocus = std::max(0, npFocus - 1);
+                if (in.right) npFocus = std::min(2, npFocus + 1);
+                if (in.up) npFocus = -1;
+                if (in.accept) npAction = npFocus;
+                return -1;
+            }
+            if (in.down && nowPlaying.shown && !nowPlaying.idle && selected + columns >= n) { npFocus = 1; return -1; }
             if (in.left) selected = (selected + n - 1) % n;
             if (in.right) selected = (selected + 1) % n;
             if (in.up) selected = (selected + n - columns % n) % n;
@@ -316,6 +338,14 @@ struct Menu
     // activates the row (party details, dated state slots, backup details) like Enter.
     void Tap(int x,int y,MenuInput& input,int& sliderValue)
     {
+        if(style!=1&&columns>0&&!nowPlaying.idle){const int b=NowPlayingAt(x,y);if(b>=0){npFocus=-1;npAction=b;return;}}
+        if(style==2)
+        {
+            // (On a button: it is chosen and pressed. Outside the card: CANCEL.)
+            for(int b=0;b<2;b++)
+                if(dialogW>0&&x>=dialogX[b]&&x<dialogX[b]+dialogW&&y>=dialogY&&y<dialogY+dialogH){selected=b==0?(int)items.size()-1:0;input.accept=true;return;}
+            return;
+        }
         const int item=ItemAt(x,y);
         if(style==1){SettingsTap(item,x,input);return;}
         if(item==-2)input.back=true;
@@ -359,6 +389,93 @@ struct Menu
 
     // The first page's tiles (columns > 0): rows of glass squares, each an icon over its name,
     // centred on the blurred game with no panel round them; "FULLDEX" and "PAUSED" above.
+    // NOW PLAYING: what the player's own music app is playing (frontend/now_playing.h), shown in
+    // a bar under the tiles with its controls; nothing when no music app is playing.
+    struct NowPlaying
+    {
+        bool shown = false, playing = false, canPrev = true, canNext = true;
+        bool idle = false; // no music app playing: "No music playing", the buttons dimmed
+        std::string title, artist, app;
+        std::vector<uint32_t> art; int artW = 0, artH = 0; // the album art, ARGB, if the app gives it
+    } nowPlaying;
+    // The bar's buttons as drawn (previous, play / pause, next), for taps; -1 none.
+    mutable int npX[3] = {}, npY = 0, npS = 0;
+    int npFocus = -1;  // the bar's button chosen with the pad or keys (down from the tiles), -1: a tile
+    int npAction = -1; // a button pressed this frame (0 previous, 1 play / pause, 2 next), for the caller
+    int NowPlayingAt(int x, int y) const
+    {
+        if (!nowPlaying.shown || !npS) return -1;
+        for (int i = 0; i < 3; i++)
+            if (x >= npX[i] - npS && x < npX[i] + npS && y >= npY - npS && y < npY + npS) return i;
+        return -1;
+    }
+
+    void DrawNowPlaying(Canvas& c, bool solid, int x, int y, int w, int h, int scale) const
+    {
+        const bool idle = nowPlaying.idle;
+        const float r = h * 0.3f;
+        FrostBox(c, solid, x, y, w, h, r);
+        // (The album art, or a note on dark glass.)
+        const int pad = h / 7, a = h - 2 * pad, ax = x + pad, ay = y + pad;
+        Glass::Round(c, ax, ay, a, a, r * 0.6f, 0x400A111C, 0x2EFFFFFF, 1.0f);
+        if (!idle && !nowPlaying.art.empty() && nowPlaying.artW > 0 && nowPlaying.artH > 0)
+        {
+            const float rr = r * 0.6f;
+            for (int py = 0; py < a; py++)
+                for (int px = 0; px < a; px++)
+                {
+                    const int X = ax + px, Y = ay + py;
+                    if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
+                    // (Its rounded corners: outside them left as it is.)
+                    const float qx = std::max(0.0f, std::fabs(px + 0.5f - a * 0.5f) - (a * 0.5f - rr)), qy = std::max(0.0f, std::fabs(py + 0.5f - a * 0.5f) - (a * 0.5f - rr));
+                    const float cover = std::clamp(rr + 0.5f - std::hypot(qx, qy), 0.0f, 1.0f);
+                    if (cover <= 0) continue;
+                    const uint32_t s = nowPlaying.art[(size_t)(py * nowPlaying.artH / a) * nowPlaying.artW + px * nowPlaying.artW / a];
+                    c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], s | 0xFF000000u, (int)(cover * 255));
+                }
+            Glass::Mark(c, ax, ay, ax + a, ay + a);
+        }
+        else Glass::DrawIcon(c, Glass::I_NOTE, ax + a * 0.5f, ay + a * 0.5f, a * 0.3f, idle ? GlassHint : GlassText);
+        // (Controls at the right: previous, play / pause, next.)
+        const int bs = (int)(h * 0.17f), gap = (int)(h * 0.78f);
+        const int cy = y + h / 2, cxN = x + w - pad - bs * 2, cxP = cxN - gap, cxB = cxP - gap;
+        npX[0] = cxB; npX[1] = cxP; npX[2] = cxN; npY = cy; npS = (int)(gap * 0.5f);
+        // (The button chosen with the pad or keys: a ring round it, as a chosen tile's glow.)
+        if (npFocus >= 0)
+        {
+            const int fx = npX[npFocus], rr = (int)(bs * 2.5f);
+            Glass::Glow(c, fx - rr, cy - rr, 2 * rr, 2 * rr, (float)rr, h / 90.0f);
+            Glass::Round(c, fx - rr, cy - rr, 2 * rr, 2 * rr, (float)rr, npFocus == 1 ? 0 : 0x2EFFFFFF, 0xFFFFFFFF, std::max(2.0f, h / 34.0f));
+        }
+        Glass::Round(c, cxP - (int)(bs * 1.9f), cy - (int)(bs * 1.9f), (int)(bs * 3.8f), (int)(bs * 3.8f), bs * 1.9f, idle ? 0x1EFFFFFF : 0xF7FFFFFF, idle ? 0x33FFFFFF : 0, 1.0f);
+        Glass::DrawIcon(c, nowPlaying.playing && !idle ? Glass::I_PAUSE : Glass::I_PLAY, cxP + (nowPlaying.playing && !idle ? 0 : bs * 0.12f), cy, bs * 0.9f, idle ? GlassOff : 0xFF0B1018);
+        Glass::DrawIcon(c, Glass::I_PREV, cxB, cy, bs * 1.2f, nowPlaying.canPrev && !idle ? GlassText : GlassOff);
+        Glass::DrawIcon(c, Glass::I_NEXT, cxN, cy, bs * 1.2f, nowPlaying.canNext && !idle ? GlassText : GlassOff);
+        // (The song and who it is by, cut short to fit before the controls; the app beneath, dimmer.
+        // Sized from the bar, as the text of a row.)
+        const int tx = ax + a + pad, tw = cxB - (int)(bs * 2.4f) - tx;
+        const int pxTitle = std::max(8, (int)(h * 0.4f)), pxSub = std::max(7, (int)(h * 0.32f));
+        auto width = [&](const std::string& t, int px, bool bold) { return UseClean() ? CleanFont::Width(t, px, bold) : Canvas::TextWidth(t, scale); };
+        auto fit = [&](std::string t, int px, bool bold) {
+            if (width(t, px, bold) <= tw) return t;
+            while (!t.empty() && width(t + "...", px, bold) > tw) { t.pop_back(); while (!t.empty() && (t.back() & 0xC0) == 0x80) t.pop_back(); }
+            return t + "...";
+        };
+        const std::string line1 = idle ? UiLang::Tr("No music playing") : nowPlaying.title;
+        const std::string line2 = idle ? UiLang::Tr("Play something in any music app to control it here")
+            : nowPlaying.artist.empty() ? nowPlaying.app : nowPlaying.artist + "  \xC2\xB7  " + nowPlaying.app;
+        if (UseClean())
+        {
+            CleanFont::Draw(c, tx, y + (int)(h * 0.45f), fit(line1, pxTitle, true), pxTitle, GlassText, true);
+            CleanFont::Draw(c, tx, y + (int)(h * 0.79f), fit(line2, pxSub, false), pxSub, GlassHint);
+        }
+        else
+        {
+            c.TextRaw(tx, y + h / 2 - 9 * scale, fit(line1, 0, true), scale, GlassText);
+            c.TextRaw(tx, y + h / 2 + 1 * scale, fit(line2, 0, false), scale, GlassHint);
+        }
+    }
+
     void DrawTiles(Canvas& c, const std::string& hint) const
     {
         const bool solid = Glass::Backdrop(c);
@@ -368,11 +485,15 @@ struct Menu
         const int cols = c.h > c.w ? std::min(2, columns) : columns;
         drawnColumns = cols;
         const int n = (int)items.size(), rows = (n + cols - 1) / cols;
+        const bool np = nowPlaying.shown;
+        // (With the bar the tiles are a little smaller, to make room for it: 0.42 of a tile.)
         const float avW = c.w * 0.86f, avH = c.h * (c.h > c.w ? 0.7f : 0.6f);
-        const int s = (int)std::min(avW / (cols + 0.1f * (cols - 1)), avH / (rows + 0.1f * (rows - 1)));
+        const float barRows = np ? 0.42f + 0.1f : 0.0f;
+        const int s = (int)std::min(avW / (cols + 0.1f * (cols - 1)), avH / (rows + 0.1f * (rows - 1) + barRows));
         const int gap = s / 10;
+        const int barH = np ? (int)(s * 0.42f) : 0;
         const int gridW = cols * s + (cols - 1) * gap, gridH = rows * s + (rows - 1) * gap;
-        const int gx = (c.w - gridW) / 2, gy = (c.h - gridH) / 2;
+        const int gx = (c.w - gridW) / 2, gy = (c.h - gridH - (np ? barH + gap : 0)) / 2;
         tileX.assign(n, 0); tileY.assign(n, 0); tileSize = s;
         drawnX = gx - gap; drawnY = gy - gap; drawnW = gridW + 2 * gap; drawnH = gridH + 2 * gap;
         drawnLineH = 0; drawnFirstY = 0; scroll = 0;
@@ -387,7 +508,7 @@ struct Menu
         {
             const int x = gx + (i % cols) * (s + gap), y = gy + (i / cols) * (s + gap);
             tileX[i] = x; tileY[i] = y;
-            const bool sel = i == selected, off = items[i].disabled;
+            const bool sel = i == selected && npFocus < 0, off = items[i].disabled;
             if (sel) Glass::Glow(c, x, y, s, s, s * 0.09f, s / 200.0f);
             FrostBox(c, solid, x, y, s, s, s * 0.09f, sel, sel ? (float)std::max(2, scale) : 1.0f);
             const uint32_t ink = off ? GlassOff : GlassText;
@@ -399,7 +520,14 @@ struct Menu
                 TX(c, x + s - TW(items[i].value, vs) - s / 14, y + s / 14, items[i].value, vs, off ? GlassOff : GlassHint);
             }
         }
-        TX(c, (c.w - TW(hint, scale)) / 2, gy + gridH + gap + 2 * scale, hint, scale, GlassHint);
+        int below = gy + gridH + gap;
+        if (np)
+        {
+            DrawNowPlaying(c, solid, gx, below, gridW, barH, scale);
+            below += barH + gap;
+        }
+        else npS = 0;
+        TX(c, (c.w - TW(hint, scale)) / 2, below + 2 * scale, hint, scale, GlassHint);
         if (solid) Glass::Opaque(c);
     }
 
@@ -408,6 +536,7 @@ struct Menu
     void Draw(Canvas& c, const std::string& title, const std::string& hint, const std::string& note = "", int boxUnits = 0) const
     {
         if (style == 1) { DrawSettings(c, title, hint); return; }
+        if (style == 2) { DrawDialog(c, title, note, hint); return; }
         if (columns > 0) { DrawTiles(c, hint); return; }
         int scale = std::min(c.w, c.h) / 240;
         if (scale < 1) scale = 1;
@@ -499,6 +628,11 @@ struct Menu
     int SettingsItemAt(int x, int y) const;
     void SettingsTap(int item, int x, MenuInput& input);
     void DrawSettings(Canvas& c, const std::string& title, const std::string& hint) const;
+    // style 2: a question in a card over the paused game ("Quit Game?"): items[0] the action, the
+    // last item CANCEL, drawn side by side as pills (CANCEL first); dialogIcon above the title.
+    int dialogIcon = -1;
+    mutable int dialogX[2] = {}, dialogY = 0, dialogW = 0, dialogH = 0;
+    void DrawDialog(Canvas& c, const std::string& title, const std::string& text, const std::string& hint) const;
     int FirstRow() const; // the first row that can be chosen (not a section's heading or the back button)
     // Where the settings page was last drawn: each item's row (y, -1 when not shown), the rows' x
     // and size, the controls' box on the right of them, and the back button.

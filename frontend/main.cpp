@@ -22,6 +22,8 @@
 #endif
 #include "achievements.h"
 #include "exclusives.h"
+#include "game_music.h"
+#include "now_playing.h"
 #include "save_backups.h"
 #ifndef SSR_RA_VERSION
 #define SSR_RA_VERSION "0.0.0" // (CMakeLists.txt sets it from CHANGELOG.md)
@@ -1599,12 +1601,16 @@ struct Settings : OptionalFeatures
     bool companionOverlay=false,partyHud=false;
     // VOLUME: the game's sound and music, 0 (off) to 100 in tens.
     int volume = 100;
+    // MUSIC and SOUND EFFECTS: each on its own, 0 to 100 in tens (frontend/game_music.h).
+    int music = 100, effects = 100;
     // ASPECT RATIO: 0 AUTO (the screen's own shape), 1 16:9, 2 16:10, 3 3:2, 4 4:3.
     int aspect = 0;
     // The ultrawide notice (below, where the view is worked out) has been shown once.
     bool ultraNoticeSeen = false;
     // FAST FORWARD SOUND: off plays silence while fast forwarding (GitHub #45).
     bool ffMute = false;
+    // QUIET GAME MUSIC: while the player's own music app plays (now_playing.h), the game's music is off.
+    bool musicQuiet = false;
     std::string listColour, listBackground, listLang, listSort; // (GAME LIST: COLOUR, BACKGROUND; LANGUAGE)
     bool cpuBoost = true; // Switch only: the processor's boost mode (see SwitchPlatform)
     bool jit = true;      // Switch, games that are not recompiled: melonDS's JIT (read at start-up)
@@ -1675,9 +1681,12 @@ struct Settings : OptionalFeatures
             else if (k == "pad_touch") padTouch = v == "1";
             else if (k == "show_fps") showFps = v == "1";
             else if (k == "volume") volume = std::clamp(atoi(v.c_str()) / 10 * 10, 0, 100);
+            else if (k == "music") music = std::clamp(atoi(v.c_str()) / 10 * 10, 0, 100);
+            else if (k == "effects") effects = std::clamp(atoi(v.c_str()) / 10 * 10, 0, 100);
             else if (k == "ultrawide_notice") ultraNoticeSeen = v == "1";
             else if (k == "aspect") aspect = v == "16:9" ? 1 : v == "16:10" ? 2 : v == "3:2" ? 3 : v == "4:3" ? 4 : 0;
             else if (k == "ff_mute") ffMute = v == "1";
+            else if (k == "music_quiet") musicQuiet = v == "1";
             // (The game list's look, GAME LIST: kept here so saving does not drop them; COLOUR is the
             // pause menu's colour too.)
             else if (k == "list_colour") { listColour = v; Menu::Accent = AccentNamed(v); }
@@ -1749,9 +1758,12 @@ struct Settings : OptionalFeatures
         f << "smart_fast=" << smartFast << "\n";
         f << "turbo_a=" << turboA << "\n";
         f << "volume=" << volume << "\n";
+        f << "music=" << music << "\n";
+        f << "effects=" << effects << "\n";
         f << "ultrawide_notice=" << (ultraNoticeSeen ? 1 : 0) << "\n";
         f << "aspect=" << (aspect == 1 ? "16:9" : aspect == 2 ? "16:10" : aspect == 3 ? "3:2" : aspect == 4 ? "4:3" : "auto") << "\n";
         f << "ff_mute=" << (ffMute ? 1 : 0) << "\n";
+        f << "music_quiet=" << (musicQuiet ? 1 : 0) << "\n";
         if (!listColour.empty()) f << "list_colour=" << listColour << "\n";
         if (!listSort.empty()) f << "list_sort=" << listSort << "\n";
         if (!listBackground.empty()) f << "list_background=" << listBackground << "\n";
@@ -2044,6 +2056,8 @@ int main(int argc, char** argv)
     }
     if (!nds->ARM9.RecompEnable && !funcWatchOn && rc_num_chunks) rc_watch_attach(*nds);
     // OTHER VERSION POKEMON: both versions' wild Pokemon tables, from this ROM (exclusives.h).
+    static GameMusic gameMusic;
+    gameMusic.Attach(*nds);
     static VersionExclusives exclusives;
     if (soulSilverRom && !opt.lockstep && rc_num_chunks) exclusives.Init(opt.rom, gameCode, *nds);
     // (Attached once the layouts' functions are known, below.)
@@ -2139,6 +2153,13 @@ int main(int argc, char** argv)
 #endif
 #endif
     if (!opt.headless) cfg.Load(opt.config);
+    gameMusic.Music = cfg.music;
+    gameMusic.Effects = cfg.effects;
+    // (Test runs, which read no settings file: MUSIC from the start, or MUSIC off from a frame on.)
+    if (const char* m = getenv("FULLDEX_TEST_MUSIC")) gameMusic.Music = atoi(m);
+    // NOW PLAYING (now_playing.h): the player's own music app, watched on its own thread.
+    if (!opt.headless && NowPlaying::Supported()) NowPlaying::Start();
+    static const unsigned testMusicOffAt = getenv("FULLDEX_TEST_MUSIC_OFF_AT") ? (unsigned)atoi(getenv("FULLDEX_TEST_MUSIC_OFF_AT")) : 0;
     // RETROACHIEVEMENTS (achievements.h): the account logs in (when it is on) and this game's
     // achievements load as the game starts. Not in a test run (headless, lockstep).
     if (!opt.headless && !opt.lockstep && Achievements::Available())
@@ -4750,7 +4771,7 @@ int main(int argc, char** argv)
         M_WIDELINES, M_AUTODETAIL, M_WIDEGPU, M_GPU3D, M_SHOWFPS, M_BUTTONS, M_PADTOUCH, M_EMULATION,
         M_CONTROLS, M_TOUCHLAYOUT, M_STARTBTN, M_FAST, M_FFLOWRES, M_SAVESTATE, M_LOADSTATE, M_RESET, M_QUIT,
         M_DISPLAY, M_LANGUAGE, M_SOUND, M_GRAPHICS, M_CONTROLMENU, M_BACK, M_CHEATS, M_NOTHING,
-        M_VOLUME, M_FFMUTE, M_ASPECT, M_RA, M_RA_ON, M_RA_ACCOUNT, M_RA_GAME, M_RA_LOGIN, M_RA_TYPED, M_RA_CANCEL, M_BOTHVER,
+        M_VOLUME, M_MUSIC, M_EFFECTS, M_MUSICQUIET, M_FFMUTE, M_ASPECT, M_RA, M_RA_ON, M_RA_ACCOUNT, M_RA_GAME, M_RA_LOGIN, M_RA_TYPED, M_RA_CANCEL, M_BOTHVER,
         M_RA_LIST, M_ACH_POINTS, M_ACH_STATUS, M_ACH_RARITY,
         M_CSEARCH, M_SEARCH_LETTER, M_SEARCH_DELETE, M_SEARCH_SPACE, M_SEARCH_CLEAR, M_SEARCH_DONE,
         M_CDETAIL_TOGGLE, M_CINFO, M_BACKUPS, M_RESTORE_CONFIRM, M_LOAD_CONFIRM,
@@ -5066,6 +5087,8 @@ int main(int argc, char** argv)
             // (Asked first: either loses what was played since the last save in the game.)
             add(confirmReset ? M_RESET_YES : M_QUIT_YES, confirmReset ? "RESET GAME" : "QUIT GAME", "");
             add(M_BACK, "CANCEL", "");
+            menu.style = 2; // (a card with two buttons: Menu::DrawDialog)
+            menu.dialogIcon = confirmReset ? Glass::I_REWIND : Glass::I_POWER;
         }
         else if(menuPage==PAGE_EXTRAS)
         {
@@ -5138,9 +5161,18 @@ int main(int argc, char** argv)
         {
             settingsPage(Glass::I_SPEAKER);
             section("SOUND", Glass::I_SPEAKER);
-            picker(M_VOLUME, "VOLUME", Glass::I_SPEAKER, Menu::P_NONE, {}, -1, "How loud the game's sound and music are.", "Left and right change it in steps of 10%.");
+            picker(M_VOLUME, "VOLUME", Glass::I_SPEAKER, Menu::P_NONE, {}, -1, "How loud the game is overall.", "Left and right change it in steps of 10%.");
             menu.items.back().value = cfg.volume == 0 ? std::string("OFF") : std::to_string(cfg.volume) + "%";
             menu.items.back().slider = cfg.volume / 10;
+            picker(M_MUSIC, "MUSIC", Glass::I_NOTE, Menu::P_NONE, {}, -1, "How loud the game's music is, on its own.", "Turn it down to play your own music over the game and still hear its sounds.");
+            menu.items.back().value = cfg.music == 0 ? std::string("OFF") : std::to_string(cfg.music) + "%";
+            menu.items.back().slider = cfg.music / 10;
+            picker(M_EFFECTS, "SOUND EFFECTS", Glass::I_SPEAKER, Menu::P_NONE, {}, -1, "How loud everything else is: footsteps, menus, moves and cries.", "Left and right change it in steps of 10%.");
+            menu.items.back().value = cfg.effects == 0 ? std::string("OFF") : std::to_string(cfg.effects) + "%";
+            menu.items.back().slider = cfg.effects / 10;
+            if (NowPlaying::Supported())
+                toggle(M_MUSICQUIET, "QUIET GAME MUSIC", Glass::I_NOTE, Menu::P_NONE, cfg.musicQuiet,
+                       "While your own music app is playing, turn the game's music off and keep its sound effects.", "Its music comes back when yours stops or pauses.");
             toggle(M_FFMUTE, "FAST FORWARD SOUND", Glass::I_FAST, Menu::P_NONE, !cfg.ffMute,
                    "Keep the sound on while fast forwarding.", "Off keeps fast forward silent.");
         }
@@ -5265,6 +5297,16 @@ int main(int argc, char** argv)
                 it.icon = Glass::I_REWIND;
                 it.desc = "Step back to the most recent moment kept in memory.";
                 it.tip = "Your in-game save is kept as it is.";
+            }
+            // (RESET GAME: here now that the QUIT GAME tile asks only "are you sure?".)
+            section("GAME", Glass::I_POWER);
+            add(M_RESET, "RESET GAME", "");
+            {
+                MenuItem& it = menu.items.back();
+                it.kind = Menu::K_LINK;
+                it.icon = Glass::I_REWIND;
+                it.desc = "Start the game again from its title screen, as turning a DS off and on.";
+                it.tip = "Asks first. Progress since your last save in the game is lost.";
             }
         }
         else if (menuPage == PAGE_STATES)
@@ -5783,7 +5825,6 @@ int main(int argc, char** argv)
         case M_STATES: case M_BACKUPS: return hubPage == PAGE_HUB_LOAD ? PAGE_HUB_LOAD : PAGE_HUB_SAVE;
         case M_DISPLAY: case M_GRAPHICS: case M_PLAYBACK: case M_FAST: case M_SOUND: case M_CONTROLMENU: case M_EXTRAS:
         case M_QUICK_ACTIONS: return PAGE_HUB_SETTINGS;
-        case M_QUIT: case M_RESET: return PAGE_HUB_QUIT;
         }
         return -1;
     };
@@ -6129,6 +6170,8 @@ int main(int argc, char** argv)
             rc_frame++;
             if (funcWatchOn) funcWatch.NextFrame();
             nds->RunFrame();
+            if (testMusicOffAt && rc_frame == testMusicOffAt) gameMusic.Music = 0;
+            gameMusic.Apply(); // (MUSIC / SOUND EFFECTS: a change heard at once)
             pokeActions.Frame();
             Achievements::DoFrame(); // (on this thread: it reads the game's memory)
             exclusives.DoFrame();
@@ -6243,8 +6286,12 @@ int main(int argc, char** argv)
         // Frosted glass: the game as it is when the menu opens, read once (it is paused) and blurred.
         // (Again if the window changed size while the menu was open: BORDERLESS FULLSCREEN.)
         const bool backdropStale = canvas.backdrop.size() > 1 && canvas.backdrop.size() != (size_t)j.outW * j.outH;
+        // (The frame the game is read on, the menu's picture was drawn before there was any frost
+        // to draw it on: that one frame shows the game alone, not a plain menu that then changes.)
+        bool backdropJustRead = false;
         if (menu.open && (canvas.backdrop.empty() || backdropStale) && j.outW > 0 && j.outH > 0)
         {
+            backdropJustRead = true;
             std::vector<uint32_t> shot((size_t)j.outW * j.outH);
             if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, shot.data(), j.outW * 4) == 0)
             {
@@ -6259,7 +6306,7 @@ int main(int argc, char** argv)
             canvas.backdrop.clear();
             canvas.sharp.clear();
         }
-        if (j.overlayUsed)
+        if (j.overlayUsed && !backdropJustRead)
         {
             if (!overlayTex || overlayTexW != j.outW || overlayTexH != j.outH)
             {
@@ -7163,6 +7210,32 @@ int main(int argc, char** argv)
         }
         heldNav = heldNow;
 
+        // NOW PLAYING: looked at often while the tiles show, otherwise now and then (for QUIET GAME
+        // MUSIC, and so the bar is ready when the menu opens); a button pressed on the bar goes to
+        // the music app.
+        {
+            const bool onTiles = menu.open && menuPage == PAGE_MAIN;
+            // (Now and then even with the menu closed, so the bar is right the moment it opens.)
+            NowPlaying::Want(onTiles ? 2 : 1);
+            const NowPlaying::Info np = NowPlaying::Now();
+            gameMusic.External = cfg.musicQuiet && np.playing;
+            if (menu.npAction >= 0)
+            {
+                NowPlaying::Command(menu.npAction);
+                menu.npAction = -1;
+            }
+            // (Always there where the system can tell us: the tiles never change size. With nothing
+            // playing it says so, its buttons dimmed.)
+            menu.nowPlaying.shown = NowPlaying::Supported();
+            menu.nowPlaying.idle = !np.active;
+            menu.nowPlaying.playing = np.playing;
+            menu.nowPlaying.canPrev = np.canPrev;
+            menu.nowPlaying.canNext = np.canNext;
+            menu.nowPlaying.title = np.title;
+            menu.nowPlaying.artist = np.artist;
+            menu.nowPlaying.app = np.app;
+        }
+
         if (toggleMenu)
         {
             if(menuPage == PAGE_CSEARCH || menuPage == PAGE_RSEARCH) SDL_StopTextInput();
@@ -7178,6 +7251,10 @@ int main(int argc, char** argv)
             if (menu.open)
             {
                 menu.selected = 0;
+                menu.npFocus = -1;
+                // (The bar from the first frame the tiles show, so they are not drawn without it first
+                // and then shrink to make room.)
+                menu.nowPlaying.shown = NowPlaying::Supported();
                 buildMenu();
             }
             else swallowMenuButtons = true;
@@ -7396,7 +7473,7 @@ int main(int argc, char** argv)
             case M_HUB_CHEATS: goPage(PAGE_HUB_CHEATS, M_CHEATS); hit = -1; break;
             case M_HUB_FAST: goPage(PAGE_PLAYBACK, M_FAST); hit = -1; break;
             case M_HUB_SETTINGS: goPage(PAGE_HUB_SETTINGS, M_DISPLAY); hit = -1; break;
-            case M_HUB_QUIT: goPage(PAGE_HUB_QUIT, M_QUIT); hit = -1; break;
+            case M_HUB_QUIT: confirmReset = false; goPage(PAGE_QUIT_CONFIRM, M_BACK); hit = -1; break; // (straight to "are you sure?")
             case M_STATES:goPage(PAGE_STATES,M_SLOT0);hit=-1;break;
             case M_SLOT_SAVE:saveAt(StateSlots::Path(quickState,stateSlot));break;
             case M_SLOT_LOAD:pendingState=StateSlots::Path(quickState,stateSlot);goPage(PAGE_LOAD_CONFIRM,M_BACK);hit=-1;break;
@@ -7487,7 +7564,7 @@ int main(int argc, char** argv)
                     const int tileId=menuPage==PAGE_HUB_SAVE?M_HUB_SAVE:menuPage==PAGE_HUB_LOAD?M_HUB_LOAD:menuPage==PAGE_HUB_CHEATS?M_HUB_CHEATS:menuPage==PAGE_HUB_SETTINGS?M_HUB_SETTINGS:M_HUB_QUIT;
                     hubPage=-1;goPage(PAGE_MAIN,tileId);hit=-1;break;
                 }
-                if(menuPage==PAGE_QUIT_CONFIRM){goPage(PAGE_HUB_QUIT,confirmReset?M_RESET:M_QUIT);hit=-1;break;}
+                if(menuPage==PAGE_QUIT_CONFIRM){if(confirmReset)goPage(PAGE_PLAYBACK,M_RESET);else goPage(PAGE_MAIN,M_HUB_QUIT);hit=-1;break;}
                 if(menuPage==PAGE_MATCHUPS){goPage(PAGE_COMPANION,M_MATCHUPS);hit=-1;break;}
                 if(menuPage==PAGE_CMAP){goPage(PAGE_CLOCATION,M_CMAP);hit=-1;break;}
                 if(menuPage==PAGE_CENCOUNTERS){goPage(PAGE_CLOCATION,M_CENCOUNTERS);hit=-1;break;}
@@ -7692,6 +7769,20 @@ int main(int argc, char** argv)
                 if (sliderTap >= 0) cfg.volume = sliderTap * 10;
                 else cfg.volume = (cfg.volume + (dir < 0 ? 100 : 10)) % 110;
                 sliderTap = -1;
+                break;
+            case M_MUSIC:
+            case M_EFFECTS:
+            {
+                int& v = id == M_MUSIC ? cfg.music : cfg.effects;
+                if (sliderTap >= 0) v = sliderTap * 10;
+                else v = (v + (dir < 0 ? 100 : 10)) % 110;
+                sliderTap = -1;
+                gameMusic.Music = cfg.music;
+                gameMusic.Effects = cfg.effects;
+                break;
+            }
+            case M_MUSICQUIET:
+                cfg.musicQuiet = !cfg.musicQuiet;
                 break;
             case M_FFMUTE:
                 cfg.ffMute = !cfg.ffMute;
@@ -9330,6 +9421,7 @@ int main(int argc, char** argv)
 #endif
             if (selId == M_VOLUME) hint = "SOUND AND MUSIC: LEFT / RIGHT";
             if (selId == M_ASPECT) hint = "NARROWER THAN THE SCREEN: BARS AT THE SIDES";
+            if (selId == M_MUSIC || selId == M_EFFECTS) hint = "LEFT / RIGHT";
             if (selId == M_FFMUTE) hint = "OFF: SILENT WHILE FAST FORWARDING";
             // (What START BUTTON does, while it is the one chosen.)
             if (selId == M_STARTBTN) hint = cfg.startMenu ? "START OPENS THIS MENU" : "START IS THE DS START";
@@ -9413,7 +9505,7 @@ int main(int argc, char** argv)
                 note.clear();
             if(menuPage == PAGE_QUIT_CONFIRM)
             {
-                title = confirmReset ? "RESET GAME" : "QUIT GAME";
+                title = confirmReset ? "RESET GAME?" : "QUIT GAME?";
                 note = "Progress since your last save in the game will be lost.";
             }
             // (The tiles: B goes back to the game, there being no RESUME tile.)
@@ -9680,6 +9772,7 @@ int main(int argc, char** argv)
     }
 #ifdef __SWITCH__
     exitStep("console");
+    NowPlaying::Stop();
     nds.reset();
     sdlClosed = true;
     exitWatch.join();

@@ -1335,3 +1335,54 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         TCentred(c, c.w / 2, py0 + H0 + K(30), hint, K(15), GlassHint);
     if (solid) Glass::Opaque(c);
 }
+
+// style 2: a question in a raised glass card ("Quit Game?"), the paused game frosted behind it.
+// The buttons: CANCEL (the last item) on the left, the action (items[0]) on the right; the chosen
+// one a white pill.
+inline void Menu::DrawDialog(Canvas& c, const std::string& title, const std::string& text, const std::string& hint) const
+{
+    using namespace SettingsArt;
+    const bool solid = Glass::Backdrop(c);
+    const float k = std::max(0.42f, std::min(c.w / 1400.0f, c.h / 788.0f));
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    if (solid) Glass::Frost(c, 0, 0, c.w, c.h, 0);
+    else Glass::Round(c, 0, 0, c.w, c.h, 0, GlassShade);
+    Glass::Round(c, 0, 0, c.w, c.h, 0, 0x40000000); // (the game a little darker behind the card)
+    const int pw = std::min(c.w - K(32), K(520)), innerW = pw - K(64);
+    const auto lines = text.empty() ? std::vector<std::string>() : Wrap(text, K(17), innerW, 4);
+    const int ph = K(250) + (int)lines.size() * K(25);
+    const int px = (c.w - pw) / 2, py = (c.h - ph) / 2;
+    Glass::Shadow(c, px, py, pw, ph, 26 * k, 30 * k, 0x90);
+    if (solid) Glass::Frost(c, px, py, pw, ph, 26 * k);
+    Glass::Round(c, px, py, pw, ph, 26 * k, 0xB0101826);
+    Glass::Rim(c, px, py, pw, ph, 26 * k, std::max(1.2f, 1.8f * k));
+    if (dialogIcon >= 0)
+    {
+        Glass::Round(c, c.w / 2 - K(30), py + K(26), K(60), K(60), 30 * k, 0x400A111C);
+        Glass::Rim(c, c.w / 2 - K(30), py + K(26), K(60), K(60), 30 * k, std::max(1.0f, k), 0x60, 0x14);
+        Glass::DrawIcon(c, dialogIcon, c.w * 0.5f, py + K(56), 15 * k, GlassText);
+    }
+    TCentred(c, c.w / 2, py + K(124), title, K(26), GlassText, true);
+    int y = py + K(160);
+    for (const std::string& l : lines)
+    {
+        T(c, c.w / 2 - W(l, K(17), false, false) / 2, y, l, K(17), Desc, false, false);
+        y += K(25);
+    }
+    const int bw = K(190), bh = K(48), gap = K(16), bx = c.w / 2 - bw - gap / 2, by = py + ph - bh - K(28);
+    const int n = (int)items.size();
+    for (int b = 0; b < 2; b++)
+    {
+        const int item = b == 0 ? n - 1 : 0; // (CANCEL left, the action right)
+        if (item < 0 || item >= n) continue;
+        const bool sel = item == selected;
+        const int x = bx + b * (bw + gap);
+        if (sel) Glass::Glow(c, x, by, bw, bh, bh * 0.5f, k);
+        Glass::Round(c, x, by, bw, bh, bh * 0.5f, sel ? Pill : PillOff, sel ? 0 : PillOffEdge, std::max(1.0f, k));
+        TCentred(c, x + bw / 2, by + bh / 2 + K(7), items[item].label, K(18), sel ? PillInk : GlassText, true);
+        dialogX[b] = x;
+    }
+    dialogY = by; dialogW = bw; dialogH = bh;
+    if (!hint.empty()) TCentred(c, c.w / 2, py + ph + K(34), hint, K(15), GlassHint);
+    if (solid) Glass::Opaque(c);
+}

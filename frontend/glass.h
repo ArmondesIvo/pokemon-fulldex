@@ -304,6 +304,7 @@ enum Icon
     I_PLAY, I_SAVE, I_LOAD, I_CHEATS, I_FAST, I_TROPHY, I_GEAR, I_POWER,
     I_BACK, I_MONITOR, I_SCREENS, I_GLOBE, I_RATIO, I_LAYOUT, I_EXPAND, I_FULLSCREEN, I_GRID, I_LAYERS,
     I_PAD, I_GAUGE, I_WINDOW, I_PEOPLE, I_SPARKLE, I_INFO, I_CHEVRON_L, I_CHEVRON_R, I_CHEVRON_U, I_CHEVRON_D, I_POKEBALL, I_CHIP, I_SPEAKER, I_REWIND,
+    I_PAUSE, I_PREV, I_NEXT, I_NOTE,
     I_COUNT
 };
 // A rhombus centred on (cx, cy), half width a and half height b (close to a true distance).
@@ -483,6 +484,17 @@ inline void DrawIcon(Canvas& c, int icon, float cx, float cy, float size, uint32
             return std::min(body, std::min(std::max(w1, std::fabs(v) - 0.36f), std::max(w2, std::fabs(v) - 0.6f)));
         }
         case I_REWIND: return std::min(Play(-u, v, -0.78f, 0.04f, 0, 0.52f), Play(-u, v, -0.04f, 0.78f, 0, 0.52f)) - 0.02f;
+        case I_PAUSE: return std::min(Box(u, v, -0.32f, 0, 0.17f, 0.62f, 0.07f), Box(u, v, 0.32f, 0, 0.17f, 0.62f, 0.07f));
+        case I_NEXT: return std::min(Play(u, v, -0.6f, 0.36f, 0, 0.56f) - 0.02f, Box(u, v, 0.5f, 0, 0.1f, 0.56f, 0.04f));
+        case I_PREV: return std::min(Play(-u, v, -0.6f, 0.36f, 0, 0.56f) - 0.02f, Box(u, v, -0.5f, 0, 0.1f, 0.56f, 0.04f));
+        case I_NOTE:
+        {
+            // (Two notes joined by a beam.)
+            const float heads = std::min(Circle(u * 0.85f, v, -0.38f, 0.52f, 0.2f), Circle(u * 0.85f, v, 0.38f, 0.38f, 0.2f));
+            const float stems = std::min(Segment(u, v, -0.26f, 0.5f, -0.26f, -0.5f, t / 2), Segment(u, v, 0.62f, 0.36f, 0.62f, -0.66f, t / 2));
+            const float beam = std::max(std::fabs((v + 0.58f) + (u + 0.26f) * (0.16f / 0.88f)) - 0.1f, std::max(-0.32f - u, u - 0.68f));
+            return std::min(heads, std::min(stems, beam));
+        }
         case I_POKEBALL:
         {
             const float ring = std::fabs(Circle(u, v, 0, 0, 0.8f)) - t / 2;
