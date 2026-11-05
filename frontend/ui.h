@@ -205,7 +205,7 @@ struct Menu
     enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK, K_FOLDER };
     std::string headerNote; // (settings pages: a few words at the header's right, CHEATS' counts)
     // A preview's pictures (MenuItem::preview), one per choice (its art: which variant).
-    enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER, P_MOTION, P_WIDE, P_RES, P_PAD, P_KEY, P_SHORTCUTS, P_TOUCH };
+    enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER, P_MOTION, P_WIDE, P_RES, P_PAD, P_KEY, P_SHORTCUTS, P_TOUCH, P_CPARTY, P_CBAG, P_CDEX, P_CPLACE, P_CBATTLE };
     // P_PAD and P_KEY (CONTROLS): the controller drawn in its maker's layout (padStyle: Controls::Style;
     // a choice's art is the input lit, Controls::IN_*), the inputs held now lit too (padLive, a bit
     // per input), or a keyboard's key.
@@ -219,6 +219,22 @@ struct Menu
     float listShare = 0.605f;
     float touchRows = 1.0f; // (phones: the settings rows this much larger, for a finger)
     bool tallRows = false;
+    // COMPANION's previews (P_CPARTY, P_CBAG, P_CDEX, P_CPLACE): what the game holds now, read by
+    // the companion (companion_data.h); icons and the map from the player's own ROM, ARGB.
+    struct CompanionView
+    {
+        struct Mon { std::string name, item; int level = 0, hp = 0, maxHp = 0, status = 0; bool egg = false; std::vector<uint32_t> icon; int iconW = 0, iconH = 0; };
+        std::vector<Mon> party;
+        struct Pocket { std::string name; int stacks = 0, total = 0; };
+        std::vector<Pocket> pockets;
+        int seen = 0, caught = 0, dexTotal = 0, badges = -1;
+        std::string place, area;
+        std::vector<uint32_t> map; int mapW = 0, mapH = 0;
+        float markerX = -1, markerY = -1; // (the player on the map, in parts of it; -1: not known)
+        int balls = -1; // (Poke Balls carried, for the status bar; -1: not known)
+        std::vector<Mon> battle; // (in a battle: the foe first, then yours)
+        std::vector<std::string> battleLines; // (how the types match up, CompanionBattle::Lines)
+    } companion;
     // (Touch: the preview's choice cards as drawn, each x, y, w, h and the choice it shows; one tapped
     // is pickWanted, which the caller reaches by pressing left or right on the row, a step a frame.)
     mutable std::vector<std::array<int, 5>> pickRects;

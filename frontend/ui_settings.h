@@ -999,6 +999,187 @@ inline void Menu::SettingsTap(int item, int x, MenuInput& input)
     else input.accept = true;
 }
 
+// COMPANION's pictures of what the game holds now (Menu::CompanionView), in the box x0..x0+w0,
+// top..bottom: a settings page's preview (DrawSettings), the Companion Window and the HUD.
+inline bool CompanionPicture(Canvas& c, const Menu::CompanionView& cv, int kind, int x0, int top, int w0, int bottom, float k)
+{
+    using namespace SettingsArt;
+    constexpr uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    if (kind == Menu::P_CPARTY && bottom - top > K(80))
+    {
+        // (PARTY: a card for each Pokemon: its icon, name, level, HP and held item.)
+        const auto& party = cv.party;
+        // (One under another: each name and its HP have the whole width.)
+        const int cols = 1, rows = 6, gap = K(8);
+        const int cw = w0, ch = std::min(K(62), (bottom - top - (rows - 1) * gap) / rows);
+        const int y0 = top + std::max(0, (bottom - top - rows * ch - (rows - 1) * gap) / 2);
+        for (int i = 0; i < 6; i++)
+        {
+            const int cx = x0 + (i % cols) * (cw + gap), cy = y0 + (i / cols) * (ch + gap);
+            if (i >= (int)party.size())
+            {
+                Glass::Round(c, cx, cy, cw, ch, 12 * k, 0x0CFFFFFF, 0x1AFFFFFF, std::max(1.0f, k)); // (an empty place)
+                continue;
+            }
+            const auto& m = party[i];
+            Glass::Round(c, cx, cy, cw, ch, 12 * k, Row);
+            Glass::Rim(c, cx, cy, cw, ch, 12 * k, std::max(1.0f, k), 0x60, 0x14);
+            const int is = std::min(ch - K(8), K(56)), ix = cx + K(8), iy = cy + (ch - is) / 2;
+            if (!m.icon.empty() && m.iconW > 0 && m.iconH > 0)
+            {
+                // (The icon, as large as the space, each of its pixels a block: kept sharp.)
+                const int dw = is, dh = is * m.iconH / m.iconW, dx = ix, dy = iy + (is - dh) / 2;
+                for (int yy = 0; yy < dh; yy++)
+                    for (int xx = 0; xx < dw; xx++)
+                    {
+                        const int X = dx + xx, Y = dy + yy;
+                        if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
+                        const uint32_t px = m.icon[(size_t)(yy * m.iconH / dh) * m.iconW + xx * m.iconW / dw];
+                        if (px >> 24) c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], px | 0xFF000000u, (int)(px >> 24));
+                    }
+                Glass::Mark(c, dx, dy, dx + dw, dy + dh);
+            }
+            else Glass::DrawIcon(c, Glass::I_POKEBALL, ix + is * 0.5f, iy + is * 0.5f, is * 0.3f, m.egg ? GlassHint : GlassText);
+            // (Name and level above, the HP bar across under them with its numbers at its end.)
+            const int tx = ix + is + K(10), tw = cx + cw - K(12) - tx;
+            const int nameY = cy + ch / 2 - K(4), barY = cy + ch / 2 + K(6);
+            std::string name = m.name;
+            const std::string lv = m.egg ? std::string("Egg") : "Lv " + std::to_string(m.level);
+            while (name.size() > 1 && W(name, K(16), true, false) > tw - W(lv, K(13), false, false) - K(16)) name.pop_back();
+            T(c, tx, nameY, name, K(16), GlassText, true, false);
+            T(c, cx + cw - K(12) - W(lv, K(13), false, false), nameY, lv, K(13), GlassHint, false, false);
+            if (!m.egg)
+            {
+                // (HP: green over half, yellow over a fifth, red below.)
+                const std::string hp = m.hp == 0 ? "Fainted" : std::to_string(m.hp) + " / " + std::to_string(m.maxHp);
+                const int hw = W(hp, K(12), false, false) + K(10), bh = std::max(3, K(6)), bw = tw - hw;
+                const float f = m.maxHp > 0 ? std::clamp((float)m.hp / m.maxHp, 0.0f, 1.0f) : 0.0f;
+                const uint32_t col = f > 0.5f ? 0xFF5BD47Au : f > 0.2f ? 0xFFF2C94Cu : 0xFFE5534Bu;
+                Glass::Round(c, tx, barY, bw, bh, bh * 0.5f, 0x26FFFFFF);
+                if (f > 0) Glass::Round(c, tx, barY, std::max(bh, (int)(bw * f)), bh, bh * 0.5f, col);
+                T(c, tx + bw + K(10), barY + bh / 2 + K(4), hp, K(12), m.hp == 0 ? 0xFFE5534Bu : Desc, false, false);
+            }
+        }
+    }
+    else if (kind == Menu::P_CBAG && bottom - top > K(60))
+    {
+        // (BAG: each pocket a card with how many kinds of thing it holds and how many in all.)
+        const auto& pk = cv.pockets;
+        const int n = (int)pk.size(), cols = 2, rows = std::max(1, (n + cols - 1) / cols), gap = K(10);
+        const int cw = (w0 - gap) / cols, ch = std::min(K(64), (bottom - top - (rows - 1) * gap) / rows);
+        const int y0 = top + std::max(0, (bottom - top - rows * ch - (rows - 1) * gap) / 2);
+        for (int i = 0; i < n; i++)
+        {
+            const int cx = x0 + (i % cols) * (cw + gap), cy = y0 + (i / cols) * (ch + gap);
+            const bool empty = pk[i].stacks == 0;
+            Glass::Round(c, cx, cy, cw, ch, 12 * k, empty ? 0x0CFFFFFF : Row);
+            if (!empty) Glass::Rim(c, cx, cy, cw, ch, 12 * k, std::max(1.0f, k), 0x60, 0x14);
+            T(c, cx + K(14), cy + ch / 2 - K(2), pk[i].name, K(15), empty ? GlassHint : GlassText, true, false);
+            const std::string sub = empty ? "Empty" : std::to_string(pk[i].stacks) + (pk[i].stacks == 1 ? " kind" : " kinds") + "  \xC2\xB7  " + std::to_string(pk[i].total) + " in all";
+            T(c, cx + K(14), cy + ch / 2 + K(16), sub, K(12), GlassHint, false, false);
+        }
+    }
+    else if (kind == Menu::P_CDEX && bottom - top > K(80))
+    {
+        // (POKEDEX: seen and caught, each a large number and a bar of the whole Pokedex.)
+        const int total = std::max(1, cv.dexTotal);
+        const int bh = K(10), gap = K(46), blockH = 2 * (K(40) + K(14) + bh) + gap;
+        int y = top + std::max(0, (bottom - top - blockH) / 2);
+        const struct { const char* name; int n; } lines[] = { { "Seen", cv.seen }, { "Caught", cv.caught } };
+        for (const auto& l : lines)
+        {
+            const std::string num = std::to_string(l.n);
+            T(c, x0, y + K(36), num, K(38), GlassText, true, false);
+            T(c, x0 + W(num, K(38), true, false) + K(12), y + K(36), std::string(l.name) + " of " + std::to_string(total), K(16), Desc, false, false);
+            const int pct = (int)std::lround(100.0 * l.n / total);
+            const std::string ps = std::to_string(pct) + "%";
+            T(c, x0 + w0 - W(ps, K(16), true, false), y + K(36), ps, K(16), GlassText, true, false);
+            const int by = y + K(40) + K(14);
+            Glass::Round(c, x0, by, w0, bh, bh * 0.5f, 0x26FFFFFF);
+            if (l.n > 0) Glass::Round(c, x0, by, std::max(bh, w0 * l.n / total), bh, bh * 0.5f, Pill);
+            y = by + bh + gap;
+        }
+    }
+    else if (kind == Menu::P_CPLACE && bottom - top > K(60))
+    {
+        // (LOCATION: the place's name, then the region's map from the ROM with the player on it.)
+        int y = top;
+        if (!cv.place.empty()) { T(c, x0, y + K(26), cv.place, K(24), GlassText, true, false); y += K(38); }
+        if (!cv.area.empty()) { T(c, x0, y + K(10), cv.area, K(14), GlassHint, false, false); y += K(22); }
+        if (!cv.map.empty() && cv.mapW > 0 && cv.mapH > 0 && bottom - y > K(60))
+        {
+            int mx, my, mw, mh;
+            Fit((float)cv.mapW / cv.mapH, x0, y + K(8), w0, bottom - y - K(8), mx, my, mw, mh);
+            Glass::Round(c, mx - K(4), my - K(4), mw + K(8), mh + K(8), 12 * k, 0x1A000000, 0x48FFFFFF, std::max(1.0f, 1.2f * k));
+            for (int yy = 0; yy < mh; yy++)
+                for (int xx = 0; xx < mw; xx++)
+                {
+                    const int X = mx + xx, Y = my + yy;
+                    if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
+                    c.px[(size_t)Y * c.w + X] = cv.map[(size_t)(yy * cv.mapH / mh) * cv.mapW + xx * cv.mapW / mw] | 0xFF000000u;
+                }
+            Glass::Mark(c, mx, my, mx + mw, my + mh);
+            if (cv.markerX >= 0 && cv.markerY >= 0)
+            {
+                const float px = mx + cv.markerX * mw, py = my + cv.markerY * mh, r = 7 * k;
+                Glass::Round(c, (int)(px - r * 2), (int)(py - r * 2), (int)(r * 4), (int)(r * 4), r * 2, 0x40FFFFFF);
+                Glass::Round(c, (int)(px - r), (int)(py - r), (int)(r * 2), (int)(r * 2), r, 0xFFE5534Bu, 0xFFFFFFFF, std::max(1.5f, 2 * k));
+            }
+        }
+    }
+    else if (kind == Menu::P_CBATTLE && bottom - top > K(80))
+    {
+        // (BATTLE: the foe's card and yours, as the party's, then how the types match up.)
+        int y = top;
+        for (size_t i = 0; i < cv.battle.size() && i < 2; i++)
+        {
+            const auto& m = cv.battle[i];
+            const int ch = K(62);
+            T(c, x0, y + K(14), i == 0 ? "Foe" : "Yours", K(13), GlassHint, true, false);
+            y += K(20);
+            Glass::Round(c, x0, y, w0, ch, 12 * k, Row);
+            Glass::Rim(c, x0, y, w0, ch, 12 * k, std::max(1.0f, k), 0x60, 0x14);
+            const int is = ch - K(8), ix = x0 + K(8), iy = y + K(4);
+            if (!m.icon.empty() && m.iconW > 0)
+            {
+                for (int yy = 0; yy < is; yy++)
+                    for (int xx = 0; xx < is; xx++)
+                    {
+                        const int X = ix + xx, Y = iy + yy;
+                        if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
+                        const uint32_t p = m.icon[(size_t)(yy * m.iconH / is) * m.iconW + xx * m.iconW / is];
+                        if (p >> 24) c.px[(size_t)Y * c.w + X] = p | 0xFF000000u;
+                    }
+                Glass::Mark(c, ix, iy, ix + is, iy + is);
+            }
+            const int tx = ix + is + K(10), tw = x0 + w0 - K(12) - tx;
+            const std::string lv = "Lv " + std::to_string(m.level);
+            T(c, tx, y + ch / 2 - K(4), m.name, K(16), GlassText, true, false);
+            T(c, x0 + w0 - K(12) - W(lv, K(13), false, false), y + ch / 2 - K(4), lv, K(13), GlassHint, false, false);
+            const int bh = std::max(3, K(6)), by = y + ch / 2 + K(6);
+            const float f = m.maxHp > 0 ? std::clamp((float)m.hp / m.maxHp, 0.0f, 1.0f) : 0.0f;
+            const uint32_t col = f > 0.5f ? 0xFF5BD47Au : f > 0.2f ? 0xFFF2C94Cu : 0xFFE5534Bu;
+            Glass::Round(c, tx, by, tw, bh, bh * 0.5f, 0x26FFFFFF);
+            if (f > 0) Glass::Round(c, tx, by, std::max(bh, (int)(tw * f)), bh, bh * 0.5f, col);
+            if (!m.item.empty()) T(c, tx, by + bh + K(14), m.item, K(12), Desc, false, false); // (its types)
+            y += ch + K(8);
+        }
+        y += K(8);
+        for (const std::string& line : cv.battleLines)
+        {
+            for (const std::string& l : Wrap(CleanFont::Title(line), K(14), w0, 2))
+            {
+                if (y + K(20) > bottom) break;
+                T(c, x0, y + K(14), l, K(14), Desc, false, false);
+                y += K(20);
+            }
+        }
+    }
+    else return false;
+    return true;
+}
+
 inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::string& hint) const
 {
     using namespace SettingsArt;
@@ -1293,6 +1474,10 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             if (!pd.empty()) { T(c, tx + K(16), ly, "BUTTON", K(13), GlassHint); T(c, tx + tw - K(14) - W(pd, K(15), true), ly, pd, K(15), GlassText, true); }
         }
     }
+    else if ((it.preview == P_CPARTY || it.preview == P_CBAG || it.preview == P_CDEX || it.preview == P_CPLACE) &&
+             CompanionPicture(c, companion, it.preview, pvX + pad, regionTop, innerW, regionBottom, k))
+    {
+    }
     else if (it.preview == P_TOUCH && regionBottom - regionTop > K(60))
     {
         // (TOUCH CONTROLS: the game with the on-screen buttons where they are, screen-shaped.)
@@ -1454,3 +1639,179 @@ inline void Menu::DrawDialog(Canvas& c, const std::string& title, const std::str
     if (!hint.empty()) TCentred(c, c.w / 2, py + ph + K(34), hint, K(15), GlassHint);
     if (solid) Glass::Opaque(c);
 }
+
+// The COMPANION WINDOW, live over the game as you play (PokeDaisy's companion on one screen): a
+// glass panel down the right of the screen, its tabs as icons along its top, the chosen tab's
+// picture under them. Tinted glass with a lit rim, no frost (it is drawn every frame over a moving
+// game). tabRects: where each tab was drawn, for taps.
+inline void CompanionWindow(Canvas& c, const Menu::CompanionView& cv, int tab, int (*tabRects)[4] = nullptr, int* panelRect = nullptr)
+{
+    using namespace SettingsArt;
+    // (A card in the top right corner, about a quarter of the screen across and two thirds down:
+    // the game stays the main thing on one screen.)
+    const float margin = std::min(c.w, c.h) * 0.03f;
+    const int ph = (int)(c.h * 0.68f), pw = (int)std::min(c.w * 0.25f, ph * 0.64f);
+    const int px = (int)(c.w - pw - margin), py = (int)margin;
+    const float k = std::max(0.42f, ph / 640.0f);
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    if (panelRect) { panelRect[0] = px; panelRect[1] = py; panelRect[2] = pw; panelRect[3] = ph; }
+    // (No shadow round it: over the bright game it reads as a dark border.)
+    // (Frosted when the game under it has been read: the menus' glass; else dark glass.)
+    if (Glass::FrostLive(c, px, py, pw, ph, 24 * k)) Glass::Round(c, px, py, pw, ph, 24 * k, Panel);
+    else Glass::Round(c, px, py, pw, ph, 24 * k, 0xD8101826);
+    Glass::Rim(c, px, py, pw, ph, 24 * k, std::max(1.2f, 1.6f * k));
+    static const int icons[] = { Glass::I_PEOPLE, Glass::I_LOAD, Glass::I_GLOBE, Glass::I_INFO, Glass::I_SPARKLE, Glass::I_CHEATS };
+    static const char* const names[] = { "PARTY", "BAG", "MAP", "POKEDEX", "BATTLE", "GUIDE" };
+    const int n = 6, gap = K(6), tw = (pw - K(28) - (n - 1) * gap) / n, th = K(44), ty = py + K(14);
+    for (int i = 0; i < n; i++)
+    {
+        const int tx = px + K(14) + i * (tw + gap);
+        const bool on = i == tab;
+        Glass::Round(c, tx, ty, tw, th, th * 0.5f, on ? Pill : 0x1AFFFFFF, on ? 0 : 0x26FFFFFF, std::max(1.0f, k));
+        Glass::DrawIcon(c, icons[i], tx + tw * 0.5f, ty + th * 0.5f, 10 * k, on ? PillInk : Menu::GlassText);
+        if (tabRects) { tabRects[i][0] = tx; tabRects[i][1] = ty; tabRects[i][2] = tw; tabRects[i][3] = th; }
+    }
+    const int x0 = px + K(20), w0 = pw - K(40);
+    int top = ty + th + K(18);
+    T(c, x0, top + K(22), names[tab], K(22), Menu::GlassText, true);
+    top += K(40);
+    const int bottom = py + ph - K(18);
+    static const int kinds[] = { Menu::P_CPARTY, Menu::P_CBAG, Menu::P_CPLACE, Menu::P_CDEX };
+    if (tab < 4) CompanionPicture(c, cv, kinds[tab], x0, top, w0, tab == 0 ? std::min(bottom, top + 6 * K(68)) : bottom, k); // (the party from the top)
+    else if (tab == 4 && !cv.battle.empty()) CompanionPicture(c, cv, Menu::P_CBATTLE, x0, top, w0, bottom, k);
+    else
+    {
+        const char* text = tab == 4 ? "Opens by itself when a battle starts: the Pokemon you face, its weaknesses and how your moves do."
+                                    : "Hints for where you are in the game, the answer hidden until you ask.";
+        int y = top + K(20);
+        for (const std::string& l : Wrap(text, K(16), w0, 6)) { T(c, x0, y, l, K(16), Desc, false, false); y += K(24); }
+    }
+}
+
+// The PARTY HUD, on the game while you walk: a small glass card for each Pokemon down the left,
+// its icon and HP bar (fainted ones dimmed).
+inline void PartyHud(Canvas& c, const Menu::CompanionView& cv)
+{
+    using namespace SettingsArt;
+    const float k = std::max(0.42f, std::min(c.w, c.h) / 720.0f);
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    const int cw = K(132), ch = K(46), gap = K(6), x = K(16);
+    int y = K(16);
+    for (const auto& m : cv.party)
+    {
+        if (Glass::FrostLive(c, x, y, cw, ch, 12 * k)) Glass::Round(c, x, y, cw, ch, 12 * k, Panel);
+        else Glass::Round(c, x, y, cw, ch, 12 * k, 0xB0101826);
+        Glass::Rim(c, x, y, cw, ch, 12 * k, std::max(1.0f, k), 0x70, 0x18);
+        const int is = ch - K(6), ix = x + K(4), iy = y + K(3);
+        if (!m.icon.empty() && m.iconW > 0)
+        {
+            for (int yy = 0; yy < is; yy++)
+                for (int xx = 0; xx < is; xx++)
+                {
+                    const int X = ix + xx, Y = iy + yy;
+                    if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
+                    const uint32_t p = m.icon[(size_t)(yy * m.iconH / is) * m.iconW + xx * m.iconW / is];
+                    if (p >> 24) c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], p | 0xFF000000u, m.hp == 0 && !m.egg ? 0x60 : 0xFF);
+                }
+            Glass::Mark(c, ix, iy, ix + is, iy + is);
+        }
+        else Glass::DrawIcon(c, Glass::I_POKEBALL, ix + is * 0.5f, iy + is * 0.5f, is * 0.3f, m.hp == 0 ? Menu::GlassOff : Menu::GlassText);
+        const int bx = ix + is + K(6), bw = x + cw - K(10) - bx;
+        const std::string lv = m.egg ? std::string("Egg") : "Lv " + std::to_string(m.level);
+        T(c, bx, y + K(19), lv, K(12), m.hp == 0 && !m.egg ? Menu::GlassOff : Menu::GlassText, true, false);
+        if (!m.egg)
+        {
+            const int bh = std::max(3, K(6)), by = y + K(28);
+            const float f = m.maxHp > 0 ? std::clamp((float)m.hp / m.maxHp, 0.0f, 1.0f) : 0.0f;
+            const uint32_t col = f > 0.5f ? 0xFF5BD47Au : f > 0.2f ? 0xFFF2C94Cu : 0xFFE5534Bu;
+            Glass::Round(c, bx, by, bw, bh, bh * 0.5f, 0x30FFFFFF);
+            if (f > 0) Glass::Round(c, bx, by, std::max(bh, (int)(bw * f)), bh, bh * 0.5f, col);
+        }
+        y += ch + gap;
+    }
+}
+
+// The STATUS BAR, a slim glass strip at the top of the game while you play (as PokeDaisy's): where
+// you are, how many Poke Balls you carry, the time and, on battery, how much is left.
+// left: where its left end goes (beside the HUD's cards), 0 to centre it.
+inline void StatusBar(Canvas& c, const std::string& place, int balls, const std::string& clock, int battery)
+{
+    using namespace SettingsArt;
+    const float k = std::max(0.42f, std::min(c.w, c.h) / 720.0f);
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    const int h = K(34), px = K(15);
+    // (Each part: an icon and its text; their widths first, to centre the strip.)
+    struct Part { int icon; std::string text; };
+    std::vector<Part> parts;
+    if (!place.empty()) parts.push_back({ Glass::I_GLOBE, place });
+    if (balls >= 0) parts.push_back({ Glass::I_POKEBALL, std::to_string(balls) });
+    if (!clock.empty()) parts.push_back({ -1, clock });
+    if (battery >= 0) parts.push_back({ -2, std::to_string(battery) + "%" });
+    if (parts.empty()) return;
+    std::vector<int> widths;
+    int total = K(16);
+    for (const Part& p : parts)
+    {
+        const int w = (p.icon >= 0 ? K(22) : p.icon == -2 ? K(24) : 0) + W(p.text, px, p.icon == Glass::I_GLOBE, false);
+        widths.push_back(w);
+        total += w + K(20);
+    }
+    total -= K(20) - K(16);
+    const int x0 = (c.w - total) / 2, y0 = K(10);
+    if (Glass::FrostLive(c, x0, y0, total, h, h * 0.5f)) Glass::Round(c, x0, y0, total, h, h * 0.5f, Panel);
+    else Glass::Round(c, x0, y0, total, h, h * 0.5f, 0xB8101826);
+    Glass::Rim(c, x0, y0, total, h, h * 0.5f, std::max(1.0f, k), 0x70, 0x18);
+    int x = x0 + K(16);
+    const int base = y0 + h / 2 + px * 7 / 20;
+    for (size_t i = 0; i < parts.size(); i++)
+    {
+        const Part& p = parts[i];
+        int tx = x;
+        if (p.icon >= 0) { Glass::DrawIcon(c, p.icon, x + K(8), y0 + h * 0.5f, 7 * k, Menu::GlassText); tx += K(22); }
+        else if (p.icon == -2)
+        {
+            // (A battery: its outline, filled as far as it is charged.)
+            const int bw = K(18), bh = K(10), by = y0 + (h - bh) / 2;
+            Glass::Round(c, x, by, bw, bh, 2 * k, 0, 0xC0FFFFFF, std::max(1.0f, 1.2f * k));
+            Glass::Round(c, x + bw, by + bh / 4, K(2), bh / 2, 1, 0xC0FFFFFF);
+            const int pct = std::clamp(atoi(p.text.c_str()), 0, 100);
+            Glass::Round(c, x + K(2), by + K(2), std::max(1, (bw - K(4)) * pct / 100), bh - K(4), 1, pct <= 15 ? 0xFFE5534Bu : 0xFFFFFFFFu);
+            tx += K(24);
+        }
+        T(c, tx, base, p.text, px, i == 0 ? Menu::GlassText : Desc, p.icon == Glass::I_GLOBE, false);
+        x += widths[i] + K(20);
+        if (i + 1 < parts.size()) Glass::Round(c, x - K(11), y0 + K(10), std::max(1, K(1)), h - K(20), 0, 0x30FFFFFF);
+    }
+}
+
+// The HUD's minimap, under the party cards: the region map around you, larger, your dot in the
+// middle (as the Location preview's, nearer).
+inline void MiniMap(Canvas& c, const Menu::CompanionView& cv, int x, int y, int size, float k)
+{
+    using namespace SettingsArt;
+    if (cv.map.empty() || cv.mapW <= 0 || cv.markerX < 0) return;
+    Glass::Round(c, x - 3, y - 3, size + 6, size + 6, 14 * k, 0xB8101826);
+    // (A third of the map's height across, centred on you, kept inside the map.)
+    const int span = std::max(16, cv.mapH / 3);
+    int sx = (int)(cv.markerX * cv.mapW) - span / 2, sy = (int)(cv.markerY * cv.mapH) - span / 2;
+    sx = std::clamp(sx, 0, std::max(0, cv.mapW - span)); sy = std::clamp(sy, 0, std::max(0, cv.mapH - span));
+    const float r = 12 * k;
+    for (int yy = 0; yy < size; yy++)
+        for (int xx = 0; xx < size; xx++)
+        {
+            const int X = x + xx, Y = y + yy;
+            if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
+            // (Rounded corners.)
+            const float qx = std::max(0.0f, std::fabs(xx + 0.5f - size * 0.5f) - (size * 0.5f - r)), qy = std::max(0.0f, std::fabs(yy + 0.5f - size * 0.5f) - (size * 0.5f - r));
+            const float cover = std::clamp(r + 0.5f - std::hypot(qx, qy), 0.0f, 1.0f);
+            if (cover <= 0) continue;
+            const int mx = std::min(cv.mapW - 1, sx + xx * span / size), my = std::min(cv.mapH - 1, sy + yy * span / size);
+            c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], cv.map[(size_t)my * cv.mapW + mx] | 0xFF000000u, (int)(cover * 255));
+        }
+    Glass::Mark(c, x, y, x + size, y + size);
+    Glass::Rim(c, x, y, size, size, r, std::max(1.0f, k), 0x90, 0x20);
+    const float px = x + (cv.markerX * cv.mapW - sx) * size / span, py = y + (cv.markerY * cv.mapH - sy) * size / span, d = 6 * k;
+    Glass::Round(c, (int)(px - d * 2), (int)(py - d * 2), (int)(d * 4), (int)(d * 4), d * 2, 0x40FFFFFF);
+    Glass::Round(c, (int)(px - d), (int)(py - d), (int)(d * 2), (int)(d * 2), d, 0xFFE5534Bu, 0xFFFFFFFF, std::max(1.5f, 2 * k));
+}
+

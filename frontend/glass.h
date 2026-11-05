@@ -3,6 +3,7 @@
 // Drawn in software into the Canvas, so it looks the same on PC, phones and the Switch.
 // Included by ui.h after Canvas.
 #pragma once
+#include <mutex>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -14,12 +15,24 @@ namespace Glass
 inline uint32_t Over(uint32_t dst, uint32_t src, int cover = 255)
 {
     const int a = (int)(src >> 24) * cover / 255;
-    if (a <= 0) return dst | 0xFF000000u;
-    const int ia = 255 - a;
-    const int r = ((int)(src >> 16 & 255) * a + (int)(dst >> 16 & 255) * ia) / 255;
-    const int g = ((int)(src >> 8 & 255) * a + (int)(dst >> 8 & 255) * ia) / 255;
-    const int b = ((int)(src & 255) * a + (int)(dst & 255) * ia) / 255;
-    return 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+    const int da = (int)(dst >> 24);
+    if (da == 255 || da == 0 && a == 0)
+    {
+        // (Over a solid picture, as the menus' frosted game: the colour mixed, still solid.)
+        if (a <= 0) return dst | 0xFF000000u;
+        const int ia = 255 - a;
+        const int r = ((int)(src >> 16 & 255) * a + (int)(dst >> 16 & 255) * ia) / 255;
+        const int g = ((int)(src >> 8 & 255) * a + (int)(dst >> 8 & 255) * ia) / 255;
+        const int b = ((int)(src & 255) * a + (int)(dst & 255) * ia) / 255;
+        return da == 0 ? 0 : 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+    }
+    // (Over a see-through canvas, as the live companion's over the playing game: what is drawn
+    // keeps its own transparency, so a shadow stays a soft shadow and not a black band.)
+    if (a <= 0) return dst;
+    const int oa = a + da * (255 - a) / 255;
+    if (oa <= 0) return 0;
+    auto mix = [&](int sh) { return ((int)(src >> sh & 255) * a + (int)(dst >> sh & 255) * da * (255 - a) / 255) / oa; };
+    return (uint32_t)oa << 24 | (uint32_t)mix(16) << 16 | (uint32_t)mix(8) << 8 | (uint32_t)mix(0);
 }
 
 // Grows the canvas's drawn rectangle (Canvas::Dirty) to take in a box.
@@ -102,6 +115,21 @@ inline void MakeBackdrop(std::vector<uint32_t>& out, const uint32_t* src, int w,
     }
 }
 
+// Frosted glass over the game as it plays (the HUD, the status bar, the COMPANION WINDOW): the parts of
+// the screen under them, read back now and then and blurred as the menu's backdrop (MakeBackdrop),
+// kept in one picture the size of the screen (Live().px, empty: not ready, the glass stays dark).
+// Each piece of glass drawn says where it is (Live().want), so the next read takes only those parts.
+struct LiveGlass
+{
+    std::vector<uint32_t> px;
+    int w = 0, h = 0;
+    struct Rect { int x, y, w, h; };
+    std::vector<Rect> want, wanted; // (this frame's pieces; the last frame's, for the read)
+    std::mutex lock; // (the read and the drawing may be on two threads: the picture held while either uses it)
+    bool Ready(const Canvas& c) const { return w == c.w && h == c.h && px.size() == (size_t)w * h; }
+};
+inline LiveGlass& Live() { static LiveGlass g; return g; }
+
 // The menu's background: the blurred game when it is ready (true), otherwise the game
 // darkened as before (false: the first frame, or a renderer that cannot be read back).
 inline bool Backdrop(Canvas& c)
@@ -158,6 +186,49 @@ inline void Frost(Canvas& c, int x, int y, int w, int h, float r)
             p = cover >= 1.0f ? out : Over(p, out, (int)(cover * 255));
         }
     }
+}
+
+// Frost from the live backdrop (Live()) onto a transparent canvas, over the game: the blurred game
+// under the rounded box, given Frost's colour, grain and sheen; the corners soft-edged in alpha.
+// False when there is nothing to frost from yet (the caller draws its dark glass instead).
+inline bool FrostLive(Canvas& c, int x, int y, int w, int h, float r)
+{
+    LiveGlass& g = Live();
+    g.want.push_back({ x, y, w, h });
+    if (!g.Ready(c) || w <= 0 || h <= 0) return false;
+    Mark(c, x, y, x + w, y + h);
+    const float hx = w * 0.5f, hy = h * 0.5f, cx = x + hx, cy = y + hy;
+    r = std::min(r, std::min(hx, hy));
+    for (int py = std::max(0, y); py < std::min(c.h, y + h); py++)
+    {
+        const float qy = std::fabs(py + 0.5f - cy) - (hy - r);
+        const float t = (py - y) / (float)h;
+        const float sheen = t < 0.45f ? (0.45f - t) / 0.45f * 8.0f : 0.0f;
+        for (int px = std::max(0, x); px < std::min(c.w, x + w); px++)
+        {
+            const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
+            float cover = 1.0f;
+            if (qx > 0 && qy > 0) cover = std::clamp(r - std::hypot(qx, qy) + 0.5f, 0.0f, 1.0f);
+            if (cover <= 0) continue;
+            const uint32_t b = g.px[(size_t)py * g.w + px];
+            const float rr = (float)(b >> 16 & 255), gg = (float)(b >> 8 & 255), bb = (float)(b & 255);
+            const float l = 0.3f * rr + 0.59f * gg + 0.11f * bb;
+            uint32_t hsh = (uint32_t)px * 374761393u + (uint32_t)py * 668265263u;
+            hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
+            const float grain = (float)((hsh >> 24) & 7) - 3.5f;
+            const float ch[3] = { rr, gg, bb };
+            uint32_t out = 0;
+            for (int k = 0; k < 3; k++)
+            {
+                float v = (l + (ch[k] - l) * 1.35f) * 0.9f + 16.0f;
+                if (v > 112.0f) v = 112.0f + (v - 112.0f) * 0.3f;
+                v += sheen + grain;
+                out |= (uint32_t)std::clamp((int)v, 0, 255) << (16 - 8 * k);
+            }
+            c.px[(size_t)py * c.w + px] = out | (uint32_t)(cover * 255) << 24;
+        }
+    }
+    return true;
 }
 
 // A panel lifted off the game: a soft shadow round and below it (outside it only, so the glass

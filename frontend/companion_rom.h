@@ -2,6 +2,7 @@
 // Read a supported cart's own names and dex data; none is bundled or written out.
 // Text decoding adapted from PokeDaisy Gen4Text/Gen5Text/NdsArt (GPL-3.0).
 // Based on PokeDaisy by Lidor Itzhari - https://github.com/lidor30/pokedaisy
+#include "companion_icons.h"
 #include "companion_data.h"
 #include "companion_art.h"
 #include <map>
@@ -133,6 +134,18 @@ struct Metadata
     std::vector<Bytes> personal,evolutions,learnsets,moveRecords;
     bool gen5=false;
     MapImage regionMap;
+    // (Party icons: the ROM's icon archive and its palettes, HGSS and Platinum; companion_icons.h.)
+    std::vector<Bytes> monIcons;
+    std::vector<std::vector<uint32_t>> iconPalettes;
+    bool MonIcon(int species,bool egg,std::vector<uint32_t>& out)const
+    {
+        if(gen5||iconPalettes.empty())return false;
+        const int id=egg?CompanionIcons::Gen4Egg:species;
+        if(id<1||id>CompanionIcons::Gen4Egg||7+id>=(int)monIcons.size())return false;
+        const int pal=CompanionIcons::Gen4Palette[id];
+        if(pal>=(int)iconPalettes.size())return false;
+        return CompanionIcons::Icon(monIcons[7+id],iconPalettes[pal],out);
+    }
     std::vector<std::string> places;
     std::vector<int> mapPlaces;
     struct MapRecord {int place=-1,matrix=-1,worldX=-1,worldY=-1,encounter=-1;};
@@ -419,6 +432,7 @@ struct Metadata
         // Black (U) text bank 53 is also identified by UPR ZX's gen5_offsets.ini.
         places=bank(gen5?89:hg?279:433);
         regionMap=ReferenceMap(Narc(RomFile(rom,gen5?"a/0/8/5":hg?"a/1/4/4":"graphic/tmap_gra.narc")),gen5,hg);
+        if(!gen5){monIcons=Narc(RomFile(rom,hg?"a/0/2/0":"poketool/icongra/pl_poke_icon.narc"));if(!monIcons.empty())iconPalettes=CompanionIcons::Palettes(monIcons[0]);}
         if(gen5)
         {
             auto zones=Narc(RomFile(rom,"a/0/1/2"));

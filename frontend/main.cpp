@@ -1599,6 +1599,8 @@ struct Settings : OptionalFeatures
     bool smartFast = false, turboA = false;
     int screenFilter=0;
     bool companionOverlay=false,partyHud=false;
+    // STATUS BAR: a slim strip at the top while you play: the area, Poke Balls, the time, the battery.
+    bool statusBar=false;
     // VOLUME: the game's sound and music, 0 (off) to 100 in tens.
     int volume = 100;
     // MUSIC and SOUND EFFECTS: each on its own, 0 to 100 in tens (frontend/game_music.h).
@@ -1699,6 +1701,7 @@ struct Settings : OptionalFeatures
             else if (k == "rewind_mb") rewindMb = v=="128"?128:v=="64"?64:0;
             else if (k == "companion_overlay") companionOverlay=v=="1";
             else if (k == "party_hud") partyHud=v=="1";
+            else if (k == "status_bar") statusBar=v=="1";
             else if (k == "screen_filter") screenFilter=std::clamp(atoi(v.c_str()),0,2);
             else if (k == "smart_fast") smartFast = v=="1";
             else if (k == "turbo_a") turboA = v=="1";
@@ -1735,6 +1738,11 @@ struct Settings : OptionalFeatures
     {
         if (readOnly) return;
         std::ofstream f(path);
+        Write(f);
+    }
+    // The settings file's text (Save; and to tell whether anything changed since it was written).
+    void Write(std::ostream& f) const
+    {
         f << "view=" << layout << "\n";
         f << "large_screen=" << (focusMode == 1 ? "top" : focusMode == 2 ? "bottom" : "auto") << "\n";
         f << "fullscreen=" << (fullscreen ? 1 : 0) << "\n";
@@ -1753,6 +1761,7 @@ struct Settings : OptionalFeatures
         f << "rewind_mb=" << rewindMb << "\n";
         f << "companion_overlay=" << companionOverlay << "\n";
         f << "party_hud=" << partyHud << "\n";
+        f << "status_bar=" << statusBar << "\n";
         f << "screen_filter=" << screenFilter << "\n";
         SaveExtras(f);
         f << "smart_fast=" << smartFast << "\n";
@@ -4737,7 +4746,20 @@ int main(int argc, char** argv)
     SDL_FingerID overlayFingerId=0;
     SDL_Texture* companionTexture=nullptr;
     int companionDiagnosticReady=-1,companionDiagnosticCount=-1;
-    auto liveCompanionWanted = [&]() {return cfg.liveCompanion||cfg.companionOverlay||cfg.partyHud||nuzlocke.Enabled()||DsDisplayState::Mode(secondDisplay.State())==4;};
+    auto liveCompanionWanted = [&]() {return cfg.liveCompanion||cfg.companionOverlay||cfg.partyHud||cfg.statusBar||nuzlocke.Enabled()||DsDisplayState::Mode(secondDisplay.State())==4;};
+    // The live companion (COMPANION WINDOW, HUD, STATUS BAR): its picture from the latest read, the
+    // window's tab (Battle while a battle runs, then back) and where it was drawn, for taps.
+    Menu::CompanionView liveView; unsigned liveViewVersion = ~0u;
+    int liveTab = 0, liveTabBeforeBattle = -1, liveTabRects[6][4] = {}, livePanel[4] = {};
+    // A tap or click at (x, y) on the screen: on a tab, that tab; anywhere on the window, kept from the game.
+    auto liveTouch = [&](float x, float y) {
+        if (livePanel[2] <= 0 || x < livePanel[0] || y < livePanel[1] || x >= livePanel[0] + livePanel[2] || y >= livePanel[1] + livePanel[3]) return false;
+        for (int i = 0; i < 6; i++)
+            if (x >= liveTabRects[i][0] && x < liveTabRects[i][0] + liveTabRects[i][2] && y >= liveTabRects[i][1] && y < liveTabRects[i][1] + liveTabRects[i][3])
+            { liveTab = i; liveTabBeforeBattle = -1; }
+        return true;
+    };
+    unsigned companionVersion = 0; // (counts the reads: the live companion redraws its picture when it changes)
     auto readCompanion = [&](bool requested=false) {
         if(!requested&&!liveCompanionWanted())
         {
@@ -4753,11 +4775,83 @@ int main(int argc, char** argv)
             memcpy(out, nds->MainRAM + offset, count);
             return true;
         });
+        // (A Pokemon the game is changing as it was read, its friendship as you walk, its HP in a
+        // battle, fails its checksum for that moment and is left out: the party as last read is kept
+        // then, so no slot drops out and comes back on the HUD and the window.)
+        {
+            static std::vector<Companion::Mon> lastParty;
+            auto& snap = companionSnapshot;
+            if (snap.ready && snap.invalidSlots > 0 && lastParty.size() == snap.party.size() + (size_t)snap.invalidSlots)
+            { snap.party = lastParty; snap.invalidSlots = 0; }
+            else if (snap.ready && snap.invalidSlots == 0) lastParty = snap.party;
+        }
+        companionVersion++;
         if(!opt.noSave && !nuzlocke.Observe(companionSnapshot))nuzlockeWriteFailed=true;
         if(getenv("SSR_COMPANION_DIAGNOSTICS") && (companionDiagnosticReady!=(int)companionSnapshot.ready || companionDiagnosticCount!=(int)companionSnapshot.party.size()))
         {
             companionDiagnosticReady=companionSnapshot.ready;companionDiagnosticCount=(int)companionSnapshot.party.size();
             fprintf(stderr,"[companion] ready=%d party=%zu invalid=%d bag=%zu dex=%d\n",companionDiagnosticReady,companionSnapshot.party.size(),companionSnapshot.invalidSlots,companionSnapshot.items.size(),companionSnapshot.dexReady);
+        }
+    };
+    // COMPANION's pictures (Menu::CompanionView) from the latest read: the pause menu's previews and the
+    // live companion (the window beside the game, the HUD, the status bar).
+    auto fillCompanionView = [&](Menu::CompanionView& cv) {
+        cv = Menu::CompanionView();
+        const auto& snap = companionSnapshot;
+        if (!snap.ready) return;
+        auto title = [](const std::string& t) { return CleanFont::Title(t); };
+        for (const auto& mon : snap.party)
+        {
+            Menu::CompanionView::Mon m;
+            const std::string sp = companionMetadata.Species(mon.species);
+            // (A name the game gave in capitals, as all of them are until renamed: title case.)
+            bool caps = true;
+            for (char ch : mon.nickname) if (ch >= 'a' && ch <= 'z') caps = false;
+            m.name = mon.nickname.empty() ? title(sp) : caps ? title(mon.nickname) : mon.nickname;
+            m.level = mon.level; m.hp = mon.hp; m.maxHp = mon.maxHp; m.status = (int)mon.status; m.egg = mon.egg;
+            if (mon.item) m.item = title(companionMetadata.ItemName(mon.item));
+            if (companionMetadata.MonIcon(mon.species, mon.egg, m.icon)) m.iconW = m.iconH = 32; // (from the ROM)
+            cv.party.push_back(m);
+        }
+        for (size_t pk = 0; pk < companionProfile.pockets.size(); pk++)
+        {
+            Menu::CompanionView::Pocket pocket;
+            pocket.name = title(Companion::PocketName(companionProfile, (int)pk));
+            for (const auto& item : snap.items) if (item.pocket == (int)pk) { pocket.stacks++; pocket.total += item.quantity; }
+            cv.pockets.push_back(pocket);
+        }
+        for (bool b : snap.seen) cv.seen += b;
+        for (bool b : snap.caught) cv.caught += b;
+        cv.dexTotal = companionProfile.maxSpecies;
+        cv.badges = snap.badges;
+        cv.place = title(companionMetadata.PlaceName(snap.map));
+        cv.area = snap.locationLive ? "" : "Where you last went through a door";
+        if (companionMetadata.regionMap.Ready())
+        {
+            cv.map = companionMetadata.regionMap.pixels;
+            cv.mapW = companionMetadata.regionMap.width;
+            cv.mapH = companionMetadata.regionMap.height;
+            const auto marker = companionMetadata.PlayerMarker(snap);
+            if (marker.ready) { cv.markerX = (marker.x + 0.5f) / cv.mapW; cv.markerY = (marker.y + 0.5f) / cv.mapH; }
+        }
+        // (Poke Balls: Gen 4's BALLS pocket; Gen 5 keeps them among ITEMS, so not counted.)
+        if (!companionProfile.gen5 && cv.pockets.size() > 6) cv.balls = cv.pockets[6].total;
+        // (A battle: the foe first, then yours, and how the types match up.)
+        if (snap.battlers.size() >= 2 && snap.battlers[1].species)
+        {
+            for (int i : { 1, 0 })
+            {
+                const auto& b = snap.battlers[i];
+                if (!b.species) continue;
+                Menu::CompanionView::Mon m;
+                m.name = title(companionMetadata.Species(b.species));
+                m.level = b.level; m.hp = b.hp; m.maxHp = b.maxHp;
+                if (CompanionTypes::Valid(b.type1))
+                    m.item = title(std::string(CompanionTypes::Name(b.type1)) + (b.type2 != b.type1 && CompanionTypes::Valid(b.type2) ? std::string(" / ") + CompanionTypes::Name(b.type2) : ""));
+                if (companionMetadata.MonIcon(b.species, false, m.icon)) m.iconW = m.iconH = 32;
+                cv.battle.push_back(m);
+            }
+            cv.battleLines = CompanionBattle::Lines(snap, companionMetadata);
         }
     };
     const auto companionGuide=Companion::GuideFor(gameCode);
@@ -4783,7 +4877,7 @@ int main(int argc, char** argv)
         M_COMPANION, M_CPARTY, M_CBAG, M_CDEX, M_CLOCATION, M_CMAP, M_CENCOUNTERS, M_REFERENCE, M_REFERENCE_KIND, M_REFERENCE_QUERY, M_CPOCKET, M_CDEX_FILTER, M_CBATTLE, M_CGUIDE, M_CGUIDE_REVEAL, M_NUZLOCKE, M_RUN_ENABLED, M_RUN_RESET, M_RUN_RESET_CONFIRM, M_QUICK_ACTIONS, M_OPEN_PC, M_HUB_SAVE, M_HUB_LOAD, M_HUB_CHEATS, M_HUB_FAST, M_HUB_SETTINGS, M_HUB_QUIT,
         M_QUIT_YES, M_RESET_YES, // (QUIT GAME / RESET GAME asked first: PAGE_QUIT_CONFIRM)
         M_SHORTCUTS, // (CONTROLS: Fulldex's own four shortcuts, opening KEYS AND BUTTONS at them)
-        M_EXTRAS, M_EXTRA0=92000, M_EXTRA_END=92006, M_PLAYBACK=93000, M_FAST_SPEED, M_SMART_FAST, M_SLOW_MOTION, M_REWIND_MB, M_REWIND, M_TURBO_A, M_SCREEN_FILTER, M_COMPANION_OVERLAY, M_PARTY_HUD,
+        M_EXTRAS, M_EXTRA0=92000, M_EXTRA_END=92006, M_PLAYBACK=93000, M_FAST_SPEED, M_SMART_FAST, M_SLOW_MOTION, M_REWIND_MB, M_REWIND, M_TURBO_A, M_SCREEN_FILTER, M_COMPANION_OVERLAY, M_PARTY_HUD, M_STATUS_BAR,
         M_STATES, M_SLOT_SAVE, M_SLOT_LOAD, M_SLOT_PREVIOUS, M_UNDO_LOAD,
         M_CPARTY0=80000, M_CDEX0=81000, M_CITEM0=83000, M_RRESULT0=86000, M_SLOT0=90000, M_GUIDE0=91000,
         M_BACKUP0 = 70000,
@@ -5184,10 +5278,7 @@ int main(int argc, char** argv)
             }
             toggle(M_SHOWFPS, "FPS COUNTER", Glass::I_GAUGE, Menu::P_FPS, cfg.showFps,
                    "Show the frames per second in a corner of the screen.", "Shows 60 when the game runs at full speed.");
-            toggle(M_COMPANION_OVERLAY, "COMPANION WINDOW", Glass::I_WINDOW, Menu::P_COMPANION, cfg.companionOverlay,
-                   "Show the Companion panel over the game: party, Pokédex and location.", "The Party HUD is hidden while this is on.");
-            toggle(M_PARTY_HUD, "PARTY HUD", Glass::I_PEOPLE, Menu::P_PARTY, cfg.partyHud,
-                   "Show your party's HP in a corner while you play.", "Hidden while the Companion Window is on.");
+            // (COMPANION WINDOW, HUD and STATUS BAR: at the top of COMPANION, as WHILE YOU PLAY.)
             picker(M_SCREEN_FILTER, "SCREEN FILTER", Glass::I_SPARKLE, Menu::P_FILTER, { "OFF", "SCANLINES", "LCD GRID" }, std::clamp(cfg.screenFilter, 0, 2),
                    "A retro look over the picture.", "LCD Grid looks like the DS's own screen up close.");
         }
@@ -5377,26 +5468,71 @@ int main(int argc, char** argv)
             auto species = [&](int id) { return companionMetadata.Species(id); };
             if (menuPage == PAGE_COMPANION)
             {
-                info(companionSnapshot.message);
-                // (LIVE COMPANION, from OPTIONAL FEATURES: whether these pages keep up as you play.)
-                add(M_EXTRA0 + 0, "LIVE UPDATES", onOff(cfg.liveCompanion));
-                if (companionSnapshot.ready)
+                // A settings page (ui_settings.h): YOUR GAME, HELP and OPTIONS, each row's preview
+                // showing what the game holds now (Menu::companion: P_CPARTY, P_CBAG, P_CDEX,
+                // P_CPLACE). PokeDaisy credited in the header.
+                settingsPage(Glass::I_POKEBALL);
+                menu.headerNote = "BASED ON POKEDAISY";
+                auto link = [&](int id, const char* label, int icon, int preview, const std::string& value, const char* desc, const char* tip = "") {
+                    add(id, label, value, true);
+                    MenuItem& it = menu.items.back();
+                    it.kind = Menu::K_LINK;
+                    it.icon = icon;
+                    it.preview = preview;
+                    it.desc = desc;
+                    it.tip = tip;
+                };
+                fillCompanionView(menu.companion);
+                const Menu::CompanionView& cv = menu.companion;
+                const auto& snap = companionSnapshot;
+                int itemsTotal = 0;
+                for (const auto& pocket : cv.pockets) itemsTotal += pocket.total;
+                // (The live companion, on or off: first, as the thing most often changed here.)
+                section("WHILE YOU PLAY", Glass::I_WINDOW);
+                toggle(M_PARTY_HUD, "HUD", Glass::I_PEOPLE, Menu::P_NONE, cfg.partyHud,
+                       "Your party's levels and HP, and a small map with you on it, in a corner while you play.", "Hidden while the Companion Window is on.");
+                toggle(M_STATUS_BAR, "STATUS BAR", Glass::I_GLOBE, Menu::P_NONE, cfg.statusBar,
+                       "A slim strip at the top of the game: where you are, your Poke Balls, the time and the battery.", "As PokeDaisy's.");
+                toggle(M_COMPANION_OVERLAY, "COMPANION WINDOW", Glass::I_WINDOW, Menu::P_NONE, cfg.companionOverlay,
+                       "Made for dual screens: the whole companion, party, bag, map, Pokedex, battle and guide, beside the game. On one screen it is a card in the corner; tap a tab to change it.",
+                       "Battle opens by itself when a battle starts. The HUD and status bar are hidden while this is on.");
+                section("YOUR GAME", Glass::I_POKEBALL);
+                if (snap.ready)
                 {
-                    add(M_CPARTY,"PARTY",std::to_string(companionSnapshot.party.size()),true);
-                    add(M_CBAG,"BAG",std::to_string(companionSnapshot.items.size())+" STACKS",true);
-                    add(M_CDEX,"POKEDEX",companionSnapshot.dexReady?"SEEN / CAUGHT":"NOT READY",true);
-                    add(M_CLOCATION,"LOCATION","");
-                    add(M_REFERENCE,"SEARCH REFERENCE","");
-                    add(M_CBATTLE,"BATTLE INFO","");
-                    add(M_NUZLOCKE,"NUZLOCKE TRACKER",onOff(nuzlocke.Enabled()));
-                    if(!companionGuide.empty())add(M_CGUIDE,"GUIDE","");
+                    link(M_CPARTY, "PARTY", Glass::I_PEOPLE, Menu::P_CPARTY, std::to_string(snap.party.size()),
+                         "Your team as it is now. Open it for each one's stats, moves, nature and what it learns next.");
+                    link(M_CBAG, "BAG", Glass::I_LOAD, Menu::P_CBAG, std::to_string(itemsTotal) + " ITEMS",
+                         "Every pocket of your bag. Open an item for what the game says about it.", "View only: use items through the game.");
+                    link(M_CDEX, "POKEDEX", Glass::I_INFO, snap.dexReady ? Menu::P_CDEX : Menu::P_NONE, snap.dexReady ? std::to_string(cv.caught) + " CAUGHT" : "NOT READY",
+                         "Seen and caught, with each Pokemon's evolutions, base stats and abilities.");
+                    link(M_CLOCATION, "LOCATION", Glass::I_GLOBE, Menu::P_CPLACE, Cheats::Fit(companionMetadata.PlaceName(snap.map), 16),
+                         "Where you are on the region's map, and what can be caught here.");
+                    link(M_CBATTLE, "BATTLE INFO", Glass::I_SPARKLE, cv.battle.empty() ? Menu::P_NONE : Menu::P_CBATTLE, cv.battle.empty() ? "" : "IN BATTLE",
+                         "During a battle: the Pokemon on the field and how types match up.", "Type matchups only: abilities and items are not counted.");
                 }
-                // (From SETTINGS: TYPE MATCHUPS. From OPTIONAL FEATURES: QUICK ACTION SHORTCUTS, here
-                // QUICK ACTIONS, with its one action under it while it is on.)
-                add(M_MATCHUPS,"TYPE MATCHUPS","");
-                add(M_EXTRA0 + 1, "QUICK ACTIONS", onOff(cfg.quickActions));
-                if(cfg.quickActions&&pokeActions.Supported()&&!opt.lockstep)add(M_OPEN_PC,"OPEN PC","");
-                info("Based on PokeDaisy by Lidor Itzhari - https://github.com/lidor30/pokedaisy");
+                else
+                {
+                    add(M_NOTHING, snap.message.empty() ? "START OR LOAD A GAME" : snap.message.c_str(), "", true);
+                    menu.items.back().disabled = true;
+                    menu.items.back().desc = "The companion reads your party, bag and Pokedex from the game once it is running.";
+                }
+                section("HELP", Glass::I_INFO);
+                if (!companionGuide.empty())
+                    link(M_CGUIDE, "GUIDE", Glass::I_CHEATS, Menu::P_NONE, std::to_string(companionGuide.size()) + " PAGES",
+                         "Hints for each part of the game, the answer hidden until you ask for it.", "From PokeDaisy's guides.");
+                link(M_NUZLOCKE, "NUZLOCKE TRACKER", Glass::I_POWER, Menu::P_NONE, onOff(nuzlocke.Enabled()),
+                     "Keeps the rules of a Nuzlocke run: one catch per area, and fainted Pokemon count as gone.");
+                link(M_REFERENCE, "SEARCH REFERENCE", Glass::I_GLOBE, Menu::P_NONE, "",
+                     "Look up any Pokemon, item, move, place or trainer's team in your game.", "Includes things you have not seen yet.");
+                link(M_MATCHUPS, "TYPE MATCHUPS", Glass::I_GRID, Menu::P_NONE, "",
+                     "How well each type of attack does against one or two types.");
+                section("OPTIONS", Glass::I_GEAR);
+                toggle(M_EXTRA0 + 0, "LIVE UPDATES", Glass::I_SPARKLE, Menu::P_NONE, cfg.liveCompanion,
+                       "Keep these pages up to date as you play.", "Off: they are read when you open them.");
+                toggle(M_EXTRA0 + 1, "QUICK ACTIONS", Glass::I_FAST, Menu::P_NONE, cfg.quickActions,
+                       "Game actions from here, as opening the PC, in versions they have been checked with.", "Each one still asks you to choose it.");
+                if (cfg.quickActions && pokeActions.Supported() && !opt.lockstep)
+                    link(M_OPEN_PC, "OPEN PC", Glass::I_CHIP, Menu::P_NONE, "", "Open the PC's boxes from here.");
             }
             else if(menuPage==PAGE_REFERENCE)
             {
@@ -5582,7 +5718,7 @@ int main(int argc, char** argv)
                 add(M_CENCOUNTERS,"ENCOUNTERS HERE","");
                 info("FULL MAP INCLUDES UNVISITED PLACES. UNLOCKS ARE NOT FILTERED.");
             }
-            add(M_BACK,"BACK","");
+            if (menuPage != PAGE_COMPANION) add(M_BACK,"BACK",""); // (COMPANION, a settings page, has its own)
         }
         else if (menuPage == PAGE_MATCHUPS)
         {
@@ -5925,6 +6061,7 @@ int main(int argc, char** argv)
 
     std::string toast;
     uint32_t toastUntil = 0;
+    std::string savedSettings; // (the settings file's text as last written: autosave)
     int shownFps = 0;
     uint32_t presented = 0, fpsSince = 0;
     auto say = [&](const std::string& msg) {
@@ -6319,20 +6456,46 @@ int main(int argc, char** argv)
             }
         }
         screenEffect.Draw(renderer,j.outW,j.outH,cfg.screenFilter);
-        if(cfg.companionOverlay&&!menu.open)
-        {
-            const auto& panel=companionPanel.Draw(companionSnapshot,companionMetadata,companionProfile,companionGuide);
-            if(!companionTexture)companionTexture=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,640,480);
-            if(companionTexture)
-            {
-                SDL_UpdateTexture(companionTexture,nullptr,panel.px.data(),640*4);
-                const auto view=CompanionPanel::Overlay(j.outW,j.outH);
-                SDL_Rect destination{view.x,view.y,view.w,view.h};
-                SDL_RenderCopy(renderer,companionTexture,nullptr,&destination);
-            }
-        }
+        // (The COMPANION WINDOW is drawn with the other overlays, in the canvas: CompanionWindow.)
         // Frosted glass: the game as it is when the menu opens, read once (it is paused) and blurred.
         // (Again if the window changed size while the menu was open: BORDERLESS FULLSCREEN.)
+        // The live companion's frosted glass (Glass::FrostLive): the parts of the game under its glass,
+        // read back and blurred every third frame (a blur hides the lag), only those parts.
+        {
+            Glass::LiveGlass& g = Glass::Live();
+            std::lock_guard<std::mutex> hold(g.lock);
+            static unsigned liveFrame = 0;
+            if (!menu.open && !g.wanted.empty() && j.outW > 0 && j.outH > 0 && (liveFrame++ % 3 == 0 || !g.Ready(canvas)))
+            {
+                if (g.w != j.outW || g.h != j.outH) { g.px.assign((size_t)j.outW * j.outH, 0xFF000000u); g.w = j.outW; g.h = j.outH; }
+                // (The pieces near one another read as one: the HUD's cards together.)
+                std::vector<Glass::LiveGlass::Rect> groups;
+                for (auto r : g.wanted)
+                {
+                    bool merged = false;
+                    for (auto& m : groups)
+                        if (r.x < m.x + m.w + 48 && m.x < r.x + r.w + 48 && r.y < m.y + m.h + 48 && m.y < r.y + r.h + 48)
+                        {
+                            const int x0 = std::min(m.x, r.x), y0 = std::min(m.y, r.y), x1 = std::max(m.x + m.w, r.x + r.w), y1 = std::max(m.y + m.h, r.y + r.h);
+                            m = { x0, y0, x1 - x0, y1 - y0 }; merged = true; break;
+                        }
+                    if (!merged) groups.push_back(r);
+                }
+                std::vector<uint32_t> shot, blurred;
+                bool readOk = true;
+                for (auto r : groups)
+                {
+                    const int x0 = std::max(0, r.x), y0 = std::max(0, r.y), x1 = std::min(j.outW, r.x + r.w), y1 = std::min(j.outH, r.y + r.h);
+                    if (x1 - x0 < 8 || y1 - y0 < 8) continue;
+                    const SDL_Rect rect = { x0, y0, x1 - x0, y1 - y0 };
+                    shot.resize((size_t)rect.w * rect.h);
+                    if (SDL_RenderReadPixels(renderer, &rect, SDL_PIXELFORMAT_ARGB8888, shot.data(), rect.w * 4) != 0) { readOk = false; break; }
+                    Glass::MakeBackdrop(blurred, shot.data(), rect.w, rect.h);
+                    for (int y = 0; y < rect.h; y++) std::copy(&blurred[(size_t)y * rect.w], &blurred[(size_t)y * rect.w] + rect.w, &g.px[(size_t)(rect.y + y) * g.w + rect.x]);
+                }
+                if (!readOk) { g.px.clear(); g.w = g.h = 0; g.wanted.clear(); } // (a renderer that cannot be read: dark glass)
+            }
+        }
         const bool backdropStale = canvas.backdrop.size() > 1 && canvas.backdrop.size() != (size_t)j.outW * j.outH;
         // (The frame the game is read on, the menu's picture was drawn before there was any frost
         // to draw it on: that one frame shows the game alone, not a plain menu that then changes.)
@@ -6798,12 +6961,8 @@ int main(int argc, char** argv)
                         if(ev.type==SDL_FINGERUP)overlayFinger=false;
                         continue;
                     }
-                    if(cfg.companionOverlay&&!menu.open&&ev.type==SDL_FINGERDOWN)
-                    {
-                        int x=0,y=0;
-                        if(CompanionPanel::OverlayTouch(ow,oh,fx,fy,x,y))
-                        {overlayFinger=true;overlayFingerId=ev.tfinger.fingerId;companionPanel.Touch(x,y);continue;}
-                    }
+                    if(cfg.companionOverlay&&!menu.open&&ev.type==SDL_FINGERDOWN&&liveTouch(fx,fy))
+                    {overlayFinger=true;overlayFingerId=ev.tfinger.fingerId;continue;}
                     // The pause menu takes taps on itself: a row is chosen and used at once (a
                     // setting changes: the left part of the box back, the rest forward); a tap
                     // beside the box, away from the buttons, closes the menu.
@@ -6918,8 +7077,8 @@ int main(int argc, char** argv)
                 else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT)
                 {
                     int x=0,y=0,ow=0,oh=0,ww=0,wh=0;SDL_GetRendererOutputSize(renderer,&ow,&oh);SDL_GetWindowSize(window,&ww,&wh);
-                    if(cfg.companionOverlay&&!menu.open&&ww>0&&wh>0&&CompanionPanel::OverlayTouch(ow,oh,(float)ev.button.x*ow/ww,(float)ev.button.y*oh/wh,x,y))
-                    {overlayMouse=true;companionPanel.Touch(x,y);}
+                    if(cfg.companionOverlay&&!menu.open&&ww>0&&wh>0&&liveTouch((float)ev.button.x*ow/ww,(float)ev.button.y*oh/wh))
+                    {overlayMouse=true;(void)x;(void)y;}
                     // A quick click can go down and up between two frames, and the game, which reads the
                     // touch screen once a frame, never saw it (the Pokeathlon's START did nothing): a
                     // click lasts at least 4 frames.
@@ -7512,8 +7671,9 @@ int main(int argc, char** argv)
             case M_RUN_ENABLED:nuzlockeWriteFailed=!nuzlocke.SetEnabled(!nuzlocke.Enabled());break;
             case M_RUN_RESET:goPage(PAGE_RUN_CONFIRM,M_BACK);hit=-1;break;
             case M_RUN_RESET_CONFIRM:nuzlockeWriteFailed=!nuzlocke.Reset();goPage(PAGE_NUZLOCKE,M_RUN_ENABLED);hit=-1;break;
-            case M_COMPANION_OVERLAY:cfg.companionOverlay=!cfg.companionOverlay;cfg.Save(opt.config);break;
-            case M_PARTY_HUD:cfg.partyHud=!cfg.partyHud;cfg.Save(opt.config);break;
+            case M_COMPANION_OVERLAY:cfg.companionOverlay=!cfg.companionOverlay;cfg.Save(opt.config);readCompanion();break;
+            case M_PARTY_HUD:cfg.partyHud=!cfg.partyHud;cfg.Save(opt.config);readCompanion();break;
+            case M_STATUS_BAR:cfg.statusBar=!cfg.statusBar;cfg.Save(opt.config);readCompanion();break;
             case M_SCREEN_FILTER:cfg.screenFilter=(cfg.screenFilter+(dir<0?2:1))%3;cfg.Save(opt.config);break;
             case M_PLAYBACK:goPage(PAGE_PLAYBACK,M_FAST_SPEED);hit=-1;break;
             case M_FAST_SPEED:
@@ -7917,6 +8077,17 @@ int main(int argc, char** argv)
         {
             std::string m;
             if (frame >= toastUntil && Achievements::PopMessage(m)) say(m);
+        }
+        // Settings written as soon as one changes (looked at twice a second), not only when the game
+        // is closed properly: they stay as set even if the app is closed from the system (a phone's
+        // app switcher, the Switch's HOME) or stops. The screen layout as shown counts, as at exit.
+        if (frame % 30 == 0 && !opt.headless)
+        {
+            if (!singleScreenRom) cfg.layout = LayoutName(layout.mode);
+            cfg.focusMode = focus.mode;
+            std::ostringstream text;
+            cfg.Write(text);
+            if (text.str() != savedSettings) { cfg.Save(opt.config); savedSettings = text.str(); }
         }
         if (menu.open && menuPage == PAGE_RA && !raTyping && frame % 20 == 0) buildMenu();
 
@@ -9408,19 +9579,39 @@ int main(int argc, char** argv)
             canvas.Text(tx + 4 * sc, ty + 3 * sc, toast, sc, (fade << 24) | 0xFFFFFF);
             overlayUsed = true;
         }
-        if(cfg.partyHud&&!menu.open&&companionSnapshot.ready&&!cfg.companionOverlay)
+        // The live companion: COMPANION WINDOW (beside the game), else HUD; STATUS BAR (ui_settings.h).
+        if (!menu.open && (cfg.companionOverlay || cfg.partyHud || cfg.statusBar) && companionSnapshot.ready && !opt.headless)
         {
-            int scale=std::max(1,outH/480),width=170*scale,x=outW-width-12*scale,y=outH*14/100;
-            canvas.Fill(x-4*scale,y-4*scale,width+8*scale,(int)companionSnapshot.party.size()*22*scale+8*scale,0xCC101722);
-            for(const auto& mon:companionSnapshot.party)
+            if (liveViewVersion != companionVersion) { fillCompanionView(liveView); liveViewVersion = companionVersion; }
+            std::lock_guard<std::mutex> holdGlass(Glass::Live().lock);
+            Glass::Live().want.clear(); // (each piece of glass below says where it is: the next read-back)
+            // (Battle while a battle runs, then the tab that was open.)
+            const bool inBattle = !liveView.battle.empty();
+            if (inBattle && liveTabBeforeBattle < 0 && liveTab != 4) { liveTabBeforeBattle = liveTab; liveTab = 4; }
+            if (!inBattle && liveTabBeforeBattle >= 0) { liveTab = liveTabBeforeBattle; liveTabBeforeBattle = -1; }
+            if (cfg.companionOverlay) CompanionWindow(canvas, liveView, liveTab, liveTabRects, livePanel);
+            else if (cfg.partyHud)
             {
-                canvas.Text(x,y,Cheats::Fit(companionMetadata.Species(mon.species),15)+" "+std::to_string(mon.hp)+"/"+std::to_string(mon.maxHp),scale,0xFFFFFFFF);
-                canvas.Fill(x,y+10*scale,width,4*scale,0xFF394653);
-                canvas.Fill(x,y+10*scale,mon.maxHp?width*mon.hp/mon.maxHp:0,4*scale,mon.hp*4<mon.maxHp?0xFFE05050:0xFF45C881);
-                y+=22*scale;
+                PartyHud(canvas, liveView);
+                const float k = std::max(0.42f, std::min(outW, outH) / 720.0f);
+                const int top = (int)std::lround(16 * k) + (int)liveView.party.size() * ((int)std::lround(46 * k) + (int)std::lround(6 * k)) + (int)std::lround(4 * k);
+                MiniMap(canvas, liveView, (int)std::lround(16 * k), top, (int)std::lround(132 * k), k);
             }
-            overlayUsed=true;
+            if (cfg.statusBar && !cfg.companionOverlay)
+            {
+                static int battery = -1;
+                static uint32_t batteryAt = 0;
+                if (frame >= batteryAt) { int pct = -1; battery = SDL_GetPowerInfo(nullptr, &pct) == SDL_POWERSTATE_ON_BATTERY ? pct : -1; batteryAt = frame + 600; }
+                char clock[8] = "";
+                const time_t now = time(nullptr);
+                if (const tm* t = localtime(&now)) snprintf(clock, sizeof(clock), "%02d:%02d", t->tm_hour, t->tm_min);
+                StatusBar(canvas, liveView.place, liveView.balls, clock, battery);
+            }
+            if (!cfg.companionOverlay) livePanel[2] = 0;
+            Glass::Live().wanted = Glass::Live().want;
+            overlayUsed = true;
         }
+        else { livePanel[2] = 0; std::lock_guard<std::mutex> holdGlass(Glass::Live().lock); Glass::Live().wanted.clear(); }
         // The DS's two screens as the menu opens (the game is paused): the settings pages' previews.
         if (menu.open && canvas.dsTop.empty() && nds)
         {
