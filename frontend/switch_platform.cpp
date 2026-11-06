@@ -242,6 +242,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
         library.Load(home + "/fulldex-library.txt");
         Launcher::ApplyLocal(games, home);
         Launcher::ApplyArt(games, home);
+        Launcher::Focus().sortKey = Launcher::ConfigValue(cfgPath, "list_sort");
         library.Apply(games, Launcher::ConfigValue(cfgPath, "list_sort"));
         sel = -1;
         for (size_t i = 0; i < games.size(); i++)
@@ -608,6 +609,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         const int r = Launcher::PageRowAt(tapX, tapY);
                         if (r >= 0) { if (F.prow == r && F.side < 0) aDown = true; F.side = -1; F.prow = r; }
                     }
+                    else if (Launcher::SortAt(tapX, tapY)) { F.side = -1; F.banner = 0; onTabs = true; F.onSort = true; aDown = true; }
                     else if (Launcher::ContinueAt(canvas, tapX, tapY)) { F.side = -1; onTabs = false; F.banner = 1; aDown = true; }
                     else if (t >= 0) { F.side = -1; F.banner = 0; onTabs = false; if (t != tab) setTab(t - tab); }
                     else if (tile >= 0)
@@ -843,6 +845,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             }
             else
             {
+                if (!onTabs) F.onSort = false;
                 // A page of the sidebar open (About): its arrows, A and B.
                 if (F.page >= 0)
                 {
@@ -888,7 +891,20 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                 }
                 else if (onTabs)
                 {
-                    if (dir == 1 && tab == 0) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                    if (F.onSort)
+                    {
+                        // (Sort on the tab bar: left back to the tabs, down to the games, A the next order.)
+                        if (dir == 1) F.onSort = false;
+                        else if (dir == 4) { F.onSort = false; onTabs = false; if (banner) F.banner = 1; else intoGames(); }
+                        else if (aDown)
+                        {
+                            if (!Launcher::SetConfigLine(cfgPath, "list_sort", Launcher::NextSort(Launcher::ConfigValue(cfgPath, "list_sort")))) note = "COULD NOT SAVE THE SETTINGS";
+                            refresh(selected);
+                            settle();
+                        }
+                    }
+                    else if (dir == 1 && tab == 0) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                    else if (dir == 2 && tab == Launcher::TABS - 1) F.onSort = true;
                     else if (dir == 1 || dir == 2) setTab(dir == 2 ? 1 : -1);
                     else if (dir == 4 || aDown) { onTabs = false; if (banner) F.banner = 1; else intoGames(); }
                 }
@@ -1053,7 +1069,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             }
             auto keyNow = [&]() { const Launcher::GlassFocus& F = Launcher::Focus();
                                   return std::to_string(F.side) + "," + std::to_string(F.banner) + "," + std::to_string(F.popup) + "," + std::to_string(F.dialog) + ","
-                                         + std::to_string(F.drow) + "," + std::to_string(F.page) + "," + std::to_string(F.prow) + "," + std::to_string(F.upState) + F.upText + "," + std::to_string(F.nScroll) + "," + std::to_string(F.pact) + "," + std::to_string(Launcher::RomList().size()) + ","
+                                         + std::to_string(F.drow) + "," + std::to_string(F.page) + "," + std::to_string(F.prow) + "," + std::to_string(F.upState) + F.upText + "," + std::to_string(F.nScroll) + "," + std::to_string(F.onSort) + F.sortKey + "," + std::to_string(F.pact) + "," + std::to_string(Launcher::RomList().size()) + ","
                                          + std::to_string(std::count_if(Launcher::RomList().begin(), Launcher::RomList().end(), [](const Launcher::Game& g) { return g.hidden; })) + "," + F.text + "," + std::to_string(kb.selected) + std::to_string(kbLayer) + "," + std::to_string(games.size()) + "/"
                                          + Launcher::BackdropRom() + "/" + std::to_string(tab) + "/" + std::to_string(selected) + "/" + std::to_string(scroll) + "/" + note + "/"
                                          + std::to_string(onTabs) + std::to_string(onSettings); };

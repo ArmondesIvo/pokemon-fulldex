@@ -98,7 +98,9 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     int nScroll = 0, nMax = 0, nX = 0, nY = 0, nW = 0, nH = 0, nLine = 0;
                     // (The ROMs page: pact the chosen ROM's action, -1 the list; rScroll its first row shown, rVis how many;
                     // aX..aRow where the actions were drawn.)
-                    int pact = -1, rScroll = 0, rVis = 0, aX = 0, aY = 0, aW = 0, aRow = 0; };
+                    int pact = -1, rScroll = 0, rVis = 0, aX = 0, aY = 0, aW = 0, aRow = 0;
+                    // (Sort at the tab bar's right end: chosen (with the tabs), the list's order, where it was drawn.)
+                    bool onSort = false; std::string sortKey; int sortX = 0, sortY = 0, sortW = 0, sortH = 0; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
 inline int PopupCount() { return 6; }
 inline std::string PopupLabel(const Game& g, int i)
@@ -986,15 +988,15 @@ inline int FirstIn(const View& v) { return v.spots.empty() ? -1 : v.spots[0].gam
 // and the tab's games as cards below it, all drawn with the pause menu's own glass (glass.h,
 // Menu::FrostBox) and clean font over the chosen game's picture, blurred. Used on landscape
 // screens with the clean font (Glassy); otherwise the classic list (DrawClassic).
-enum Side { SIDE_HOME, SIDE_LIBRARY, SIDE_HUB, SIDE_ROMS, SIDE_UPDATES, SIDE_SETTINGS, SIDE_ABOUT, SIDES };
+enum Side { SIDE_HOME, SIDE_HUB, SIDE_ROMS, SIDE_UPDATES, SIDE_SETTINGS, SIDE_ABOUT, SIDES }; // (Library is Home: its tabs, Sort)
 inline const char* SideName(int i)
 {
-    static const char* n[] = { "Home", "Library", "Hub", "ROMs", "Updates", "Settings", "About" };
+    static const char* n[] = { "Home", "Hub", "ROMs", "Updates", "Settings", "About" };
     return n[i];
 }
 inline int SideIcon(int i)
 {
-    static const int ic[] = { Glass::I_POKEBALL, Glass::I_GRID, Glass::I_PEOPLE, Glass::I_CHIP, Glass::I_LOAD, Glass::I_GEAR, Glass::I_INFO };
+    static const int ic[] = { Glass::I_POKEBALL, Glass::I_PEOPLE, Glass::I_CHIP, Glass::I_LOAD, Glass::I_GEAR, Glass::I_INFO };
     return ic[i];
 }
 inline float GU(const Canvas& c) { return c.h / 720.0f; } // one design pixel (the designs are 1280 x 720)
@@ -1195,6 +1197,44 @@ inline int RomActions()
 #else
     return 2;
 #endif
+}
+// One line of the settings file set (key=value), the rest kept: written to a .tmp and put in place
+// (on the Switch's SD card the old file goes first: it does not rename over one).
+inline bool SetConfigLine(const std::string& cfg, const std::string& key, const std::string& value)
+{
+    std::vector<std::string> lines;
+    if (FILE* f = fopen(cfg.c_str(), "r"))
+    {
+        char buf[1024];
+        while (fgets(buf, sizeof buf, f))
+        {
+            std::string l = buf;
+            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+            lines.push_back(l);
+        }
+        fclose(f);
+    }
+    bool found = false;
+    for (std::string& l : lines)
+        if (l.size() > key.size() && !l.compare(0, key.size(), key) && l[key.size()] == '=') { l = key + "=" + value; found = true; }
+    if (!found) lines.push_back(key + "=" + value);
+    const std::string tmp = cfg + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "w");
+    if (!f) return false;
+    bool ok = true;
+    for (const std::string& l : lines) if (fprintf(f, "%s\n", l.c_str()) < 0) ok = false;
+    ok = fclose(f) == 0 && ok;
+    if (!ok) return false;
+    if (rename(tmp.c_str(), cfg.c_str()) != 0) { remove(cfg.c_str()); if (rename(tmp.c_str(), cfg.c_str()) != 0) return false; }
+    return true;
+}
+// Sort on the tab bar: the next order, and how it is named.
+inline const char* NextSort(const std::string& now) { return now == "favourites" ? "recent" : now == "recent" ? "original" : "favourites"; }
+inline const char* SortLabel(const std::string& k) { return k == "favourites" ? "Favourites First" : k == "recent" ? "Recently Played" : "Original"; }
+inline bool SortAt(int x, int y)
+{
+    const GlassFocus& f = Focus();
+    return f.page < 0 && f.sortW > 0 && x >= f.sortX && x < f.sortX + f.sortW && y >= f.sortY && y < f.sortY + f.sortH;
 }
 // The sidebar's pages (About; the others to come): page, the section shown (-1: the games); prow the
 // row chosen in its list; pX..pRow where its rows were drawn (for taps).
@@ -1796,7 +1836,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
-                    + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0)
+                    + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + Focus().sortKey
                     + (Focus().page == SIDE_UPDATES ? "/u" + std::to_string(Focus().upState) + std::to_string(Focus().upCan) + Focus().upHave + "/" + Focus().upNew + "/" + Focus().upText + "/" + Focus().upNotes + "/" + std::to_string(Focus().nScroll) : std::string())
                     + (Focus().page == SIDE_ROMS ? "/r" + std::to_string(Focus().pact) + "," + std::to_string(RomList().size()) + ","
                        + std::to_string(std::count_if(RomList().begin(), RomList().end(), [](const Game& g) { return g.hidden; })) : std::string());
@@ -1897,7 +1937,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             const std::string name = TabLabel(t);
             if (t == tab)
             {
-                if (onTabs) Glass::Glow(c, px, py, pw, ph, ph * 0.5f, u);
+                if (onTabs && !Focus().onSort) Glass::Glow(c, px, py, pw, ph, ph * 0.5f, u);
                 Glass::Round(c, px, py, pw, ph, ph * 0.5f, 0xFFFFFFFFu);
             }
             GT(c, px + (pw - GW(name, 18 * u, true)) / 2, py + ph * 0.5f, name, 18 * u, t == tab ? dark : text, true);
@@ -1949,6 +1989,23 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     }
     drawSideRows();
     drawBannerButtons();
+    // Sort, at the tab bar's right end (chosen: right past the last tab).
+    Focus().sortW = 0;
+    if (Focus().page < 0)
+    {
+        const std::string label = std::string("Sort: ") + SortLabel(Focus().sortKey);
+        const int barH = sp.tabsY * 2 + sp.tabsH, bh = (int)(40 * u), bw = GW(label, 15 * u, true) + (int)(52 * u);
+        const int bx = c.w - (int)(28 * u) - bw, by = (barH - bh) / 2;
+        Focus().sortX = bx; Focus().sortY = by; Focus().sortW = bw; Focus().sortH = bh;
+        if (onTabs && Focus().onSort)
+        {
+            Glass::Glow(c, bx, by, bw, bh, 12 * u, u);
+            Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+        }
+        else Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+        Glass::DrawIcon(c, Glass::I_LAYERS, bx + 22 * u, by + bh * 0.5f, 9 * u, text);
+        GT(c, bx + (int)(40 * u), by + bh * 0.5f, label, 15 * u, text, true);
+    }
     // The chosen card, over the kept picture: the blurred background put back round it first.
     {
         const int k = v.SpotOf(selected);

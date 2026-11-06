@@ -660,6 +660,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         library.Load(fo.saves+"/fulldex-library.txt");
         Launcher::ApplyLocal(games, fo.saves); // (the player's names; the games taken off the list left out)
         Launcher::ApplyArt(games, fo.saves); // (the pictures chosen with Change Picture)
+        Launcher::Focus().sortKey = Launcher::ConfigValue(fo.cfg, "list_sort");
         Launcher::Sort(games);
         library.Apply(games,Launcher::ConfigValue(fo.cfg,"list_sort"));
         for(size_t i=0;i<games.size();i++)if(games[i].rom==keep)selected=(int)i;
@@ -988,6 +989,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         if (Launcher::Glassy(canvas))
         {
             Launcher::GlassFocus& F = Launcher::Focus();
+            if (onTabs && F.onSort)
+            {
+                // (Sort on the tab bar: the next order, kept in the settings as SORT is.)
+                SetConfigValues(fo.cfg, { { "list_sort", Launcher::NextSort(Launcher::ConfigValue(fo.cfg, "list_sort")) } });
+                reorderLibrary();
+                if (guide) page.Open(fo.cfg, true);
+                return;
+            }
             // (A in a page's list: Report A Bug and Website open in the browser.)
             if (F.page >= 0 && F.side < 0)
             {
@@ -1154,6 +1163,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         {
             Launcher::GlassFocus& F = Launcher::Focus();
             note.clear();
+            if (!onTabs) F.onSort = false;
             if (F.popup >= 0)
             {
                 if (dir == 3) F.popup = std::max(0, F.popup - 1);
@@ -1177,7 +1187,15 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             }
             if (onTabs)
             {
+                if (F.onSort)
+                {
+                    // (Sort: left back to the tabs, down to the games.)
+                    if (dir == 1) F.onSort = false;
+                    else if (dir == 4) { F.onSort = false; onTabs = false; if (banner) F.banner = 1; else intoGames(); }
+                    return;
+                }
                 if (dir == 1 && tab == 0) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                else if (dir == 2 && tab == Launcher::TABS - 1) F.onSort = true;
                 else if (dir == 1 || dir == 2) setTab(tab + (dir == 2 ? 1 : -1), "the arrows");
                 else if (dir == 4) { onTabs = false; if (banner) F.banner = 1; else intoGames(); }
                 return;
@@ -1879,6 +1897,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         }
                         break;
                     }
+                    if (Launcher::SortAt(mx, my)) { Launcher::Focus().side = -1; onSettings = false; onTabs = true; Launcher::Focus().onSort = true; choose(); break; }
                     if (Launcher::ContinueAt(canvas, mx, my))
                     {
                         const int cg = Launcher::ContinueGame(games, selected);
