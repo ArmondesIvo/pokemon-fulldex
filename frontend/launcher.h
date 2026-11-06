@@ -16,6 +16,13 @@
 #include <cmath>
 #include <vector>
 #include <map>
+#include <atomic>
+#include <chrono>
+#include <ctime>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <dirent.h>
 #include "ssr_os.h"
 #include "gamecode.h"
@@ -23,6 +30,11 @@
 
 #include "ui.h"
 #include "optional_features.h"
+#include "cloud_saves.h"
+#ifdef SSR_POKEMON_HUB
+#include "pokemon_hub.h"
+#include "companion_rom.h"
+#endif
 // (JPEG and PNG pictures for the list: the program that draws it defines STB_IMAGE_IMPLEMENTATION
 // with STBI_ONLY_JPEG and STBI_ONLY_PNG before including this, in one file.)
 #include "thirdparty/stb_image.h"
@@ -1254,9 +1266,11 @@ inline void GlassBackdrop(Canvas& c, const Game* g)
 
 // The ROMs page's list: every ROM found, those taken off the list too (hidden), with the player's names
 // and each file's size; in name order. Made by the platform from its whole list (BuildRomList).
+inline std::string& HubDir() { static std::string d; return d; } // (the Hub page's settings folder: BuildRomList sets it)
 inline std::vector<Game>& RomList() { static std::vector<Game> r; return r; }
 inline void BuildRomList(const std::vector<Game>& all, const std::string& savesDir)
 {
+    HubDir() = savesDir;
     const auto names = ReadPairs(savesDir + "/fulldex-names.txt");
     const auto hidden = ReadPairs(savesDir + "/fulldex-hidden.txt");
     std::vector<Game>& r = RomList();
@@ -1459,9 +1473,529 @@ inline bool SortAt(int x, int y)
     const GlassFocus& f = Focus();
     return f.page < 0 && f.sortW > 0 && x >= f.sortX && x < f.sortX + f.sortW && y >= f.sortY && y < f.sortY + f.sortH;
 }
+inline const char* PlatformLabel();
+// THE HUB PAGE: cloud saves (cloud_saves.h). Row 0 the account; then each game's save, with how it
+// last synced. The network is used on a thread of its own, so the page keeps drawing; HubSig()
+// changes whenever what the page shows does (the Switch redraws on that).
+struct HubState
+{
+    std::mutex m;
+    std::string dir;                        // where cloud.ini and cloud-state.txt are
+    bool loaded = false;
+    CloudSaves::Settings set;
+    int busy = 0;                           // 0 nothing, 1 signing in, 2 syncing
+    std::string code, url, msg;             // signing in: the code and where to type it; the last word
+    std::map<std::string, CloudSaves::Result> results; // by the save's path
+    std::map<std::string, std::string> synced;          // the saves in the cloud (cloud-state.txt): name, as last synced
+    std::atomic<int> version{ 0 };
+    std::atomic<bool> stop{ false }, cancel{ false };
+    std::thread worker;
+    ~HubState() { stop = true; if (worker.joinable()) worker.join(); }
+};
+inline HubState& Hub() { static HubState h; return h; }
+struct HubGame { std::string name, path; const Game* g; };
+inline std::string HubSavePath(const Game& g)
+{
+#ifdef __SWITCH__
+    return g.folder + "/" + g.saveName;
+#else
+    return HubDir() + "/" + g.saveName;
+#endif
+}
+// (The saves this device last synced, from cloud-state.txt: name, a tab, what it was. Lock held.)
+inline void HubReadState(HubState& h)
+{
+    h.synced.clear();
+    if (FILE* f = fopen((h.dir + "/cloud-state.txt").c_str(), "rb"))
+    {
+        char line[1024];
+        while (fgets(line, sizeof line, f))
+        {
+            std::string l = line;
+            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+            const size_t t = l.find('\t');
+            if (t != std::string::npos && t > 0) h.synced[l.substr(0, t)] = l.substr(t + 1);
+        }
+        fclose(f);
+    }
+}
+// The games with a save of their own (the save's path: beside the ROM on the Switch, else the saves folder).
+inline std::vector<HubGame> HubGames()
+{
+    std::vector<HubGame> r;
+    for (const Game& g : RomList())
+    {
+        if (!g.known || g.saveName.empty()) continue;
+        const std::string p = HubSavePath(g);
+        bool dup = false;
+        for (const HubGame& h : r) if (h.path == p) dup = true;
+        if (!dup) r.push_back({ ShortName(g), p, &g });
+    }
+    return r;
+}
+inline void HubLoad()
+{
+    HubState& h = Hub();
+    std::lock_guard<std::mutex> l(h.m);
+    if (h.loaded && h.dir == HubDir()) return;
+    h.dir = HubDir();
+    h.loaded = true;
+    h.set = CloudSaves::LoadSettings(h.dir + "/cloud.ini");
+    HubReadState(h);
+    h.version++;
+}
+inline std::string HubDevice()
+{
+    const std::string p = PlatformLabel();
+    return p == "Windows" ? "Windows PC" : p == "Apple" ? "Mac" : p == "Nintendo Switch" ? p : p + " Device";
+}
+inline bool HubOnLocked(const HubState& h) { return h.set.provider != "off" && !(h.set.provider == "google" && h.set.googleRefreshToken.empty()); }
+inline const char* HubProvider(const std::string& p) { return p == "google" ? "Google Drive" : p == "webdav" ? "WebDAV" : p == "folder" ? "A Synced Folder" : "Off"; }
+inline std::string HubSig() { return std::to_string(Hub().version.load()); }
+inline std::string SettingSentence(const std::string& s); // (below: capitals made a sentence)
+// MOVE POKEMON (the Hub's second row): the Pokémon in a box of one of the player's games, and moving
+// one to another of them (pokemon_hub.h: the rules, the conversion, both saves backed up first).
+// Its rows: 0 the game they come from, 1 its box, 2 the game they go to, then that box's Pokémon.
+const int HUB_FIRST = 2; // (the Hub's first save row: after Cloud Saves and Move Pokémon)
+struct MoverGame { std::string name, path; bool hack; };
+struct MoverState
+{
+    bool open = false;
+    int from = 0, to = 1, box = 0;
+    std::string msg;
+#ifdef SSR_POKEMON_HUB
+    std::unique_ptr<PokemonHub::Save> a, b;
+    std::string aPath, bPath, aErr, bErr;
+#endif
+};
+inline MoverState& Mover() { static MoverState m; return m; }
+inline std::vector<MoverGame> MoverGames()
+{
+    std::vector<MoverGame> r;
+    for (const HubGame& g : HubGames()) if (g.g && g.g->hasSave) r.push_back({ g.name, g.path, IsHack(*g.g) });
+    return r;
+}
+#ifdef SSR_POKEMON_HUB
+// (The two saves open as chosen: opened again after a move, or when the choice changes.)
+inline void MoverOpenSaves(bool again = false)
+{
+    MoverState& m = Mover();
+    const std::vector<MoverGame> gs = MoverGames();
+    if (gs.empty()) { m.a.reset(); m.b.reset(); m.aPath.clear(); m.bPath.clear(); return; }
+    m.from = std::max(0, std::min(m.from, (int)gs.size() - 1));
+    m.to = std::max(0, std::min(m.to, (int)gs.size() - 1));
+    if (again || !m.a || m.aPath != gs[m.from].path) { m.aPath = gs[m.from].path; m.aErr.clear(); m.a = PokemonHub::Save::Open(m.aPath, m.aErr, gs[m.from].hack); }
+    if (again || !m.b || m.bPath != gs[m.to].path) { m.bPath = gs[m.to].path; m.bErr.clear(); m.b = PokemonHub::Save::Open(m.bPath, m.bErr, gs[m.to].hack); }
+    if (m.a) m.box = std::max(0, std::min(m.box, m.a->Boxes() - 1));
+}
+inline std::vector<PokemonHub::Mon> MoverBox()
+{
+    MoverOpenSaves();
+    MoverState& m = Mover();
+    return m.a ? m.a->Box(m.box) : std::vector<PokemonHub::Mon>();
+}
+#endif
+#ifdef SSR_POKEMON_HUB
+// The Pokémon's box icons, taken from one of the player's own DS ROMs as the companion takes them
+// (companion_rom.h): a Black / White (2) ROM has the first five generations' 649, a Gen 4 one 493.
+// Only the parts needed are read from the file, never all of it. Later Pokémon: none (a Poké Ball).
+inline bool RomPart(FILE* f, uint32_t at, uint32_t n, std::vector<uint8_t>& out)
+{
+    out.resize(n);
+    return n == 0 || (fseek(f, (long)at, SEEK_SET) == 0 && fread(out.data(), 1, n, f) == n);
+}
+inline std::vector<uint8_t> RomFileFrom(FILE* f, std::string path)
+{
+    std::vector<uint8_t> h, fnt, fat;
+    auto U32 = [](const std::vector<uint8_t>& b, size_t o) { return (uint32_t)b[o] | (uint32_t)b[o + 1] << 8 | (uint32_t)b[o + 2] << 16 | (uint32_t)b[o + 3] << 24; };
+    auto U16 = [](const std::vector<uint8_t>& b, size_t o) { return (uint16_t)(b[o] | b[o + 1] << 8); };
+    if (!RomPart(f, 0, 0x200, h)) return {};
+    if (U32(h, 0x44) > (1u << 20) || U32(h, 0x4C) > (1u << 20)) return {};
+    if (!RomPart(f, U32(h, 0x40), U32(h, 0x44), fnt) || !RomPart(f, U32(h, 0x48), U32(h, 0x4C), fat)) return {};
+    uint16_t dir = 0xF000;
+    for (int depth = 0; depth < 32; depth++)
+    {
+        const size_t entry = (size_t)(dir & 0xFFF) * 8, slash = path.find('/');
+        if (entry + 8 > fnt.size()) return {};
+        size_t pos = U32(fnt, entry);
+        uint32_t id = U16(fnt, entry + 4);
+        bool down = false;
+        while (pos < fnt.size())
+        {
+            const int tag = fnt[pos++];
+            if (!tag) break;
+            const size_t n = tag & 127;
+            if (pos + n > fnt.size()) return {};
+            const std::string name((const char*)fnt.data() + pos, n);
+            pos += n;
+            if (tag & 128)
+            {
+                if (pos + 2 > fnt.size()) return {};
+                const uint16_t sub = U16(fnt, pos);
+                pos += 2;
+                if (slash != std::string::npos && name == path.substr(0, slash)) { dir = sub; path = path.substr(slash + 1); down = true; break; }
+            }
+            else
+            {
+                if (slash == std::string::npos && name == path)
+                {
+                    if ((size_t)id * 8 + 8 > fat.size()) return {};
+                    const uint32_t b = U32(fat, id * 8), e = U32(fat, id * 8 + 4);
+                    std::vector<uint8_t> out;
+                    if (e < b || e - b > (32u << 20) || !RomPart(f, b, e - b, out)) return {};
+                    return out;
+                }
+                id++;
+            }
+        }
+        if (!down) return {};
+    }
+    return {};
+}
+struct MonIconSet { bool tried = false; Companion::Metadata meta; };
+inline MonIconSet& MonIcons() { static MonIconSet m; return m; }
+inline bool MonIcon(int species, bool egg, std::vector<uint32_t>& out)
+{
+    MonIconSet& I = MonIcons();
+    if (!I.tried)
+    {
+        I.tried = true;
+        const Game* pick = nullptr;
+        bool gen5 = false;
+        for (const Game& g : RomList())
+        {
+            if (!g.known || g.platform != DS || g.code.size() < 4) continue;
+            const bool five = g.code[0] == 'I' && g.code[1] == 'R';
+            const bool four = g.code.rfind("IPK", 0) == 0 || g.code.rfind("IPG", 0) == 0 || g.code.rfind("CPU", 0) == 0;
+            if (five && !gen5) { pick = &g; gen5 = true; }
+            else if (four && !pick) pick = &g;
+        }
+        if (pick)
+            if (FILE* f = fopen(pick->rom.c_str(), "rb"))
+            {
+                const bool hg = pick->code.rfind("IPK", 0) == 0 || pick->code.rfind("IPG", 0) == 0;
+                Companion::Metadata& m = I.meta;
+                m.gen5 = gen5;
+                m.monIcons = Companion::Narc(RomFileFrom(f, gen5 ? "a/0/0/7" : hg ? "a/0/2/0" : "poketool/icongra/pl_poke_icon.narc"));
+                if (!m.monIcons.empty()) m.iconPalettes = CompanionIcons::Palettes(m.monIcons[0]);
+                if (gen5 && !m.monIcons.empty())
+                {
+                    // (The ARM9, for the table of each Pokémon's palette: the start of the ROM up to its end.)
+                    std::vector<uint8_t> h;
+                    if (RomPart(f, 0, 0x200, h))
+                    {
+                        const uint32_t off = h[0x20] | h[0x21] << 8 | h[0x22] << 16 | (uint32_t)h[0x23] << 24;
+                        const uint32_t size = h[0x2C] | h[0x2D] << 8 | h[0x2E] << 16 | (uint32_t)h[0x2F] << 24;
+                        std::vector<uint8_t> head;
+                        if (size <= 0x400000 && off <= 0x100000 && RomPart(f, 0, off + size, head)) m.FindGen5IconPalettes(Companion::RomArm9(head));
+                    }
+                    for (size_t i = 0; i < m.monIcons.size() && i < 16; i++)
+                        if (m.monIcons[i].size() > 4 && !memcmp(m.monIcons[i].data(), "RGCN", 4)) { m.gen5IconStart = (int)i; break; }
+                }
+                fclose(f);
+                fprintf(stderr, "[hub] Pokemon icons from %s: %zu\n", pick->rom.c_str(), m.monIcons.size());
+            }
+    }
+    return I.meta.MonIcon(species, egg, out);
+}
+inline void DrawMonIcon(Canvas& c, const std::vector<uint32_t>& ic, int x, int y, int size)
+{
+    if (ic.size() < 32 * 32 || size <= 0) return;
+    for (int j = 0; j < size; j++)
+    {
+        const int yy = y + j;
+        if (yy < 0 || yy >= c.h) continue;
+        for (int i = 0; i < size; i++)
+        {
+            const int xx = x + i;
+            if (xx < 0 || xx >= c.w) continue;
+            const uint32_t p = ic[(size_t)(j * 32 / size) * 32 + (i * 32 / size)];
+            if (p >> 24) c.px[(size_t)yy * c.w + xx] = p | 0xFF000000u;
+        }
+    }
+}
+// "SWAMPERT" as "Swampert" (and "MR. MIME" as "Mr. Mime", "HO-OH" as "Ho-Oh").
+inline std::string MonName(const std::string& up)
+{
+    std::string s;
+    bool start = true;
+    for (char ch : up)
+    {
+        const unsigned char b = (unsigned char)ch;
+        s += b < 128 ? (char)(start ? toupper(b) : tolower(b)) : ch;
+        start = b == ' ' || b == '-' || b == '.';
+    }
+    return s;
+}
+#endif
+inline int MoverRows()
+{
+#ifdef SSR_POKEMON_HUB
+    return 3 + (int)MoverBox().size();
+#else
+    return 3;
+#endif
+}
+inline std::vector<std::string> MoverActions(int row)
+{
+    std::vector<std::string> r;
+    const std::vector<MoverGame> gs = MoverGames();
+    if (row == 0 || row == 2)
+    {
+        for (size_t i = 0; i < gs.size() && i < 7; i++) r.push_back(gs[i].name);
+        return r;
+    }
+#ifdef SSR_POKEMON_HUB
+    if (row == 1) return { "Next Box", "Previous Box" };
+    MoverState& m = Mover();
+    const std::vector<PokemonHub::Mon> mons = MoverBox();
+    const int i = row - 3;
+    if (i < 0 || i >= (int)mons.size() || !m.a || !m.b || m.from == m.to) return r;
+    const PokemonHub::Check ck = PokemonHub::CanMove(*m.a, mons[i].box, mons[i].slot, *m.b);
+    if (ck.verdict != PokemonHub::Verdict::Ok) return r;
+    r.push_back("Move To " + gs[m.to].name);
+    if (ck.evolvesTo) r.push_back("Move And Evolve");
+#endif
+    return r;
+}
+inline std::string MoverDo(int row, int act)
+{
+    MoverState& m = Mover();
+    const std::vector<std::string> acts = MoverActions(row);
+    if (act < 0 || act >= (int)acts.size()) return "";
+    Hub().version++;
+    if (row == 0) { m.from = act; m.box = 0; m.msg.clear(); return ""; }
+    if (row == 2) { m.to = act; m.msg.clear(); return ""; }
+#ifdef SSR_POKEMON_HUB
+    MoverOpenSaves();
+    if (row == 1)
+    {
+        if (m.a && m.a->Boxes() > 0) m.box = (m.box + (act == 0 ? 1 : m.a->Boxes() - 1)) % m.a->Boxes();
+        return "";
+    }
+    const std::vector<PokemonHub::Mon> mons = MoverBox();
+    const int i = row - 3;
+    if (i < 0 || i >= (int)mons.size() || !m.a || !m.b) return "";
+    std::string err;
+    std::vector<std::string> backups;
+    const std::string name = mons[i].nickname;
+    const std::string toName = MoverGames()[m.to].name;
+    if (!PokemonHub::Move(*m.a, mons[i].box, mons[i].slot, *m.b, acts[act] == "Move And Evolve", err)
+        || !PokemonHub::Commit(*m.a, *m.b, err, &backups))
+        m.msg = "Could not move it. " + err;
+    else
+        m.msg = name + (mons[i].nickname != mons[i].speciesName && !mons[i].speciesName.empty() ? " (" + MonName(mons[i].speciesName) + ")" : std::string()) + " moved to " + toName + ". Both saves were backed up first.";
+    MoverOpenSaves(true);
+    Hub().version++;
+#endif
+    return "";
+}
+inline void MoverShow(bool open)
+{
+    MoverState& m = Mover();
+    m.open = open;
+    m.msg.clear();
+    if (open && m.from == m.to) m.to = m.from == 0 ? 1 : 0;
+    Hub().version++;
+}
+// A game's save and the cloud, for Home: 0 not there (or cloud saves off), 1 kept in the cloud, 2 changed on both.
+inline int HubCloudOf(const Game& g)
+{
+    if (g.saveName.empty() || !g.known) return 0;
+    HubLoad();
+    HubState& h = Hub();
+    std::lock_guard<std::mutex> l(h.m);
+    if (!HubOnLocked(h)) return 0;
+    const auto it = h.results.find(HubSavePath(g));
+    if (it != h.results.end() && it->second.outcome == CloudSaves::Outcome::Conflict) return 2;
+    return h.synced.count(g.saveName) ? 1 : 0;
+}
+// A small cloud, centred on cx, cy; s half its width.
+inline void DrawCloud(Canvas& c, float cx, float cy, float s, uint32_t col)
+{
+    Glass::Round(c, (int)(cx - s), (int)(cy - s * 0.05f), (int)(2 * s), (int)(s * 0.75f), s * 0.37f, col);
+    Glass::Round(c, (int)(cx - s * 0.7f), (int)(cy - s * 0.5f), (int)(s * 0.85f), (int)(s * 0.85f), s * 0.42f, col);
+    Glass::Round(c, (int)(cx - s * 0.15f), (int)(cy - s * 0.8f), (int)(s * 1.0f), (int)(s * 1.0f), s * 0.5f, col);
+}
+inline int HubRows() { return Mover().open ? MoverRows() : HUB_FIRST + (int)HubGames().size(); }
+inline std::vector<std::string> HubActions(int row)
+{
+    if (Mover().open) return MoverActions(row);
+    if (row == 1) return { "Choose Pok\xC3\xA9mon" };
+    HubLoad();
+    const std::vector<HubGame> games = HubGames();
+    HubState& h = Hub();
+    std::lock_guard<std::mutex> l(h.m);
+    if (row <= 0)
+    {
+        if (h.busy == 1) return { "Cancel" };
+        if (h.busy) return {};
+        if (!HubOnLocked(h)) return { "Sign In With Google" };
+        return { "Sync All Now", "Sign Out" };
+    }
+    if (!HubOnLocked(h) || h.busy || row - HUB_FIRST >= (int)games.size()) return {};
+    const auto it = h.results.find(games[row - HUB_FIRST].path);
+    if (it != h.results.end() && it->second.outcome == CloudSaves::Outcome::Conflict) return { "Keep This Device's", "Keep The Cloud's" };
+    return { "Sync Now" };
+}
+// (On the worker: each save in turn; resolve -1 a sync, 0 keep this device's, 1 the cloud's.)
+inline void HubSyncJob(std::vector<std::string> paths, int resolve)
+{
+    HubState& h = Hub();
+    CloudSaves::Settings s;
+    std::string dir;
+    { std::lock_guard<std::mutex> l(h.m); s = h.set; dir = h.dir; }
+    std::unique_ptr<CloudSaves::Sync> sync = CloudSaves::FromSettings(s, dir + "/cloud-state.txt", HubDevice());
+    int up = 0, down = 0, both = 0, failed = 0;
+    for (const std::string& p : paths)
+    {
+        if (h.stop) break;
+        CloudSaves::Result r;
+        if (!sync) { r.outcome = CloudSaves::Outcome::Off; r.message = "CLOUD SAVES ARE OFF"; }
+        else if (resolve >= 0) r = sync->Resolve(p, resolve == 1);
+        else
+        {
+            r = sync->BeforePlay(p);
+            if (r.outcome == CloudSaves::Outcome::InSync) r = sync->AfterPlay(p);
+        }
+        up += r.outcome == CloudSaves::Outcome::Pushed;
+        down += r.outcome == CloudSaves::Outcome::Pulled;
+        both += r.outcome == CloudSaves::Outcome::Conflict;
+        failed += r.outcome == CloudSaves::Outcome::Failed;
+        { std::lock_guard<std::mutex> l(h.m); h.results[p] = r; }
+        h.version++;
+    }
+    std::lock_guard<std::mutex> l(h.m);
+    h.busy = 0;
+    HubReadState(h);
+    if (!sync) h.msg = "Cloud saves are not set up.";
+    else if (failed) h.msg = "Could not reach " + std::string(HubProvider(s.provider)) + ". The saves here are kept, and sync next time.";
+    else
+    {
+        h.msg = "Synced.";
+        if (up) h.msg += " " + std::to_string(up) + " sent up.";
+        if (down) h.msg += " " + std::to_string(down) + " brought down.";
+        if (both) h.msg += " " + std::to_string(both) + (both == 1 ? " changed on both: choose which to keep." : " changed on both: choose which to keep.");
+        if (!up && !down && !both) h.msg += " Everything was already up to date.";
+    }
+    h.version++;
+}
+inline void HubSignInJob(std::vector<std::string> paths)
+{
+    HubState& h = Hub();
+    CloudSaves::GoogleClient client;
+    { std::lock_guard<std::mutex> l(h.m); client = h.set.google.id.empty() ? CloudSaves::BuiltInGoogleClient() : h.set.google; }
+    auto done = [&](const std::string& m) {
+        std::lock_guard<std::mutex> l(h.m);
+        h.busy = 0; h.code.clear(); h.url.clear(); h.msg = m;
+        h.version++;
+    };
+    if (client.id.empty()) { done("This build of Fulldex has no Google sign-in built in."); return; }
+    CloudSaves::SignIn in;
+    std::string err, refresh;
+    if (!CloudSaves::GoogleSignInStart(client, in, err)) { done("Could not reach Google. Check the internet connection and try again."); return; }
+    {
+        std::lock_guard<std::mutex> l(h.m);
+        h.code = in.userCode; h.url = in.verificationUrl; h.msg.clear();
+        h.version++;
+    }
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(in.expiresIn);
+    while (!h.stop && !h.cancel && std::chrono::steady_clock::now() < end)
+    {
+        for (int i = 0; i < in.interval * 10 && !h.stop && !h.cancel; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (h.stop || h.cancel) break;
+        const CloudSaves::SignInState st = CloudSaves::GoogleSignInPoll(client, in, refresh, err);
+        if (st == CloudSaves::SignInState::Done)
+        {
+            {
+                std::lock_guard<std::mutex> l(h.m);
+                h.set.provider = "google";
+                h.set.googleRefreshToken = refresh;
+                if (h.set.deviceName.empty()) h.set.deviceName = HubDevice();
+                CloudSaves::SaveSettings(h.dir + "/cloud.ini", h.set);
+                h.busy = 2; h.code.clear(); h.url.clear(); h.msg = "Signed in. Syncing your saves...";
+                h.version++;
+            }
+            HubSyncJob(paths, -1);
+            return;
+        }
+        if (st == CloudSaves::SignInState::SlowDown) in.interval += 5;
+        else if (st == CloudSaves::SignInState::Denied) { done("Sign-in was turned down on the phone."); return; }
+        else if (st != CloudSaves::SignInState::Waiting) { done(st == CloudSaves::SignInState::Expired ? "The code ran out. Choose Sign In again for a new one." : "Sign-in did not work. Try again."); return; }
+    }
+    done(h.cancel ? "Sign-in cancelled." : "The code ran out. Choose Sign In again for a new one.");
+}
+inline void HubStart(std::function<void()> job)
+{
+    HubState& h = Hub();
+    if (h.worker.joinable()) h.worker.join(); // (the last one has finished: busy was 0)
+    h.worker = std::thread(std::move(job));
+}
+// A on one of the Hub's actions (row, its action). What to say, if anything ("" for nothing).
+inline std::string HubDo(int row, int act)
+{
+    if (Mover().open) return MoverDo(row, act);
+    if (row == 1) { MoverShow(true); Focus().prow = 3; Focus().pact = -1; Focus().rScroll = 0; return ""; }
+    const std::vector<std::string> acts = HubActions(row);
+    if (act < 0 || act >= (int)acts.size()) return "";
+    const std::string a = acts[act];
+    HubState& h = Hub();
+    std::vector<std::string> paths;
+    for (const HubGame& g : HubGames()) paths.push_back(g.path);
+    if (a == "Cancel") { h.cancel = true; return ""; }
+    std::lock_guard<std::mutex> l(h.m);
+    if (h.busy) return "";
+    if (a == "Sign In With Google")
+    {
+        h.busy = 1; h.cancel = false; h.msg = "Asking Google for a code..."; h.version++;
+        HubStart([paths] { HubSignInJob(paths); });
+        return "";
+    }
+    if (a == "Sign Out")
+    {
+        h.set.provider = "off";
+        h.set.googleRefreshToken.clear();
+        const bool ok = CloudSaves::SaveSettings(h.dir + "/cloud.ini", h.set);
+        h.results.clear();
+        h.msg = ok ? "Signed out. Your saves stay here, and in your Drive." : "Could not save the cloud settings.";
+        h.version++;
+        return "";
+    }
+    if (row >= HUB_FIRST && row - HUB_FIRST < (int)paths.size()) paths = { paths[row - HUB_FIRST] };
+    const int resolve = a == "Keep The Cloud's" ? 1 : a == "Keep This Device's" ? 0 : -1;
+    h.busy = 2; h.msg = "Syncing..."; h.version++;
+    HubStart([paths, resolve] { HubSyncJob(paths, resolve); });
+    return "";
+}
+// (A save's time as shown: "6 Nov, 17:04".)
+inline std::string HubWhen(int64_t t)
+{
+    if (t <= 0) return "-";
+    const time_t tt = (time_t)t;
+    const struct tm* tm = std::localtime(&tt);
+    if (!tm) return "-";
+    char b[32];
+    strftime(b, sizeof b, "%d %b, %H:%M", tm);
+    return b[0] == '0' ? std::string(b + 1) : std::string(b);
+}
+inline std::string HubStatus(const CloudSaves::Result* r, bool on, uint32_t& col)
+{
+    col = 0xFFAEB7C4u;
+    if (!r) return on ? "Not Synced Yet" : "Only Here";
+    switch (r->outcome)
+    {
+    case CloudSaves::Outcome::InSync: col = 0xFF8FE3A2u; return "Up To Date";
+    case CloudSaves::Outcome::Pushed: col = 0xFF8FE3A2u; return "Sent Up";
+    case CloudSaves::Outcome::Pulled: col = 0xFF8CC8FFu; return "Brought Down";
+    case CloudSaves::Outcome::NothingYet: return "No Save Yet";
+    case CloudSaves::Outcome::Conflict: col = 0xFFF2C46Bu; return "Changed On Both";
+    case CloudSaves::Outcome::Failed: col = 0xFFF2A08Au; return "Could Not Reach";
+    default: return "Only Here";
+    }
+}
 // The sidebar's pages (About; the others to come): page, the section shown (-1: the games); prow the
 // row chosen in its list; pX..pRow where its rows were drawn (for taps).
-inline int PageRows(int page) { return page == SIDE_ABOUT ? 4 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : 0; }
+inline int PageRows(int page) { return page == SIDE_ABOUT ? 4 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
 inline std::string AboutUrl(int row)
 {
     return row == 1 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 3 ? "https://github.com/mamesj/pokemon-fulldex" : "";
@@ -1499,21 +2033,22 @@ inline bool PageMove(int dir)
         else if (dir == 2) F.side = -1;
         return true;
     }
-    if (F.page == SIDE_ROMS)
+    if (F.page == SIDE_ROMS || F.page == SIDE_HUB)
     {
-        // (The list, and right of it the chosen ROM's actions.)
-        const int n = (int)RomList().size();
+        // (The list, and right of it the chosen row's actions: a ROM's, or the Hub's.)
+        const int n = F.page == SIDE_HUB ? HubRows() : (int)RomList().size();
+        const int na = F.page == SIDE_HUB ? (int)HubActions(F.prow).size() : RomActions();
         if (F.pact >= 0)
         {
             if (dir == 3) F.pact = std::max(0, F.pact - 1);
-            else if (dir == 4) F.pact = std::min(RomActions() - 1, F.pact + 1);
+            else if (dir == 4) F.pact = std::min(na - 1, F.pact + 1);
             else if (dir == 1) F.pact = -1;
             return true;
         }
         if (dir == 3) F.prow = std::max(0, F.prow - 1);
         else if (dir == 4) F.prow = std::min(std::max(0, n - 1), F.prow + 1);
         else if (dir == 1) F.side = F.page;
-        else if (dir == 2 && n > 0) F.pact = 0;
+        else if (dir == 2 && n > 0 && na > 0) F.pact = 0;
         return true;
     }
     if (F.page == SIDE_UPDATES)
@@ -1552,7 +2087,8 @@ inline bool PageBack()
 {
     GlassFocus& F = Focus();
     if (F.page < 0) return false;
-    if (F.page == SIDE_ROMS && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); F.prow = 1; F.rScroll = 0; return true; }
+    if ((F.page == SIDE_ROMS || F.page == SIDE_HUB) && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
     if (F.side < 0) F.side = F.page;
     else { F.page = -1; F.side = SIDE_HOME; }
     return true;
@@ -1575,17 +2111,17 @@ inline int PageRowAt(int x, int y)
 inline int RomRowAt(int x, int y)
 {
     const GlassFocus& f = Focus();
-    if (f.page != SIDE_ROMS || f.pW <= 0 || f.pRow <= 0 || x < f.pX || x >= f.pX + f.pW || y < f.pY) return -1;
+    if ((f.page != SIDE_ROMS && f.page != SIDE_HUB) || f.pW <= 0 || f.pRow <= 0 || x < f.pX || x >= f.pX + f.pW || y < f.pY) return -1;
     const int k = (y - f.pY) / f.pRow;
     const int i = f.rScroll + k;
-    return k < f.rVis && i < (int)RomList().size() ? i : -1;
+    return k < f.rVis && i < (f.page == SIDE_HUB ? HubRows() : (int)RomList().size()) ? i : -1;
 }
 inline int RomActionAt(int x, int y)
 {
     const GlassFocus& f = Focus();
-    if (f.page != SIDE_ROMS || f.aW <= 0 || f.aRow <= 0 || x < f.aX || x >= f.aX + f.aW || y < f.aY) return -1;
+    if ((f.page != SIDE_ROMS && f.page != SIDE_HUB) || f.aW <= 0 || f.aRow <= 0 || x < f.aX || x >= f.aX + f.aW || y < f.aY) return -1;
     const int i = (y - f.aY) / f.aRow;
-    return i < RomActions() ? i : -1;
+    return i < (f.page == SIDE_HUB ? (int)HubActions(f.prow).size() : RomActions()) ? i : -1;
 }
 inline std::vector<std::string> WrapLines(const std::string& msg, float px, int w, bool bold = false)
 {
@@ -1680,7 +2216,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : "Hub") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -1819,6 +2355,388 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 Glass::DrawIcon(c, icons[a], ix + 22 * u, ry + ah * 0.5f, 9 * u, text);
                 GT(c, ix + (int)(42 * u), ry + ah * 0.5f, labels[a], 15 * u, text, true);
             }
+        }
+        return;
+    }
+    if (F.page == SIDE_HUB && Mover().open)
+    {
+        MoverState& m = Mover();
+        const std::vector<MoverGame> gs = MoverGames();
+        const std::vector<std::string> acts = HubActions(F.prow);
+        auto fit = [&](std::string s, float px, bool bold, int w) {
+            if (GW(s, px, bold) <= w) return s;
+            while (!s.empty() && GW(s + "...", px, bold) > w)
+            {
+                while (!s.empty() && ((unsigned char)s.back() & 0xC0) == 0x80) s.pop_back();
+                if (!s.empty()) s.pop_back();
+            }
+            return s + "...";
+        };
+        const uint32_t okCol = 0xFF8FE3A2u, noCol = 0xFFF2C46Bu, greyCol = 0xFFAEB7C4u;
+#ifdef SSR_POKEMON_HUB
+        const std::vector<PokemonHub::Mon> mons = MoverBox();
+        auto check = [&](const PokemonHub::Mon& mon) {
+            PokemonHub::Check ck;
+            if (!m.a || !m.b) { ck.verdict = PokemonHub::Verdict::Empty; ck.reason = "That game's save could not be read."; }
+            else if (m.from == m.to) { ck.verdict = PokemonHub::Verdict::Empty; ck.reason = "Choose two different games."; }
+            else ck = PokemonHub::CanMove(*m.a, mon.box, mon.slot, *m.b);
+            return ck;
+        };
+#endif
+        const std::string fromName = gs.empty() ? std::string("-") : gs[std::max(0, std::min(m.from, (int)gs.size() - 1))].name;
+        const std::string toName = gs.empty() ? std::string("-") : gs[std::max(0, std::min(m.to, (int)gs.size() - 1))].name;
+        const int n = MoverRows();
+        const int rw = (int)(360 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(12 * u);
+        const int rowH = (int)(46 * u), rg = (int)(6 * u);
+        Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
+        const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
+        F.prow = std::max(0, std::min(F.prow, n - 1));
+        if (F.pact >= (int)acts.size()) F.pact = acts.empty() ? -1 : (int)acts.size() - 1;
+        if (F.prow < F.rScroll) F.rScroll = F.prow;
+        if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+        F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
+        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
+        for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
+        {
+            const int rx = L + pad, ry = top + pad + (i - F.rScroll) * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+            if (i == F.prow)
+            {
+                if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            std::string k, v, chip, spn;
+            std::vector<uint32_t> ic;
+            uint32_t col = greyCol;
+            if (i == 0) { k = "From"; v = fromName; }
+            else if (i == 1) { k = "Box"; v = "-"; }
+            else if (i == 2) { k = "To"; v = toName; }
+#ifdef SSR_POKEMON_HUB
+            if (i == 0 && m.a) chip = m.a->Trainer();
+            if (i == 2 && m.b) chip = m.b->Trainer();
+            if (i == 1 && m.a) { v = m.a->BoxName(m.box); chip = std::to_string(mons.size()) + (mons.size() == 1 ? " Pok\xC3\xA9mon" : " Pok\xC3\xA9mon"); }
+            if (i >= 3)
+            {
+                const PokemonHub::Mon& mon = mons[i - 3];
+                const PokemonHub::Check ck = check(mon);
+                col = ck.verdict == PokemonHub::Verdict::Ok ? okCol : noCol;
+                k = mon.egg ? std::string("Egg") : "Lv " + std::to_string(mon.level);
+                v = mon.nickname + (mon.shiny ? "  \xE2\x98\x85" : "");
+                if (!mon.egg && !mon.speciesName.empty()) spn = MonName(mon.speciesName);
+                if (MonIcon(mon.species, mon.egg, ic)) DrawMonIcon(c, ic, rx + (int)(2 * u), mid - (int)(21 * u), (int)(40 * u));
+                chip = ck.verdict == PokemonHub::Verdict::Ok ? (ck.evolvesTo ? "Can Move, Evolves" : "Can Move") : "Can't Move";
+                if (ic.empty()) Glass::Round(c, rx + (int)(14 * u), mid - (int)(4 * u), (int)(8 * u), (int)(8 * u), 4 * u, col);
+            }
+#endif
+            if (i < 3) Glass::DrawIcon(c, i == 1 ? Glass::I_GRID : Glass::I_POKEBALL, rx + 18 * u, mid, 9 * u, text);
+            if (!chip.empty())
+            {
+                const int chipW = GW(chip, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(10 * u) - chipW;
+                Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+                GT(c, chipX + (int)(10 * u), mid, chip, 12 * u, i >= 3 ? col : hint, true);
+            }
+            GT(c, rx + (int)(48 * u), mid, k, 13 * u, hint, true);
+            GT(c, rx + (int)(108 * u), mid, fit(v, 16 * u, true, (int)(220 * u)), 16 * u, text, true);
+            if (!spn.empty() && MonName(v) != spn)
+            {
+                const int sx = rx + (int)(108 * u) + std::min(GW(v, 16 * u, true), (int)(220 * u)) + (int)(12 * u);
+                GT(c, sx, mid, spn, 14 * u, hint, true);
+            }
+        }
+        if (n > vis)
+        {
+            const int tx = L + lw2 - (int)(7 * u), ty = top + (int)(16 * u), th = bottom - top - (int)(32 * u);
+            Glass::Round(c, tx, ty, (int)(3 * u), th, 1.5f * u, 0x26FFFFFFu);
+            const int thumbH = std::max((int)(24 * u), th * vis / n), thumbY = ty + (th - thumbH) * F.rScroll / std::max(1, n - vis);
+            Glass::Round(c, tx, thumbY, (int)(3 * u), thumbH, 1.5f * u, 0xCCFFFFFFu);
+        }
+        // The chosen row.
+        const int dx = R - rw, ix = dx + (int)(20 * u), iw = rw - (int)(40 * u);
+        Menu::FrostBox(c, solid, dx, top, rw, bottom - top, 18 * u);
+        int y = top + (int)(20 * u);
+        auto para = [&](const std::string& s, uint32_t col, float px) {
+            for (const std::string& line : WrapLines(s, px, iw)) { GT(c, ix, y + px * 0.6f, line, px, col, false); y += (int)(px * 1.45f); }
+            y += (int)(8 * u);
+        };
+        auto cell = [&](int cx, int cy, int cw, const std::string& k, const std::string& v) {
+            GT(c, cx, cy + 8 * u, k, 12 * u, hint, true);
+            GT(c, cx, cy + 28 * u, fit(v, 15 * u, true, cw - (int)(8 * u)), 15 * u, text, true);
+        };
+#ifdef SSR_POKEMON_HUB
+        if (F.prow == 0 || F.prow == 2)
+        {
+            const PokemonHub::Save* s = F.prow == 0 ? m.a.get() : m.b.get();
+            GT(c, ix, y + 14 * u, F.prow == 0 ? "Take From" : "Send To", 13 * u, hint, true);
+            GT(c, ix, y + 40 * u, fit(F.prow == 0 ? fromName : toName, 22 * u, true, iw), 22 * u, text, true);
+            y += (int)(64 * u);
+            if (!s) para("This save could not be read. " + (F.prow == 0 ? m.aErr : m.bErr), noCol, 13 * u);
+            else
+            {
+                cell(ix, y, iw / 2, "Trainer", s->Trainer());
+                cell(ix + iw / 2, y, iw / 2, "Generation", std::to_string(s->Generation()));
+                y += (int)(56 * u);
+                if (s->ReadOnly()) para("Pok\xC3\xA9mon can be looked at in this game but not moved in or out yet.", noCol, 13 * u);
+                para(F.prow == 0 ? "Choose the game to take Pok\xC3\xA9mon from." : "Choose the game to send them to. They can go to a newer game, never an older one, as in the real games.", hint, 13 * u);
+            }
+        }
+        else if (F.prow == 1)
+        {
+            GT(c, ix, y + 14 * u, "Box", 13 * u, hint, true);
+            GT(c, ix, y + 40 * u, fit(m.a ? m.a->BoxName(m.box) : std::string("-"), 22 * u, true, iw), 22 * u, text, true);
+            y += (int)(64 * u);
+            if (m.a) cell(ix, y, iw / 2, "Box", std::to_string(m.box + 1) + " of " + std::to_string(m.a->Boxes()));
+            cell(ix + iw / 2, y, iw / 2, "Pok\xC3\xA9mon", std::to_string(mons.size()));
+            y += (int)(56 * u);
+        }
+        else if (F.prow - 3 < (int)mons.size())
+        {
+            const PokemonHub::Mon& mon = mons[F.prow - 3];
+            const PokemonHub::Check ck = check(mon);
+            std::vector<uint32_t> big;
+            const int bs = (int)(96 * u);
+            if (MonIcon(mon.species, mon.egg, big)) DrawMonIcon(c, big, ix + iw - bs, y - (int)(18 * u), bs);
+            GT(c, ix, y + 14 * u, fit(mon.nickname + (mon.shiny ? "  \xE2\x98\x85" : ""), 22 * u, true, iw - bs), 22 * u, text, true);
+            GT(c, ix, y + 42 * u, mon.egg ? std::string("Egg") : MonName(mon.speciesName), 15 * u, hint, true);
+            y += (int)(66 * u);
+            cell(ix, y, iw / 2, "Level", mon.egg ? std::string("Egg") : std::to_string(mon.level));
+            cell(ix + iw / 2, y, iw / 2, "Trainer", mon.trainer);
+            y += (int)(58 * u);
+            GT(c, ix, y + 8 * u, "To " + toName, 12 * u, hint, true);
+            y += (int)(24 * u);
+            if (ck.verdict == PokemonHub::Verdict::Ok)
+            {
+                para(ck.losses.empty() ? "It can move, and keeps everything." : "It can move, but on the way:", okCol, 14 * u);
+                for (const std::string& l : ck.losses) para("\xC2\xB7  " + SettingSentence(l), text, 13 * u);
+                if (ck.evolvesTo) para(SettingSentence(ck.evolution) + ", if you choose Move And Evolve.", text, 13 * u);
+            }
+            else para(ck.reason.empty() ? std::string("It can't go to that game.") : SettingSentence(ck.reason), noCol, 14 * u);
+        }
+#else
+        para("Moving Pok\xC3\xA9mon is not in this build of Fulldex.", hint, 14 * u);
+#endif
+        const int na = (int)acts.size(), ah = (int)(44 * u), ag = (int)(6 * u);
+        const int ay = bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag;
+        if (!m.msg.empty())
+        {
+            const std::vector<std::string> ml = WrapLines(m.msg, 13 * u, iw);
+            int my = ay - (int)(14 * u) - (int)ml.size() * (int)(19 * u);
+            if (my > y) for (const std::string& line : ml) { GT(c, ix, my + 8 * u, line, 13 * u, 0xFF8CC8FFu, true); my += (int)(19 * u); }
+        }
+        F.aX = ix; F.aY = ay; F.aW = na > 0 ? iw : 0; F.aRow = ah + ag;
+        const int cur = F.prow == 0 ? m.from : F.prow == 2 ? m.to : -1;
+        for (int a = 0; a < na; a++)
+        {
+            const int ry = ay + a * (ah + ag);
+            if (a == F.pact)
+            {
+                if (F.side < 0) Glass::Glow(c, ix, ry, iw, ah, 12 * u, u);
+                Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            else Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+            const int icon = F.prow == 1 ? Glass::I_GRID : F.prow >= 3 ? Glass::I_LOAD : Glass::I_POKEBALL;
+            Glass::DrawIcon(c, icon, ix + 22 * u, ry + ah * 0.5f, 9 * u, text);
+            GT(c, ix + (int)(42 * u), ry + ah * 0.5f, acts[a], 15 * u, text, true);
+            if (a == cur) GT(c, ix + iw - (int)(14 * u) - GW("Chosen", 12 * u, true), ry + ah * 0.5f, "Chosen", 12 * u, okCol, true);
+        }
+        return;
+    }
+    if (F.page == SIDE_HUB)
+    {
+        HubLoad();
+        const std::vector<HubGame> games = HubGames();
+        const std::vector<std::string> acts = HubActions(F.prow);
+        HubState& h = Hub();
+        std::unique_lock<std::mutex> lk(h.m);
+        const bool on = HubOnLocked(h);
+        const int busy = h.busy;
+        const std::string code = h.code, url = h.url, msg = h.msg, prov = h.set.provider;
+        const std::string dev = h.set.deviceName.empty() ? HubDevice() : h.set.deviceName;
+        const std::map<std::string, CloudSaves::Result> results = h.results;
+        lk.unlock();
+        auto resultOf = [&](const std::string& p) -> const CloudSaves::Result* { const auto it = results.find(p); return it == results.end() ? nullptr : &it->second; };
+        auto fit = [&](std::string s, float px, bool bold, int w) {
+            if (GW(s, px, bold) <= w) return s;
+            while (!s.empty() && GW(s + "...", px, bold) > w)
+            {
+                while (!s.empty() && ((unsigned char)s.back() & 0xC0) == 0x80) s.pop_back();
+                if (!s.empty()) s.pop_back();
+            }
+            return s + "...";
+        };
+        auto fileOf = [](const std::string& p) { const size_t k = p.find_last_of("/\\"); return k == std::string::npos ? p : p.substr(k + 1); };
+        const int n = HUB_FIRST + (int)games.size();
+        const int rw = (int)(360 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(12 * u);
+        const int rowH = (int)(46 * u), rg = (int)(6 * u);
+        // The list: the account, then each game's save.
+        Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
+        const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
+        F.prow = std::max(0, std::min(F.prow, n - 1));
+        if (F.pact >= (int)acts.size()) F.pact = acts.empty() ? -1 : (int)acts.size() - 1;
+        if (F.prow < F.rScroll) F.rScroll = F.prow;
+        if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+        F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
+        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
+        for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
+        {
+            const int rx = L + pad, ry = top + pad + (i - F.rScroll) * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+            if (i == F.prow)
+            {
+                if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            uint32_t col = 0xFFAEB7C4u;
+            std::string st, name, sub;
+            if (i == 0)
+            {
+                name = "Cloud Saves";
+                sub = on ? std::string(HubProvider(prov)) + "   \xC2\xB7   " + dev : "Keep your saves the same on every device";
+                if (busy == 1) { st = "Signing In"; col = 0xFFF2C46Bu; }
+                else if (busy == 2) { st = "Syncing"; col = 0xFF8CC8FFu; }
+                else if (on) { st = "On"; col = 0xFF8FE3A2u; }
+                else st = "Off";
+                Glass::DrawIcon(c, Glass::I_GLOBE, rx + 18 * u, mid, 9 * u, text);
+            }
+            else if (i == 1)
+            {
+                name = "Move Pok\xC3\xA9mon";
+                sub = "Between your own games, as a trade would";
+                st = std::to_string(MoverGames().size()) + " Saves";
+                Glass::DrawIcon(c, Glass::I_POKEBALL, rx + 18 * u, mid, 9 * u, text);
+            }
+            else
+            {
+                const HubGame& g = games[i - HUB_FIRST];
+                name = g.name;
+                sub = fileOf(g.path) + (g.g && !g.g->hasSave ? "   \xC2\xB7   none here yet" : "");
+                st = HubStatus(resultOf(g.path), on, col);
+                Glass::Round(c, rx + (int)(14 * u), mid - (int)(4 * u), (int)(8 * u), (int)(8 * u), 4 * u, col);
+            }
+            const int chipW = GW(st, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(10 * u) - chipW;
+            Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+            GT(c, chipX + (int)(10 * u), mid, st, 12 * u, col, true);
+            GT(c, rx + (int)(36 * u), mid, fit(name, 16 * u, true, (int)(200 * u)), 16 * u, text, true);
+            const int fx = rx + (int)(248 * u);
+            GT(c, fx, mid, fit(sub, 13 * u, false, chipX - fx - (int)(12 * u)), 13 * u, hint, false);
+        }
+        if (n > vis)
+        {
+            const int tx = L + lw2 - (int)(7 * u), ty = top + (int)(16 * u), th = bottom - top - (int)(32 * u);
+            Glass::Round(c, tx, ty, (int)(3 * u), th, 1.5f * u, 0x26FFFFFFu);
+            const int thumbH = std::max((int)(24 * u), th * vis / n), thumbY = ty + (th - thumbH) * F.rScroll / std::max(1, n - vis);
+            Glass::Round(c, tx, thumbY, (int)(3 * u), thumbH, 1.5f * u, 0xCCFFFFFFu);
+        }
+        // The chosen row.
+        const int dx = R - rw, ix = dx + (int)(20 * u), iw = rw - (int)(40 * u);
+        Menu::FrostBox(c, solid, dx, top, rw, bottom - top, 18 * u);
+        int y = top + (int)(20 * u);
+        auto para = [&](const std::string& s, uint32_t col, float px) {
+            for (const std::string& line : WrapLines(s, px, iw)) { GT(c, ix, y + px * 0.6f, line, px, col, false); y += (int)(px * 1.45f); }
+            y += (int)(8 * u);
+        };
+        auto cell = [&](int cx, int cy, int cw, const std::string& k, const std::string& v) {
+            GT(c, cx, cy + 8 * u, k, 12 * u, hint, true);
+            GT(c, cx, cy + 28 * u, fit(v, 15 * u, true, cw - (int)(8 * u)), 15 * u, text, true);
+        };
+        if (F.prow == 0)
+        {
+            GT(c, ix, y + 14 * u, "Cloud Saves", 22 * u, text, true);
+            y += (int)(40 * u);
+            if (busy == 1 && !code.empty())
+            {
+                para("On your phone or computer, go to", hint, 14 * u);
+                GT(c, ix, y + 8 * u, fit(url.empty() ? std::string("google.com/device") : url, 16 * u, true, iw), 16 * u, text, true);
+                y += (int)(30 * u);
+                para("and enter this code:", hint, 14 * u);
+                const int bh = (int)(70 * u);
+                Glass::Round(c, ix, y, iw, bh, 14 * u, 0x24FFFFFFu, 0x3DFFFFFF, 1.0f * u);
+                GT(c, ix + (iw - GW(code, 34 * u, true)) / 2, y + bh * 0.5f, code, 34 * u, text, true);
+                y += bh + (int)(16 * u);
+                para("Fulldex is waiting for you to say yes. It only sees the saves it puts in your Drive.", hint, 13 * u);
+            }
+            else if (!on)
+            {
+                para("Keep your saves the same on every device: play on your PC, then carry on on the Switch.", text, 14 * u);
+                para("Saves go to your own Google Drive, in a folder called Fulldex Cloud Saves. Fulldex sees only the files it made there.", hint, 13 * u);
+                para("If a save changed on two devices, Fulldex asks which one to keep, and puts the other in the backups.", hint, 13 * u);
+            }
+            else
+            {
+                cell(ix, y, iw / 2, "Saved To", HubProvider(prov));
+                cell(ix + iw / 2, y, iw / 2, "This Device", dev);
+                y += (int)(48 * u);
+                int synced = 0;
+                for (const HubGame& g : games) { const CloudSaves::Result* r = resultOf(g.path); if (r && (r->outcome == CloudSaves::Outcome::InSync || r->outcome == CloudSaves::Outcome::Pushed || r->outcome == CloudSaves::Outcome::Pulled)) synced++; }
+                cell(ix, y, iw / 2, "Folder", prov == "google" ? "Fulldex Cloud Saves" : prov == "webdav" ? "WebDAV" : "Synced Folder");
+                cell(ix + iw / 2, y, iw / 2, "Up To Date", std::to_string(synced) + " of " + std::to_string(games.size()));
+                y += (int)(56 * u);
+                para("Choose a game in the list to sync it on its own, or to choose which save to keep.", hint, 13 * u);
+            }
+        }
+        else if (F.prow == 1)
+        {
+            GT(c, ix, y + 14 * u, "Move Pok\xC3\xA9mon", 22 * u, text, true);
+            y += (int)(40 * u);
+            para("Move a Pok\xC3\xA9mon from one of your games to another, as a trade between them would.", text, 14 * u);
+            para("They can go to a newer game, never an older one. Fulldex says first what it would lose on the way, such as an HM move, and backs up both saves before it writes them.", hint, 13 * u);
+            para("Those that evolve by trading can evolve as they arrive.", hint, 13 * u);
+        }
+        else
+        {
+            const HubGame& hg = games[F.prow - HUB_FIRST];
+            const CloudSaves::Result* r = resultOf(hg.path);
+            const int ps = (int)(84 * u);
+            if (hg.g) DrawCover(c, *hg.g, ix, y, ps, ps, 12 * u);
+            const int tx = ix + ps + (int)(14 * u), tw = iw - ps - (int)(14 * u);
+            GT(c, tx, y + 22 * u, fit(hg.name, 19 * u, true, tw), 19 * u, text, true);
+            uint32_t col = 0;
+            const std::string st = HubStatus(r, on, col);
+            const int chipW = GW(st, 12 * u, true) + (int)(20 * u);
+            Glass::Round(c, tx, y + (int)(42 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+            GT(c, tx + (int)(10 * u), y + 53 * u, st, 12 * u, col, true);
+            y += ps + (int)(18 * u);
+            std::string cloudDev = r && !r->cloud.device.empty() ? r->cloud.device : std::string("another device");
+            if (r && r->outcome == CloudSaves::Outcome::Conflict)
+            {
+                cell(ix, y, iw / 2, "This Device", HubWhen(r->local.savedAt));
+                cell(ix + iw / 2, y, iw / 2, "Cloud (" + cloudDev + ")", HubWhen(r->cloud.savedAt));
+                y += (int)(56 * u);
+                para("This save changed here and on " + cloudDev + " since they last matched. Choose which to keep: the other goes into the backups.", text, 14 * u);
+            }
+            else if (!on) para("Cloud saves are off. Sign in on the Cloud Saves row first.", hint, 14 * u);
+            else if (!r) para("Not synced yet. Choose Sync Now to send it up, or bring down a newer one.", hint, 14 * u);
+            else switch (r->outcome)
+            {
+            case CloudSaves::Outcome::InSync: para("This save is the same here and in the cloud.", text, 14 * u); break;
+            case CloudSaves::Outcome::Pushed: para("This save was sent up to the cloud.", text, 14 * u); break;
+            case CloudSaves::Outcome::Pulled: para("A newer save from " + cloudDev + " was brought down. The one that was here is in the backups.", text, 14 * u); break;
+            case CloudSaves::Outcome::NothingYet: para("There is no save for this game yet, here or in the cloud.", hint, 14 * u); break;
+            default: para("Could not reach the cloud. The save here is kept, and syncs next time.", hint, 14 * u); break;
+            }
+            GT(c, ix, y + 8 * u, "Save File", 12 * u, hint, true);
+            GT(c, ix, y + 28 * u, fit(fileOf(hg.path), 14 * u, false, iw), 14 * u, text, false);
+            y += (int)(48 * u);
+        }
+        // What can be done (and the last word, above it).
+        const int na = (int)acts.size(), ah = (int)(44 * u), ag = (int)(6 * u);
+        const int ay = bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag;
+        if (!msg.empty())
+        {
+            const std::vector<std::string> ml = WrapLines(msg, 13 * u, iw);
+            int my = ay - (int)(14 * u) - (int)ml.size() * (int)(19 * u);
+            if (my > y) for (const std::string& line : ml) { GT(c, ix, my + 8 * u, line, 13 * u, busy ? 0xFF8CC8FFu : hint, true); my += (int)(19 * u); }
+        }
+        F.aX = ix; F.aY = ay; F.aW = na > 0 ? iw : 0; F.aRow = ah + ag;
+        for (int a = 0; a < na; a++)
+        {
+            const int ry = ay + a * (ah + ag);
+            if (a == F.pact)
+            {
+                if (F.side < 0) Glass::Glow(c, ix, ry, iw, ah, 12 * u, u);
+                Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            else Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+            const int icon = acts[a] == "Sign In With Google" ? Glass::I_GLOBE : acts[a] == "Sign Out" || acts[a] == "Cancel" ? Glass::I_BACK : Glass::I_LOAD;
+            Glass::DrawIcon(c, icon, ix + 22 * u, ry + ah * 0.5f, 9 * u, text);
+            GT(c, ix + (int)(42 * u), ry + ah * 0.5f, acts[a], 15 * u, text, true);
         }
         return;
     }
@@ -2059,7 +2977,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
-                    + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
+                    + "/h" + HubSig() + (Focus().page == SIDE_HUB ? std::to_string(Mover().open) + "," + std::to_string(Focus().pact) + "," + std::to_string(Focus().rScroll) : std::string()) + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
                     + (Focus().page == SIDE_UPDATES ? "/u" + std::to_string(Focus().upState) + std::to_string(Focus().upCan) + Focus().upHave + "/" + Focus().upNew + "/" + Focus().upText + "/" + Focus().upNotes + "/" + std::to_string(Focus().nScroll) : std::string())
                     + (Focus().page == SIDE_ROMS ? "/r" + std::to_string(Focus().pact) + "," + std::to_string(RomList().size()) + ","
                        + std::to_string(std::count_if(RomList().begin(), RomList().end(), [](const Game& g) { return g.hidden; })) : std::string());
@@ -2089,6 +3007,12 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const std::string sub = !g.known && !g.comingSoon ? "Not Playable" : PlatformName(g.platform);
         GT(c, ix + iw - (int)(4 * u) - GW(sub, 13 * u, true), cy, sub, 13 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
         if (g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, ix + iw - 14 * u, iy + 14 * u, 7 * u, 0xFFFFFFFFu);
+        // (Its save kept in the cloud: a cloud in the corner; amber when it changed on both.)
+        if (const int cl = HubCloudOf(g))
+        {
+            Glass::Round(c, ix + (int)(6 * u), iy + (int)(6 * u), (int)(32 * u), (int)(22 * u), 11 * u, 0xA0000000u);
+            DrawCloud(c, ix + 22 * u, iy + 18 * u, 8 * u, cl == 2 ? 0xFFF2C46Bu : 0xFFFFFFFFu);
+        }
     };
     // The sidebar's rows (the chosen one framed) and the banner's buttons: drawn over the kept picture
     // each time, as they change with the arrows.
@@ -2180,7 +3104,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const int tx = ax + aw + (int)(24 * u);
         const bool played = !ContinueRom().empty() && g.rom == ContinueRom();
         const std::string meta = std::string(played ? "Continue Playing" : "Ready To Play") + "   \xC2\xB7   " + PlatformName(g.platform)
-                               + "   \xC2\xB7   " + (g.hasSave ? "Save Found" : "New Game");
+                               + "   \xC2\xB7   " + (HubCloudOf(g) == 2 ? "Cloud Save: Changed On Both" : HubCloudOf(g) ? "Cloud Save" : g.hasSave ? "Save Found" : "New Game");
         GT(c, tx, sp.bannerY + 30 * u, meta, 16 * u, hint, true);
         GT(c, tx, sp.bannerY + 66 * u, ShortName(g), 36 * u, text, true);
         // (Continue and Game Options: drawBannerButtons, over the kept picture.)

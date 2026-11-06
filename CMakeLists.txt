@@ -107,6 +107,7 @@ set(SSRECOMP_SOURCES
     frontend/achievements.cpp
     frontend/achievements_http.cpp
     frontend/cloud_saves.cpp
+    frontend/cloud_autosync.cpp
     frontend/trade_evolutions.cpp
     frontend/platform.cpp
     runtime/recomp_rt.cpp

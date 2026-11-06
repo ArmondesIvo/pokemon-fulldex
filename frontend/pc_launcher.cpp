@@ -691,6 +691,36 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     if (const char* pp = getenv("SSR_LIST_POPUP")) Launcher::Focus().popup = atoi(pp);
     // (SSR_LIST_PAGE=side,row: a page of the sidebar open on that row, for the test picture.)
     if (const char* pg = getenv("SSR_LIST_PAGE")) { Launcher::Focus().page = atoi(pg); if (const char* r = strchr(pg, ',')) Launcher::Focus().prow = atoi(r + 1); }
+    // (SSR_LIST_HUB=code: the Hub signing in with its code shown; sync: every save synced at once (with
+    // conflict: the first then shown as changed on both), for the test pictures.)
+    if (const char* hb = getenv("SSR_LIST_HUB"))
+    {
+        Launcher::HubLoad();
+        Launcher::HubState& H = Launcher::Hub();
+        if (!strncmp(hb, "move", 4))
+        {
+            // (move:from,to opens Move Pokemon; moved:from,to also moves the box's first Pokemon, for real, in the test folder's save copies.)
+            Launcher::MoverShow(true);
+            if (const char* q = strchr(hb, ':')) { Launcher::Mover().from = atoi(q + 1); if (const char* r = strchr(q, ',')) Launcher::Mover().to = atoi(r + 1); }
+            if (!strncmp(hb, "moved", 5)) Launcher::MoverDo(3, 0);
+        }
+        else if (!strcmp(hb, "code")) { std::lock_guard<std::mutex> l(H.m); H.busy = 1; H.code = "BQXW-KTRM"; H.url = "https://www.google.com/device"; }
+        else
+        {
+            std::vector<std::string> paths;
+            for (const Launcher::HubGame& g : Launcher::HubGames()) paths.push_back(g.path);
+            Launcher::HubSyncJob(paths, -1);
+            if (!strcmp(hb, "conflict") && !paths.empty())
+            {
+                std::lock_guard<std::mutex> l(H.m);
+                CloudSaves::Result& r = H.results[paths[0]];
+                r.outcome = CloudSaves::Outcome::Conflict;
+                r.local.savedAt = (int64_t)time(nullptr) - 3600; r.local.device = "Windows PC";
+                r.cloud.savedAt = (int64_t)time(nullptr) - 600; r.cloud.device = "Nintendo Switch";
+                H.msg = "Synced. 1 changed on both: choose which to keep.";
+            }
+        }
+    }
     // (SSR_LIST_DIALOG=n: a dialog open, for the test picture: 1 Remove Game, 2 Delete, 3 Rename.)
     if (const char* dd = getenv("SSR_LIST_DIALOG")) { Launcher::Focus().dialog = atoi(dd); Launcher::Focus().text = "My HeartGold Run"; }
     // (SSR_LIST_ITEM=n: the chosen game's menu row n chosen at once, for test pictures of its dialogs.)
@@ -1036,6 +1066,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         for (char& ch : url) if (ch == '\\') ch = '/';
                         if (SDL_OpenURL(url.c_str()) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", url.c_str(), SDL_GetError());
                     }
+                    return;
+                }
+                if (F.page == Launcher::SIDE_HUB)
+                {
+                    // (The Hub: A on the list goes to the chosen row's actions; on those, does it.)
+                    if (F.pact < 0) { if (!Launcher::HubActions(F.prow).empty()) F.pact = 0; return; }
+                    const std::string said = Launcher::HubDo(F.prow, F.pact);
+                    if (!said.empty()) note = said;
                     return;
                 }
                 if (F.page == Launcher::SIDE_UPDATES && F.prow == 0)
@@ -1911,7 +1949,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         break;
                     }
                     // (The ROMs page: a click chooses a ROM, or does one of its actions.)
-                    if (Launcher::Focus().page == Launcher::SIDE_ROMS)
+                    if (Launcher::Focus().page == Launcher::SIDE_ROMS || Launcher::Focus().page == Launcher::SIDE_HUB)
                     {
                         Launcher::GlassFocus& RF = Launcher::Focus();
                         const int a = Launcher::RomActionAt(mx, my), r = Launcher::RomRowAt(mx, my);

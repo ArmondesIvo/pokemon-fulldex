@@ -26,6 +26,7 @@
 #include "game_music.h"
 #include "now_playing.h"
 #include "save_backups.h"
+#include "cloud_autosync.h"
 #ifndef SSR_RA_VERSION
 #define SSR_RA_VERSION "0.0.0" // (CMakeLists.txt sets it from CHANGELOG.md)
 #endif
@@ -1959,6 +1960,14 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // CLOUD SAVES (cloud_autosync.h): a newer save in the cloud comes down before the game reads it.
+    std::string cloudNote;
+    if (!opt.noSave && !opt.headless && !opt.lockstep)
+    {
+        const std::string& at = opt.config.empty() ? opt.save : opt.config;
+        const size_t cs = at.find_last_of("/\\");
+        cloudNote = CloudAuto::Start(cs == std::string::npos ? std::string(".") : at.substr(0, cs), opt.save);
+    }
     std::vector<uint8_t> sav = ReadFile(opt.save);
     fprintf(stderr, "ROM %s: %zu bytes; save %s: %zu bytes\n", opt.rom.c_str(), rom.size(), opt.save.c_str(), sav.size());
     // (RETROACHIEVEMENTS from the settings file now: the console is made differently with it on.)
@@ -11192,8 +11201,13 @@ int main(int argc, char** argv)
             if (!WriteSnapshot(*nds, opt.stateSave, scriptClock)) fprintf(stderr, "snapshot failed\n");
         }
 
+        const bool cloudDirty = !opt.noSave && frame % 120 == 0 && Host::SaveIsDirty;
         if (!opt.noSave && frame % 120 == 0 && !FlushSave(opt.save))
             say("SAVE FAILED - CHECK DISK SPACE AND SAVE FOLDER");
+        // (Cloud saves: the save just written goes up a little later; what happened at the start is said.)
+        if (cloudDirty && !Host::SaveIsDirty) CloudAuto::Saved();
+        CloudAuto::Tick();
+        if (frame == 240 && !cloudNote.empty()) { say(cloudNote); cloudNote.clear(); }
         if (!opt.noSave && frame && frame % (60 * 60 * 30) == 0) BackupSave(opt.save); // (about every half hour)
         if (opt.frames && scriptClock >= opt.frames) running = false;
         if (opt.stopAt && frame >= opt.stopAt)
@@ -11217,6 +11231,8 @@ int main(int argc, char** argv)
     if (!opt.noSave && !FlushSave(opt.save) && !opt.headless)
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FullDex save failed",
             "Your latest progress could not be written reliably. Check disk space and save-folder permissions. Keep the save and .tmp files for recovery.", window);
+    exitStep("cloud");
+    CloudAuto::Finish();
 #ifdef __SWITCH__
     // Closing the sound has now and then never returned on the Switch (the game hung at
     // "[exit] audio", in a test run with nothing else going on), QUIT after a save has frozen
