@@ -665,6 +665,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         for(size_t i=0;i<games.size();i++)if(games[i].rom==keep)selected=(int)i;
         scroll=0;follow=true;
     };
+    Launcher::BuildRomList(games, fo.saves); // (the ROMs page: before those taken off the list are left out)
     reorderLibrary();
     auto toggleFavourite=[&]() {
         if(selected<0||selected>=(int)games.size()||games[selected].comingSoon)return;
@@ -986,6 +987,30 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             // (A in a page's list: Report A Bug and Website open in the browser.)
             if (F.page >= 0 && F.side < 0)
             {
+                if (F.page == Launcher::SIDE_ROMS)
+                {
+                    // (The ROMs page: A on the list goes to the chosen ROM's actions; on those, does it.)
+                    const std::vector<Launcher::Game>& roms = Launcher::RomList();
+                    if (F.pact < 0) { if (!roms.empty()) F.pact = 0; return; }
+                    if (F.prow < 0 || F.prow >= (int)roms.size()) return;
+                    const std::string rom = roms[F.prow].rom;
+                    const bool was = roms[F.prow].hidden;
+                    if (F.pact == 0)
+                    {
+                        const bool ok = Launcher::SetPair(fo.saves + "/fulldex-hidden.txt", rom, was ? "" : "1");
+                        games = FindGames(fo, artCache);
+                        Launcher::BuildRomList(games, fo.saves);
+                        reorderLibrary();
+                        note = !ok ? "COULD NOT SAVE THE LIST" : was ? "BACK IN THE LIST" : "HIDDEN FROM THE LIST";
+                    }
+                    else
+                    {
+                        std::string url = "file:///" + rom.substr(0, rom.find_last_of("/\\"));
+                        for (char& ch : url) if (ch == '\\') ch = '/';
+                        if (SDL_OpenURL(url.c_str()) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", url.c_str(), SDL_GetError());
+                    }
+                    return;
+                }
                 if (F.page == Launcher::SIDE_UPDATES && F.prow == 0)
                 {
 #ifdef __ANDROID__
@@ -1828,6 +1853,15 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         else if (!Launcher::OpenSide(side)) note = std::string(Launcher::SideName(side)) + ": COMING SOON";
                         break;
                     }
+                    // (The ROMs page: a click chooses a ROM, or does one of its actions.)
+                    if (Launcher::Focus().page == Launcher::SIDE_ROMS)
+                    {
+                        Launcher::GlassFocus& RF = Launcher::Focus();
+                        const int a = Launcher::RomActionAt(mx, my), r = Launcher::RomRowAt(mx, my);
+                        if (a >= 0) { RF.side = -1; RF.pact = a; choose(); }
+                        else if (r >= 0) { RF.side = -1; RF.pact = -1; RF.prow = r; }
+                        break;
+                    }
                     // (A page's list: a click chooses a row; on the chosen one, opens it.)
                     if (Launcher::Focus().page >= 0)
                     {
@@ -2084,6 +2118,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             lastScan = SDL_GetTicks();
             const std::string current = selected < 0 || selected >= (int)games.size() ? std::string() : games[selected].rom;
             games = FindGames(fo, artCache);
+            Launcher::BuildRomList(games, fo.saves);
             reorderLibrary();
             selected = -1;
             for (size_t i = 0; i < games.size(); i++)

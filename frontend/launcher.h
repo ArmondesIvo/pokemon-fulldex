@@ -71,6 +71,9 @@ struct Game
     std::vector<uint32_t> ownArt;
     bool ownIcon = false, ownKept = false;
     long long lastPlayed = 0;
+    // (The ROMs page: taken off the list (fulldex-hidden.txt); the file's size.)
+    bool hidden = false;
+    long long fileSize = 0;
 };
 
 inline std::string& ContinueRom() { static std::string r; return r; } // the game played last (last-game.txt)
@@ -92,7 +95,10 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     // (The Updates page: the updater's state as the platform gives it, -1 none here; Updater::State's order.)
                     int upState = -1; bool upCan = false; std::string upHave, upNew, upText, upNotes;
                     // (Its What's New: prow 2 when chosen; the first line shown, the last that can be, where it was drawn.)
-                    int nScroll = 0, nMax = 0, nX = 0, nY = 0, nW = 0, nH = 0, nLine = 0; };
+                    int nScroll = 0, nMax = 0, nX = 0, nY = 0, nW = 0, nH = 0, nLine = 0;
+                    // (The ROMs page: pact the chosen ROM's action, -1 the list; rScroll its first row shown, rVis how many;
+                    // aX..aRow where the actions were drawn.)
+                    int pact = -1, rScroll = 0, rVis = 0, aX = 0, aY = 0, aW = 0, aRow = 0; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
 inline int PopupCount() { return 6; }
 inline std::string PopupLabel(const Game& g, int i)
@@ -1155,9 +1161,44 @@ inline void GlassBackdrop(Canvas& c, const Game* g)
     Glass::MakeBackdrop(c.backdrop, src.data(), c.w, c.h);
 }
 
+// The ROMs page's list: every ROM found, those taken off the list too (hidden), with the player's names
+// and each file's size; in name order. Made by the platform from its whole list (BuildRomList).
+inline std::vector<Game>& RomList() { static std::vector<Game> r; return r; }
+inline void BuildRomList(const std::vector<Game>& all, const std::string& savesDir)
+{
+    const auto names = ReadPairs(savesDir + "/fulldex-names.txt");
+    const auto hidden = ReadPairs(savesDir + "/fulldex-hidden.txt");
+    std::vector<Game>& r = RomList();
+    r.clear();
+    for (const Game& g : all)
+    {
+        if (g.comingSoon) continue;
+        r.push_back(g);
+        Game& x = r.back();
+        const auto it = names.find(x.rom);
+        if (it != names.end()) x.customName = it->second;
+        x.hidden = hidden.count(x.rom) > 0;
+        x.fileSize = 0;
+        if (FILE* f = fopen(x.rom.c_str(), "rb"))
+        {
+            if (fseek(f, 0, SEEK_END) == 0) x.fileSize = (long long)ftell(f);
+            fclose(f);
+        }
+    }
+    std::stable_sort(r.begin(), r.end(), [](const Game& a, const Game& b) { return ShortName(a) < ShortName(b); });
+}
+// What can be done with the chosen ROM: show it in the list again (or hide it); on a PC, open its folder.
+inline int RomActions()
+{
+#if defined(__SWITCH__) || defined(__ANDROID__)
+    return 1;
+#else
+    return 2;
+#endif
+}
 // The sidebar's pages (About; the others to come): page, the section shown (-1: the games); prow the
 // row chosen in its list; pX..pRow where its rows were drawn (for taps).
-inline int PageRows(int page) { return page == SIDE_ABOUT ? 4 : page == SIDE_UPDATES ? 2 : 0; }
+inline int PageRows(int page) { return page == SIDE_ABOUT ? 4 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : 0; }
 inline std::string AboutUrl(int row)
 {
     return row == 1 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 3 ? "https://github.com/mamesj/pokemon-fulldex" : "";
@@ -1193,6 +1234,23 @@ inline bool PageMove(int dir)
         if (dir == 3) F.side = std::max(0, F.side - 1);
         else if (dir == 4) F.side = std::min((int)SIDES - 1, F.side + 1);
         else if (dir == 2) F.side = -1;
+        return true;
+    }
+    if (F.page == SIDE_ROMS)
+    {
+        // (The list, and right of it the chosen ROM's actions.)
+        const int n = (int)RomList().size();
+        if (F.pact >= 0)
+        {
+            if (dir == 3) F.pact = std::max(0, F.pact - 1);
+            else if (dir == 4) F.pact = std::min(RomActions() - 1, F.pact + 1);
+            else if (dir == 1) F.pact = -1;
+            return true;
+        }
+        if (dir == 3) F.prow = std::max(0, F.prow - 1);
+        else if (dir == 4) F.prow = std::min(std::max(0, n - 1), F.prow + 1);
+        else if (dir == 1) F.side = F.page;
+        else if (dir == 2 && n > 0) F.pact = 0;
         return true;
     }
     if (F.page == SIDE_UPDATES)
@@ -1231,6 +1289,7 @@ inline bool PageBack()
 {
     GlassFocus& F = Focus();
     if (F.page < 0) return false;
+    if (F.page == SIDE_ROMS && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
     if (F.side < 0) F.side = F.page;
     else { F.page = -1; F.side = SIDE_HOME; }
     return true;
@@ -1240,7 +1299,7 @@ inline bool OpenSide(int side)
 {
     GlassFocus& F = Focus();
     if (side == SIDE_HOME) { F.page = -1; F.side = -1; return true; }
-    if (PageRows(side) > 0) { F.page = side; F.prow = 0; F.side = -1; F.nScroll = 0; return true; }
+    if (PageRows(side) > 0) { F.page = side; F.prow = 0; F.side = -1; F.nScroll = 0; F.pact = -1; F.rScroll = 0; return true; }
     return false;
 }
 inline int PageRowAt(int x, int y)
@@ -1249,6 +1308,21 @@ inline int PageRowAt(int x, int y)
     if (f.page < 0 || f.pW <= 0 || f.pRow <= 0 || x < f.pX || x >= f.pX + f.pW || y < f.pY) return -1;
     const int i = (y - f.pY) / f.pRow;
     return i < PageRows(f.page) ? i : -1;
+}
+inline int RomRowAt(int x, int y)
+{
+    const GlassFocus& f = Focus();
+    if (f.page != SIDE_ROMS || f.pW <= 0 || f.pRow <= 0 || x < f.pX || x >= f.pX + f.pW || y < f.pY) return -1;
+    const int k = (y - f.pY) / f.pRow;
+    const int i = f.rScroll + k;
+    return k < f.rVis && i < (int)RomList().size() ? i : -1;
+}
+inline int RomActionAt(int x, int y)
+{
+    const GlassFocus& f = Focus();
+    if (f.page != SIDE_ROMS || f.aW <= 0 || f.aRow <= 0 || x < f.aX || x >= f.aX + f.aW || y < f.aY) return -1;
+    const int i = (y - f.aY) / f.aRow;
+    return i < RomActions() ? i : -1;
 }
 inline std::vector<std::string> WrapLines(const std::string& msg, float px, int w, bool bold = false)
 {
@@ -1343,9 +1417,148 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
+    if (F.page == SIDE_ROMS)
+    {
+        const std::vector<Game>& roms = RomList();
+        const int n = (int)roms.size();
+        const int rw = (int)(340 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(12 * u);
+        const int rowH = (int)(46 * u), rg = (int)(6 * u);
+        auto status = [&](const Game& g, uint32_t& col) -> std::string {
+            if (g.hidden) { col = 0xFFAEB7C4u; return "Hidden"; }
+            if (!g.known) { col = 0xFFF2A08Au; return "Not Playable"; }
+            if (IsHack(g)) { col = 0xFFC9B6FFu; return "Romhack"; }
+            col = 0xFF8FE3A2u; return "Ready";
+        };
+        auto fit = [&](std::string s, float px, bool bold, int w) {
+            if (GW(s, px, bold) <= w) return s;
+            while (!s.empty() && GW(s + "...", px, bold) > w)
+            {
+                while (!s.empty() && ((unsigned char)s.back() & 0xC0) == 0x80) s.pop_back();
+                if (!s.empty()) s.pop_back();
+            }
+            return s + "...";
+        };
+        auto fileOf = [](const std::string& p) { const size_t k = p.find_last_of("/\\"); return k == std::string::npos ? p : p.substr(k + 1); };
+        auto dirOf = [](std::string p) {
+            const size_t k = p.find_last_of("/\\");
+            p = k == std::string::npos ? std::string() : p.substr(0, k);
+            if (p.rfind("sdmc:", 0) == 0) p = p.substr(5);
+            return p;
+        };
+        // (A file name also in another folder: shown with its folder, the last two parts of it.)
+        auto shownFile = [&](const Game& g) {
+            const std::string f = fileOf(g.rom);
+            int same = 0;
+            for (const Game& o : roms) if (fileOf(o.rom) == f) same++;
+            if (same < 2) return f;
+            std::string d = dirOf(g.rom);
+            size_t k = d.find_last_of("/\\");
+            if (k != std::string::npos && k > 0) { const size_t k2 = d.find_last_of("/\\", k - 1); if (k2 != std::string::npos) d = d.substr(k2 + 1); }
+            return d + "   \xC2\xB7   " + f;
+        };
+        // The list.
+        Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
+        const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
+        F.prow = std::max(0, std::min(F.prow, n - 1));
+        if (F.prow < F.rScroll) F.rScroll = F.prow;
+        if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+        F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
+        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
+        if (n == 0)
+        {
+            const std::string none = "No ROMs found yet. Put your ROMs in the roms folder beside Fulldex.";
+            GT(c, L + (lw2 - GW(none, 16 * u, true)) / 2, (top + bottom) * 0.5f, none, 16 * u, hint, true);
+        }
+        for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
+        {
+            const Game& g = roms[i];
+            const int rx = L + pad, ry = top + pad + (i - F.rScroll) * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+            if (i == F.prow)
+            {
+                if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            uint32_t col = 0;
+            const std::string st = status(g, col);
+            Glass::Round(c, rx + (int)(14 * u), mid - (int)(4 * u), (int)(8 * u), (int)(8 * u), 4 * u, col);
+            const int chipW = GW(st, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(10 * u) - chipW;
+            Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+            GT(c, chipX + (int)(10 * u), mid, st, 12 * u, col, true);
+            GT(c, rx + (int)(32 * u), mid, fit(ShortName(g), 16 * u, true, (int)(200 * u)), 16 * u, g.hidden ? hint : text, true);
+            const int fx = rx + (int)(248 * u);
+            GT(c, fx, mid, fit(shownFile(g), 13 * u, false, chipX - fx - (int)(12 * u)), 13 * u, hint, false);
+        }
+        if (n > vis)
+        {
+            const int tx = L + lw2 - (int)(7 * u), ty = top + (int)(16 * u), th = bottom - top - (int)(32 * u);
+            Glass::Round(c, tx, ty, (int)(3 * u), th, 1.5f * u, 0x26FFFFFFu);
+            const int thumbH = std::max((int)(24 * u), th * vis / n), thumbY = ty + (th - thumbH) * F.rScroll / std::max(1, n - vis);
+            Glass::Round(c, tx, thumbY, (int)(3 * u), thumbH, 1.5f * u, 0xCCFFFFFFu);
+        }
+        // The chosen ROM.
+        const int dx = R - rw;
+        Menu::FrostBox(c, solid, dx, top, rw, bottom - top, 18 * u);
+        F.aW = 0;
+        if (n > 0)
+        {
+            const Game& g = roms[F.prow];
+            const int ix = dx + (int)(18 * u), iw = rw - (int)(36 * u), ps = (int)(110 * u);
+            int y = top + (int)(18 * u);
+            DrawCover(c, g, ix, y, ps, ps, 12 * u);
+            const int tx = ix + ps + (int)(16 * u), tw = iw - ps - (int)(16 * u);
+            GT(c, tx, y + 28 * u, fit(ShortName(g), 20 * u, true, tw), 20 * u, text, true);
+            GT(c, tx, y + 54 * u, PlatformName(g.platform), 14 * u, hint, true);
+            uint32_t col = 0;
+            const std::string st = status(g, col);
+            const int chipW = GW(st, 12 * u, true) + (int)(20 * u);
+            Glass::Round(c, tx, y + (int)(70 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+            GT(c, tx + (int)(10 * u), y + 81 * u, st, 12 * u, col, true);
+            y += ps + (int)(22 * u);
+            char size[32];
+            if (g.fileSize > 0) snprintf(size, sizeof size, "%.1f MB", g.fileSize / 1048576.0);
+            else snprintf(size, sizeof size, "-");
+            const std::string cells[4][2] = { { "Size", size }, { "Save", g.hasSave ? "Found" : "None Yet" },
+                                              { "Game Code", g.code.empty() ? "-" : g.code }, { "Save File", g.saveName.empty() ? "-" : g.saveName } };
+            for (int i = 0; i < 4; i++)
+            {
+                const int cx = ix + (i % 2) * (iw / 2), cy = y + (i / 2) * (int)(48 * u);
+                GT(c, cx, cy + 8 * u, cells[i][0], 12 * u, hint, true);
+                GT(c, cx, cy + 28 * u, fit(cells[i][1], 15 * u, true, iw / 2 - (int)(8 * u)), 15 * u, text, true);
+            }
+            y += 2 * (int)(48 * u) + (int)(10 * u);
+            GT(c, ix, y + 8 * u, "File", 12 * u, hint, true);
+            y += (int)(26 * u);
+            const std::vector<std::string> fl = WrapLines(fileOf(g.rom), 13 * u, iw);
+            for (size_t k = 0; k < fl.size() && k < 3; k++) { GT(c, ix, y, fl[k], 13 * u, text, false); y += (int)(18 * u); }
+            y += (int)(12 * u);
+            GT(c, ix, y + 8 * u, "Folder", 12 * u, hint, true);
+            y += (int)(26 * u);
+            const std::vector<std::string> dl = WrapLines(dirOf(g.rom), 13 * u, iw);
+            for (size_t k = 0; k < dl.size() && k < 3; k++) { GT(c, ix, y, dl[k], 13 * u, text, false); y += (int)(18 * u); }
+            // What can be done with it.
+            const int na = RomActions(), ah = (int)(44 * u), ag = (int)(6 * u);
+            const int ay = bottom - (int)(18 * u) - na * ah - (na - 1) * ag;
+            F.aX = ix; F.aY = ay; F.aW = iw; F.aRow = ah + ag;
+            const std::string labels[2] = { g.hidden ? "Show In List Again" : "Hide From List", "Open Folder" };
+            const int icons[2] = { Glass::I_GRID, Glass::I_LOAD };
+            for (int a = 0; a < na; a++)
+            {
+                const int ry = ay + a * (ah + ag);
+                if (a == F.pact)
+                {
+                    if (F.side < 0) Glass::Glow(c, ix, ry, iw, ah, 12 * u, u);
+                    Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                }
+                else Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+                Glass::DrawIcon(c, icons[a], ix + 22 * u, ry + ah * 0.5f, 9 * u, text);
+                GT(c, ix + (int)(42 * u), ry + ah * 0.5f, labels[a], 15 * u, text, true);
+            }
+        }
+        return;
+    }
     if (F.page == SIDE_UPDATES)
     {
         const int rw = (int)(360 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, ip = (int)(22 * u), pad = (int)(12 * u);
@@ -1584,7 +1797,9 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
                     + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0)
-                    + (Focus().page == SIDE_UPDATES ? "/u" + std::to_string(Focus().upState) + std::to_string(Focus().upCan) + Focus().upHave + "/" + Focus().upNew + "/" + Focus().upText + "/" + Focus().upNotes + "/" + std::to_string(Focus().nScroll) : std::string());
+                    + (Focus().page == SIDE_UPDATES ? "/u" + std::to_string(Focus().upState) + std::to_string(Focus().upCan) + Focus().upHave + "/" + Focus().upNew + "/" + Focus().upText + "/" + Focus().upNotes + "/" + std::to_string(Focus().nScroll) : std::string())
+                    + (Focus().page == SIDE_ROMS ? "/r" + std::to_string(Focus().pact) + "," + std::to_string(RomList().size()) + ","
+                       + std::to_string(std::count_if(RomList().begin(), RomList().end(), [](const Game& g) { return g.hidden; })) : std::string());
     for (const Game& g : games) key += "|" + g.rom + g.customName + (g.favourite ? "*" : "") + sig(g);
     static std::vector<uint32_t> base;
     static std::string baseKey;

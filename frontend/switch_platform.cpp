@@ -238,6 +238,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
     auto refresh = [&](int& sel) {
         const std::string keep = sel >= 0 && sel < (int)games.size() ? games[sel].rom : std::string();
         games = gamesIn;
+        Launcher::BuildRomList(games, home); // (the ROMs page: before those taken off the list are left out)
         library.Load(home + "/fulldex-library.txt");
         Launcher::ApplyLocal(games, home);
         Launcher::ApplyArt(games, home);
@@ -582,6 +583,12 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     const int side = Launcher::SideAt(canvas, tapX, tapY), t = Launcher::TabAt(canvas, tapX, tapY);
                     const int tile = Launcher::TileAt(view(), scroll, tapX, tapY);
                     if (side >= 0) { F.side = side; F.banner = 0; onTabs = false; aDown = true; }
+                    else if (F.page == Launcher::SIDE_ROMS)
+                    {
+                        const int a = Launcher::RomActionAt(tapX, tapY), r = Launcher::RomRowAt(tapX, tapY);
+                        if (a >= 0) { F.side = -1; F.pact = a; aDown = true; }
+                        else if (r >= 0) { F.side = -1; F.pact = -1; F.prow = r; }
+                    }
                     else if (F.page >= 0 && Launcher::NotesAt(tapX, tapY)) { if (F.prow == 2 && F.side < 0) aDown = true; F.side = -1; F.prow = 2; }
                     else if (F.page >= 0)
                     {
@@ -831,6 +838,21 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     {
                         if (F.side == Launcher::SIDE_SETTINGS) { guide = true; page.Open(cfgPath); held = 0; }
                         else if (F.side >= 0) { if (!Launcher::OpenSide(F.side)) note = std::string(Launcher::SideName(F.side)) + ": COMING SOON"; }
+                        else if (F.page == Launcher::SIDE_ROMS)
+                        {
+                            // (The ROMs page: A on the list goes to the chosen ROM's actions; on those, does it.)
+                            const std::vector<Launcher::Game>& roms = Launcher::RomList();
+                            if (F.pact < 0) { if (!roms.empty()) F.pact = 0; }
+                            else if (F.pact == 0 && F.prow >= 0 && F.prow < (int)roms.size())
+                            {
+                                const std::string rom = roms[F.prow].rom;
+                                const bool was = roms[F.prow].hidden;
+                                const bool ok = Launcher::SetPair(home + "/fulldex-hidden.txt", rom, was ? "" : "1");
+                                refresh(selected);
+                                if (selected < 0 && !games.empty()) selected = 0;
+                                note = !ok ? "COULD NOT SAVE THE LIST" : was ? "BACK IN THE LIST" : "HIDDEN FROM THE LIST";
+                            }
+                        }
                         else if (F.page == Launcher::SIDE_UPDATES && F.prow == 0) pageUpdateWork = true;
                         else if (!Launcher::PageUrl(F.page, F.prow).empty()) note = "OPEN IT ON YOUR PHONE OR PC";
                     }
@@ -1003,7 +1025,8 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             }
             auto keyNow = [&]() { const Launcher::GlassFocus& F = Launcher::Focus();
                                   return std::to_string(F.side) + "," + std::to_string(F.banner) + "," + std::to_string(F.popup) + "," + std::to_string(F.dialog) + ","
-                                         + std::to_string(F.drow) + "," + std::to_string(F.page) + "," + std::to_string(F.prow) + "," + std::to_string(F.upState) + F.upText + "," + std::to_string(F.nScroll) + "," + F.text + "," + std::to_string(kb.selected) + std::to_string(kbLayer) + "," + std::to_string(games.size()) + "/"
+                                         + std::to_string(F.drow) + "," + std::to_string(F.page) + "," + std::to_string(F.prow) + "," + std::to_string(F.upState) + F.upText + "," + std::to_string(F.nScroll) + "," + std::to_string(F.pact) + "," + std::to_string(Launcher::RomList().size()) + ","
+                                         + std::to_string(std::count_if(Launcher::RomList().begin(), Launcher::RomList().end(), [](const Launcher::Game& g) { return g.hidden; })) + "," + F.text + "," + std::to_string(kb.selected) + std::to_string(kbLayer) + "," + std::to_string(games.size()) + "/"
                                          + Launcher::BackdropRom() + "/" + std::to_string(tab) + "/" + std::to_string(selected) + "/" + std::to_string(scroll) + "/" + note + "/"
                                          + std::to_string(onTabs) + std::to_string(onSettings); };
             bool overlay = false;
