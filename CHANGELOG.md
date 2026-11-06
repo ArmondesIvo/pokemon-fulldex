@@ -11,16 +11,14 @@
   when (and whether) it happened.
 - **SoulSilver and HeartGold battles: no more flash of the touch screen in the middle of a battle.** A wild
   Pokemon breaking out of a Poke Ball, an enemy's Vine Whip, or your own Pokemon being sent out after a
-  switch, briefly ran code of the Bag and
-  party overlay, and the view jumped to the 4:3 touch-screen picture (a Poke Ball background) for
-  about ten frames. The Bag and party screens are now told apart by overlays 6 and 7 (the battle's effects) not running with them.
+  switch briefly ran code of the Bag and party screens, and the view jumped to the 4:3 touch-screen
+  picture (a Poke Ball background) for about ten frames. The Bag and party layout now waits for the
+  Bag or party itself.
 - **HeartGold and SoulSilver: Fly no longer flashes both screens at 4:3 when you land.** For about
   half a second after the flight the two screens were joined at 4:3 (the overworld above the start
   menu) before the wide view came back; the world now stays up instead.
-
 - **SoulSilver and HeartGold: an evolution from a Rare Candy in the Bag gets coloured bars beside it,
-  not black ones.** Only a battle had its edges continued;
-  the Bag's evolution runs with no battle overlay, so it is now recognised by its own task.
+  not black ones.** Only a battle had its edges continued; the Bag's evolution runs with no battle overlay, so it is now recognised by its own task.
 - **SoulSilver/HeartGold: the Poke Mart's item panel no longer shows a sliver of the map above it.** The
   description strip taken from the top screen started a row too high.
 - **GBA games: the pause menu works like the DS games'.** On the Switch, + is the GBA's START and
