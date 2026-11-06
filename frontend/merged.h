@@ -227,6 +227,21 @@ inline uint32_t EdgeFillColour(const ScreenImage& top, int y, int side)
     return row[side ? 255 : 0];
 }
 
+// How many of a row's outermost columns EdgeFillColour went past as black (at most 2): those are
+// covered with the fill's colour too, after the screen is drawn, or the game's own black column
+// (SoulSilver's evolution, its right side) shows as a thin black line between the screen and the
+// bar. 0 when the row has no colour near the edge at all (a black row stays as it is).
+inline int EdgeFillInset(const ScreenImage& top, int y, int side)
+{
+    const uint32_t* row = top.pixels + y * 256;
+    for (int i = 0; i < 4; i++)
+    {
+        const uint32_t c = row[side ? 255 - i : i];
+        if (((c >> 16) & 0xFF) > 8 || ((c >> 8) & 0xFF) > 8 || (c & 0xFF) > 8) return std::min(i, 2);
+    }
+    return 0;
+}
+
 // The colour of the weather particle beside the top screen at base x bx (outside 0..255) and
 // row sy, if there is one there (see Scene::weatherObj).
 inline bool MergedWeatherPixel(const ScreenImage& top, int bx, int sy, uint32_t& rgb)
@@ -1273,6 +1288,27 @@ inline void MergedCompose(const Scene& scene, const ScreenImage screens[2], int 
                     float dg = ((d >> 8) & 0xFF) * (1 - a) + (acc[1] / cover) * a;
                     float db = (d & 0xFF) * (1 - a) + (acc[2] / cover) * a;
                     d = 0xFF000000 | ((uint32_t)dr << 16) | ((uint32_t)dg << 8) | (uint32_t)db;
+                }
+            }
+        }
+        // Beside an edge fill, the screen's own black outermost columns take the bar's colour
+        // (EdgeFillInset).
+        if (!useWide && scene.edgeFill && v.originX > 0 && !scene.items.empty() && scene.items[0].screen >= 0)
+        {
+            const ScreenImage& top = screens[scene.items[0].screen];
+            const int left = (int)v.originX, right = (int)(v.originX + 256 * v.unit);
+            for (int y = ya; y < yb; y++)
+            {
+                const int sy = (int)((y - v.originY) / v.unit);
+                if (sy < 0 || sy >= 192 || y < v.originY) continue;
+                for (int side = 0; side < 2; side++)
+                {
+                    const int inset = EdgeFillInset(top, sy, side);
+                    if (!inset) continue;
+                    const uint32_t c = 0xFF000000 | EdgeFillColour(top, sy, side);
+                    const int w = (int)(inset * v.unit + 0.5f);
+                    const int x0 = std::max(side ? right - w : left, 0), x1 = std::min(side ? right : left + w, outW);
+                    std::fill(&out[(size_t)y * outW + x0], &out[(size_t)y * outW + x1], c);
                 }
             }
         }
