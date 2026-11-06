@@ -69,6 +69,24 @@ struct Game
 };
 
 inline std::string& ContinueRom() { static std::string r; return r; } // the game played last (last-game.txt)
+// Where the arrows are on the glass launcher besides the games and the tabs: a section of the
+// sidebar (side, -1: none) or the banner's Continue (banner 1) or Game Options (2).
+// popup: the game's menu (A on a game) open on that row, -1 closed; where it was drawn (for taps).
+struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0, popY = 0, popW = 0, popRow = 0; };
+inline GlassFocus& Focus() { static GlassFocus f; return f; }
+inline int PopupCount() { return 6; }
+inline std::string PopupLabel(const Game& g, int i)
+{
+    static const char* n[] = { "Play", "", "Rename", "Change Picture", "Manage Saves", "Remove Game" };
+    return i == 1 ? (g.favourite ? "Remove From Home" : "Add To Home") : i >= 0 && i < 6 ? n[i] : "";
+}
+inline int PopupAt(int x, int y)
+{
+    const GlassFocus& f = Focus();
+    if (f.popW <= 0 || f.popRow <= 0 || x < f.popX || x >= f.popX + f.popW || y < f.popY) return -1;
+    const int i = (y - f.popY) / f.popRow;
+    return i < PopupCount() ? i : -1;
+}
 // A romhack: a GBA game that is not one of the official ones by its code (Ultra Violet, ...). (DS
 // hacks keep their game's code: they will be told apart by the ROMs page's checks.)
 inline bool IsHack(const Game& g)
@@ -990,10 +1008,12 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     for (int i = 0; i < SIDES; i++)
     {
         const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + (int)(12 * u), rw = sp.sideW - (int)(24 * u);
-        const bool on = settingsChosen ? i == SIDE_SETTINGS : i == SIDE_HOME;
+        const int fs = Focus().side;
+        const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == SIDE_HOME;
+        const bool lit = fs >= 0 ? i == fs : settingsChosen && i == SIDE_SETTINGS; // (chosen with the arrows)
         if (on)
         {
-            if (settingsChosen) Glass::Glow(c, rx, ry, rw, sp.rowH, 12 * u, u);
+            if (lit) Glass::Glow(c, rx, ry, rw, sp.rowH, 12 * u, u);
             Glass::Round(c, rx, ry, rw, sp.rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
         }
         Glass::DrawIcon(c, SideIcon(i), rx + 25 * u, ry + sp.rowH * 0.5f, 10 * u, text);
@@ -1031,11 +1051,17 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         GT(c, tx, sp.bannerY + 32 * u, meta, 14 * u, hint, true);
         GT(c, tx, sp.bannerY + 66 * u, ShortName(g), 32 * u, text, true);
         // Continue (white) and Game Options.
+        if (Focus().banner == 1) Glass::Glow(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, u);
         Glass::Round(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, 0xFFFFFFFFu);
         Glass::DrawIcon(c, Glass::I_PLAY, sp.contX + 30 * u, sp.contY + sp.contH * 0.5f, 8 * u, dark);
         GT(c, sp.contX + (int)(48 * u), sp.contY + sp.contH * 0.5f, played ? "Continue" : "Play", 16 * u, dark, true);
         const int ox = sp.contX + sp.contW + (int)(10 * u), ow = GW("Game Options", 16 * u, true) + (int)(36 * u);
-        Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+        if (Focus().banner == 2)
+        {
+            Glass::Glow(c, ox, sp.contY, ow, sp.contH, 12 * u, u);
+            Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+        }
+        else Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
         GT(c, ox + (int)(18 * u), sp.contY + sp.contH * 0.5f, "Game Options", 16 * u, text, true);
     }
 
@@ -1083,6 +1109,51 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     // More below.
     if (scroll + (grid.bottom - grid.top) < v.height - grid.gap)
         Glass::Round(c, sp.tabsX + grid.cols * grid.colStep / 2 - (int)(16 * u), grid.bottom + (int)(4 * u), (int)(32 * u), (int)(4 * u), 2 * u, 0x80FFFFFFu);
+
+    // The game's menu (A on a game), beside its card: a glass panel of rows as the sidebar's.
+    Focus().popW = 0;
+    if (Focus().popup >= 0 && selected >= 0 && selected < (int)games.size())
+    {
+        const int k = v.SpotOf(selected);
+        if (k >= 0)
+        {
+            static const int icons[] = { Glass::I_PLAY, Glass::I_POKEBALL, Glass::I_SPARKLE, Glass::I_WINDOW, Glass::I_SAVE, Glass::I_BACK };
+            const Game& g = games[selected];
+            const int cx = v.spots[k].x, cyy = grid.top + v.spots[k].y - scroll;
+            const int n = PopupCount(), rowH = (int)(44 * u), rg = (int)(4 * u), pad = (int)(8 * u), pw = (int)(250 * u);
+            const int ph = n * rowH + (n - 1) * rg + 2 * pad;
+            int px = cx + grid.cw + (int)(12 * u);
+            if (px + pw > c.w - (int)(28 * u)) px = cx - (int)(12 * u) - pw;
+            const int py = std::max((int)(28 * u), std::min(cyy, c.h - (int)(82 * u) - ph));
+            Focus().popX = px + pad; Focus().popY = py + pad; Focus().popW = pw - 2 * pad; Focus().popRow = rowH + rg;
+            // (The rest of the screen dimmed, and the blurred background put back under the menu so
+            // its glass frosts that, not the cards behind it.)
+            Glass::Round(c, 0, 0, c.w, c.h, 0, 0x59000000u);
+            if (solid)
+            {
+                const int r = (int)(18 * u);
+                for (int yy = std::max(0, py); yy < std::min(c.h, py + ph); yy++)
+                    for (int xx = std::max(0, px); xx < std::min(c.w, px + pw); xx++)
+                    {
+                        const int ex = std::max(0, std::max(px + r - xx, xx - (px + pw - 1 - r))), ey = std::max(0, std::max(py + r - yy, yy - (py + ph - 1 - r)));
+                        if (ex * ex + ey * ey <= r * r) c.px[(size_t)yy * c.w + xx] = c.backdrop[(size_t)yy * c.w + xx];
+                    }
+            }
+            Menu::FrostBox(c, solid, px, py, pw, ph, 18 * u);
+            for (int i = 0; i < n; i++)
+            {
+                const int ry = py + pad + i * (rowH + rg), rx = px + pad, rw = pw - 2 * pad;
+                const uint32_t ink = i == 5 ? 0xFFF2A08Au : text;
+                if (i == Focus().popup)
+                {
+                    Glass::Glow(c, rx, ry, rw, rowH, 12 * u, u);
+                    Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                }
+                Glass::DrawIcon(c, icons[i], rx + 22 * u, ry + rowH * 0.5f, 9 * u, ink);
+                GT(c, rx + (int)(44 * u), ry + rowH * 0.5f, PopupLabel(g, i), 15 * u, ink, true);
+            }
+        }
+    }
 
     // The hints in the bottom right corner, lined up with the cards' right edge: each button a
     // white badge before what it does (a message, when there is one, in their place).

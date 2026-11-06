@@ -625,6 +625,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     const char* testShot = getenv("SSR_LIST_SHOT");
     const char* testPick = listsShown == 1 ? getenv("SSR_LIST_PICK") : nullptr;
     if (const char* t = getenv("SSR_LIST_TAB")) tab = std::max(0, std::min(Launcher::TABS - 1, atoi(t)));
+    // (SSR_LIST_POPUP=n: the chosen game's menu open on row n, for the test picture.)
+    if (const char* pp = getenv("SSR_LIST_POPUP")) Launcher::Focus().popup = atoi(pp);
     // (The game chosen last, if it is in that tab; else the tab's first. The games are in the
     // view's order.)
     if (selected < 0 || selected >= (int)games.size() || !Launcher::InTab(games, selected, tab))
@@ -915,6 +917,41 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             change(1);
             return;
         }
+        // The glass launcher: A on a section of the sidebar, or on the banner's buttons.
+        if (Launcher::Glassy(canvas))
+        {
+            Launcher::GlassFocus& F = Launcher::Focus();
+            if (F.side >= 0)
+            {
+                if (F.side == Launcher::SIDE_SETTINGS) toggleGuide();
+                else if (F.side == Launcher::SIDE_HOME) F.side = -1;
+                else note = std::string(Launcher::SideName(F.side)) + ": COMING SOON";
+                return;
+            }
+            if (F.banner == 2) { note = "GAME OPTIONS: COMING SOON"; return; }
+            bool direct = false; // (Continue, or Play in the game's menu: played at once)
+            if (F.banner == 1)
+            {
+                F.banner = 0;
+                direct = true;
+                const int cg = Launcher::ContinueGame(games, selected);
+                if (cg >= 0) selected = cg;
+            }
+            if (F.popup >= 0)
+            {
+                const int item = F.popup;
+                F.popup = -1;
+                if (item == 1) { toggleFavourite(); return; }
+                if (item >= 2) { if (selected >= 0 && selected < (int)games.size()) note = Launcher::PopupLabel(games[selected], item) + ": COMING SOON"; return; }
+                direct = true;
+            }
+            else if (!direct && !onTabs && !onSettings && selected >= 0 && selected < (int)games.size() && games[selected].known && !games[selected].comingSoon)
+            {
+                F.popup = 0; // (A on a game: its menu, Play first)
+                note.clear();
+                return;
+            }
+        }
         if (onSettings)
         {
             toggleGuide();
@@ -964,6 +1001,56 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 page.Move(dir == 3 ? -1 : 1);
                 if (dir == 3 && page.selected == before) onBack = true; // (up from the first option)
             }
+            return;
+        }
+        // The glass launcher: the sidebar on the left (left from the first column, the first tab or
+        // Continue), the banner's Continue and Game Options above the games, the tabs above them.
+        if (Launcher::Glassy(canvas))
+        {
+            Launcher::GlassFocus& F = Launcher::Focus();
+            note.clear();
+            if (F.popup >= 0)
+            {
+                if (dir == 3) F.popup = std::max(0, F.popup - 1);
+                else if (dir == 4) F.popup = std::min(Launcher::PopupCount() - 1, F.popup + 1);
+                return;
+            }
+            const bool banner = Launcher::ContinueGame(games, selected) >= 0;
+            auto intoGames = [&]() {
+                const Launcher::View v = view();
+                if (Launcher::FirstIn(v) < 0) { if (banner) F.banner = 1; else onTabs = true; return; }
+                if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v);
+                follow = true;
+            };
+            if (F.side >= 0)
+            {
+                if (dir == 3) F.side = std::max(0, F.side - 1);
+                else if (dir == 4) F.side = std::min((int)Launcher::SIDES - 1, F.side + 1);
+                else if (dir == 2) { F.side = -1; intoGames(); }
+                return;
+            }
+            if (onTabs)
+            {
+                if (dir == 1 && tab == 0) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                else if (dir == 1 || dir == 2) setTab(tab + (dir == 2 ? 1 : -1), "the arrows");
+                else if (dir == 4) { onTabs = false; if (banner) F.banner = 1; else intoGames(); }
+                return;
+            }
+            if (F.banner)
+            {
+                if (dir == 1) { if (F.banner == 2) F.banner = 1; else { F.banner = 0; F.side = Launcher::SIDE_HOME; } }
+                else if (dir == 2) F.banner = 2;
+                else if (dir == 3) { F.banner = 0; onTabs = true; }
+                else if (dir == 4 && Launcher::FirstIn(view()) >= 0) { F.banner = 0; intoGames(); }
+                return;
+            }
+            follow = true;
+            const Launcher::View v = view();
+            const int k = v.SpotOf(selected);
+            if (dir == 1 && (k < 0 || v.spots[k].x == v.g.gx)) { F.side = Launcher::SIDE_HOME; return; }
+            const int to = v.spots.empty() ? -1 : Launcher::Step(v, selected, dir);
+            if (to < 0) { if (dir == 3) { if (banner) F.banner = 1; else onTabs = true; } return; }
+            selected = to;
             return;
         }
         if (onSettings)
@@ -1231,7 +1318,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 {
                     if (act == Controls::L || act == Controls::R) { if (!guide) setTab(tab + (act == Controls::R ? 1 : -1), "a key"); }
                     else if (act == Controls::A || act == Controls::START) { if (!e.key.repeat) choose(); }
-                    else if (act == Controls::B || act == Controls::MENU) { if (guide) { if (!page.Back()) guide = false; } else quit = true; }
+                    else if (act == Controls::B || act == Controls::MENU) { if (guide) { if (!page.Back()) guide = false; } else if (Launcher::Focus().popup >= 0) Launcher::Focus().popup = -1; else quit = true; }
                     else if (act == Controls::X && !guide)toggleFavourite();
                 else if (act == Controls::Y) toggleGuide();
                     else if (act >= Controls::UP && act <= Controls::RIGHT)
@@ -1245,7 +1332,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 case SDLK_UP: case SDLK_w: move(3); break;
                 case SDLK_DOWN: case SDLK_s: move(4); break;
                 case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: if (!e.key.repeat) choose(); break;
-                case SDLK_ESCAPE: case SDLK_AC_BACK: if (guide) { if (!page.Back()) guide = false; } else quit = true; break;
+                case SDLK_ESCAPE: case SDLK_AC_BACK: if (guide) { if (!page.Back()) guide = false; } else if (Launcher::Focus().popup >= 0) Launcher::Focus().popup = -1; else quit = true; break;
                 case SDLK_f: if(!guide)toggleFavourite(); break;
                 case SDLK_h: case SDLK_F1: toggleGuide(); break;
                 case SDLK_o: OpenFolder(fo.roms); break;
@@ -1301,7 +1388,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     if (!guide) setTab(tab + (act == Controls::R ? 1 : -1), why);
                 }
                 else if (act == Controls::A || act == Controls::START) choose();
-                else if (act == Controls::B || act == Controls::SELECT) { if (guide) { if (!page.Back()) guide = false; } else quit = true; }
+                else if (act == Controls::B || act == Controls::SELECT) { if (guide) { if (!page.Back()) guide = false; } else if (Launcher::Focus().popup >= 0) Launcher::Focus().popup = -1; else quit = true; }
                 else if (act == Controls::X && !guide)toggleFavourite();
                 else if (act == Controls::Y) toggleGuide();
                 break;
@@ -1318,6 +1405,18 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 const int s = std::max(1, std::min(canvas.w, canvas.h) / 240);
                 // The buttons in the title band (touch screens): SETTINGS at the right, and in the
                 // settings BACK at the left; on Android FOLDER at the left of the list.
+                // The game's menu open: the mouse or a finger chooses in it; elsewhere closes it.
+                if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().popup >= 0)
+                {
+                    const int pi = Launcher::PopupAt(mx, my);
+                    if (e.type == SDL_MOUSEMOTION && pi >= 0) Launcher::Focus().popup = pi;
+                    if (e.type == SDL_MOUSEBUTTONUP)
+                    {
+                        if (pi >= 0) { Launcher::Focus().popup = pi; choose(); }
+                        else Launcher::Focus().popup = -1;
+                    }
+                    break;
+                }
                 // The glass launcher: a section in the sidebar (Settings opens the settings), or Continue.
                 if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging)
                 {
@@ -1326,7 +1425,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     if (Launcher::ContinueAt(canvas, mx, my))
                     {
                         const int cg = Launcher::ContinueGame(games, selected);
-                        if (cg >= 0) { selected = cg; onSettings = onTabs = false; choose(); }
+                        if (cg >= 0) { selected = cg; onSettings = onTabs = false; Launcher::Focus() = Launcher::GlassFocus{}; choose(); }
                         break;
                     }
                 }
@@ -1416,7 +1515,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 }
                 const int i = Launcher::TileAt(view(), scroll, mx, my);
                 if (e.type == SDL_MOUSEMOTION && !pressed && e.motion.which != SDL_TOUCH_MOUSEID && i >= 0)
-                { selected = i; follow = false; onSettings = onTabs = false; }
+                { selected = i; follow = false; onSettings = onTabs = false; Launcher::Focus() = Launcher::GlassFocus{}; }
 
                 if (e.type == SDL_MOUSEBUTTONUP)
                 {
@@ -1443,7 +1542,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (i >= 0 && (i != selected || onSettings) && (e.type == SDL_MOUSEBUTTONDOWN || (e.motion.xrel || e.motion.yrel)))
                 {
                     selected = i;
-                    onSettings = onTabs = false;
+                    onSettings = onTabs = false; Launcher::Focus() = Launcher::GlassFocus{};
                     note.clear();
                     // (A tap: the list follows it, unless the finger goes on to drag. A mouse
                     // passing over a tile leaves the list where it is.)
@@ -1628,8 +1727,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                                            : std::string("TAP AN OPTION THEN TAP AGAIN TO CHANGE    DRAG TO SCROLL    BACK: DONE");
 #else
         const std::string hint = games.empty() ? std::string("O: OPEN THE ROMS FOLDER    H: SETTINGS    ESC: QUIT")
-                               : padIn ? btn(Controls::A) + ": PLAY    " + btn(Controls::X) + ": HOME    " + btn(Controls::L) + " / " + btn(Controls::R) + ": TABS    " + btn(Controls::Y) + ": SETTINGS    " + btn(Controls::B) + ": QUIT"
-                                       : std::string("ENTER: PLAY    F: HOME    Q / E: TABS    H: SETTINGS    O: ROMS    ESC: QUIT");
+                               : padIn ? btn(Controls::A) + ": PLAY    " + btn(Controls::L) + " / " + btn(Controls::R) + ": TABS    " + btn(Controls::Y) + ": SETTINGS    " + btn(Controls::B) + ": QUIT"
+                                       : std::string("ENTER: PLAY    Q / E: TABS    H: SETTINGS    O: ROMS    ESC: QUIT");
         const std::string pageHint = page.group < 0 ? (padIn ? "UP / DOWN: CHOOSE    " + btn(Controls::A) + ": OPEN    " + btn(Controls::B) + ": BACK"
                                                              : std::string("UP / DOWN: CHOOSE    ENTER: OPEN    ESC: BACK"))
                                    : padIn ? "UP / DOWN: CHOOSE    LEFT / RIGHT / " + btn(Controls::A) + ": CHANGE    " + btn(Controls::B) + ": BACK"
@@ -1655,7 +1754,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 keysMenu.Draw(canvas, "KEYS AND BUTTONS", kh);
             }
         }
-        else Launcher::Draw(canvas, games, tab, onSettings || onTabs ? -1 : selected, scroll, note, hint, theme, follow, onTabs, onSettings);
+        else Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected, scroll, note, Launcher::Focus().popup >= 0 ? (padIn ? btn(Controls::A) + ": CHOOSE    " + btn(Controls::B) + ": BACK" : std::string("ENTER: CHOOSE    ESC: BACK")) : hint, theme, follow, onTabs, onSettings);
 #ifdef SSR_UPDATER
         if (updateMenu.open)
             updateMenu.Draw(canvas, Updater::PopupTitle(),
