@@ -1,3 +1,4 @@
+#include <chrono>
 // The PC all-games program's game list. See pc_launcher.h.
 #ifdef SSR_PC_LAUNCHER
 #include "pc_launcher.h"
@@ -670,6 +671,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         scroll=0;follow=true;
     };
     Launcher::BuildRomList(games, fo.saves); // (the ROMs page: before those taken off the list are left out)
+    // (Twenty hours played: the one Support message. SSR_LIST_BEER: shown at once, for the test picture.)
+    if (PlayTime::AskNow(fo.saves) || getenv("SSR_LIST_BEER")) Launcher::OpenBeer();
     reorderLibrary();
     auto toggleFavourite=[&]() {
         if(selected<0||selected>=(int)games.size()||games[selected].comingSoon)return;
@@ -698,12 +701,20 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     {
         Launcher::HubLoad();
         Launcher::HubState& H = Launcher::Hub();
-        if (!strncmp(hb, "move", 4))
+        Launcher::HubMode() = !strncmp(hb, "trade", 5) ? 2 : !strncmp(hb, "move", 4) || !strcmp(hb, "top") ? 0 : 1;
+        if (!strcmp(hb, "tradehost")) Launcher::TradeDo(2, 0);
+        if (!strcmp(hb, "tradejoin")) Launcher::TradeDo(2, 1);
+        if (!strncmp(hb, "trade", 5) || !strcmp(hb, "top")) {}
+        else if (!strncmp(hb, "move", 4))
         {
             // (move:from,to opens Move Pokemon; moved:from,to also moves the box's first Pokemon, for real, in the test folder's save copies.)
             Launcher::MoverShow(true);
             if (const char* q = strchr(hb, ':')) { Launcher::Mover().from = atoi(q + 1); if (const char* r = strchr(q, ',')) Launcher::Mover().to = atoi(r + 1); }
-            if (!strncmp(hb, "moved", 5)) Launcher::MoverDo(3, 0);
+            if (!strncmp(hb, "moved", 5)) Launcher::MoverDo(Launcher::MOVER_FIRST, 0);
+            if (!strncmp(hb, "moveparty", 9)) Launcher::Mover().box = -1;
+            if (!strncmp(hb, "movepartymoved", 14)) { Launcher::Mover().box = -1; Launcher::MoverDo(Launcher::MOVER_FIRST, 0); }
+            if (!strncmp(hb, "moveswapdo", 10)) Launcher::Mover().box = 0;
+            if (!strncmp(hb, "moveswap", 8)) { const auto acts = Launcher::MoverActions(Launcher::MOVER_FIRST); for (size_t k = 0; k < acts.size(); k++) if (acts[k].rfind("Swap With", 0) == 0) Launcher::MoverDo(Launcher::MOVER_FIRST, (int)k); if (!strncmp(hb, "moveswapdo", 10)) Launcher::MoverDo(Launcher::MOVER_FIRST, 0); }
         }
         else if (!strcmp(hb, "code")) { std::lock_guard<std::mutex> l(H.m); H.busy = 1; H.code = "BQXW-KTRM"; H.url = "https://www.google.com/device"; }
         else
@@ -1072,9 +1083,10 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (F.page == Launcher::SIDE_HUB)
                 {
                     // (The Hub: A on the list goes to the chosen row's actions; on those, does it.)
-                    if (F.pact < 0) { if (!Launcher::HubActions(F.prow).empty()) F.pact = 0; return; }
+                    if (F.pact < 0) { if (Launcher::HubEnter(F.prow)) return; if (!Launcher::HubActions(F.prow).empty()) F.pact = 0; return; }
                     const std::string said = Launcher::HubDo(F.prow, F.pact);
                     if (!said.empty()) note = said;
+                    if (F.dialog == 3) SDL_StartTextInput(); // (the Trade page's code)
                     return;
                 }
                 if (F.page == Launcher::SIDE_UPDATES && F.prow == 0)
@@ -1353,6 +1365,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             reorderLibrary();
             settle();
             note = "ROM FILE DELETED. ITS SAVES ARE KEPT";
+            return;
+        }
+        if (F.dialog >= 10)
+        {
+            // (The beer message: the page in the browser, or later.)
+            const std::string pick = F.drow >= 0 && F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
+            if (pick == "#beer" && SDL_OpenURL("https://buymeacoffee.com/mamesj") != 0) fprintf(stderr, "[launcher] could not open the support page: %s\n", SDL_GetError());
+            dialogClose();
             return;
         }
         if (F.dialog >= 5)
@@ -1955,7 +1975,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         Launcher::GlassFocus& RF = Launcher::Focus();
                         const int a = Launcher::RomActionAt(mx, my), r = Launcher::RomRowAt(mx, my);
                         if (a >= 0) { RF.side = -1; RF.pact = a; choose(); }
-                        else if (r >= 0) { RF.side = -1; RF.pact = -1; RF.prow = r; }
+                        else if (r >= 0) { const bool again = RF.page == Launcher::SIDE_HUB && Launcher::HubTop() && RF.prow == r && RF.side < 0; RF.side = -1; RF.pact = -1; RF.prow = r; if (again) choose(); }
                         break;
                     }
                     // (A page's list: a click chooses a row; on the chosen one, opens it.)
@@ -2483,7 +2503,28 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             fprintf(stderr, "[launcher] test: %s chosen\n", testPick);
             break;
         }
-        if (testShot && *testShot)
+        // (SSR_LIST_HUB=tradeauto: the first room found joined and the first Pokemon offered; SSR_LIST_SHOT_WAIT=seconds:
+        // the picture only after that long, for the test of a trade with another device.)
+        static const auto shotStart = std::chrono::steady_clock::now();
+        static bool autoJoined = false, autoOffered = false;
+        if (const char* at = getenv("SSR_LIST_HUB"); at && !strcmp(at, "tradeauto"))
+        {
+            const HubLink::Status ls = HubLink::Snapshot();
+            if (ls.state == HubLink::State::Off && !autoJoined) Launcher::TradeDo(2, 1);
+            if (ls.state == HubLink::State::Browsing && !ls.rooms.empty() && !autoJoined) { HubLink::Join(ls.rooms[0]); autoJoined = true; }
+            if (ls.state == HubLink::State::Linked && !ls.mine.any && !autoOffered) { Launcher::TradeDo(Launcher::TRADE_FIRST, 0); autoOffered = true; }
+        }
+        // (SSR_LIST_HUB=tradeonline: code TEST42 at the relay, the first Pokemon offered, the trade accepted when it can be.)
+        static bool autoAccepted = false;
+        if (const char* at = getenv("SSR_LIST_HUB"); at && !strcmp(at, "tradeonline"))
+        {
+            const HubLink::Status ls = HubLink::Snapshot();
+            if (ls.state == HubLink::State::Off && !autoJoined) { Launcher::TradeEnterCode(getenv("SSR_TRADE_CODE") ? getenv("SSR_TRADE_CODE") : "TEST42"); autoJoined = true; }
+            if (ls.state == HubLink::State::Linked && !ls.mine.any && !autoOffered) { Launcher::TradeDo(Launcher::TRADE_FIRST, 0); autoOffered = true; }
+            if (ls.state == HubLink::State::Linked && ls.mine.any && ls.theirs.any && ls.theyCanTake && !ls.iAccepted && !autoAccepted) { HubLink::Accept(true); autoAccepted = true; }
+        }
+        const char* shotWait = getenv("SSR_LIST_SHOT_WAIT");
+        if (testShot && *testShot && (!shotWait || std::chrono::steady_clock::now() - shotStart >= std::chrono::seconds(atoi(shotWait))))
         {
             if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(canvas.px.data(), canvas.w, canvas.h, 32, canvas.w * 4, SDL_PIXELFORMAT_ARGB8888))
             {
@@ -2723,7 +2764,9 @@ bool Start(int& argc, char**& argv)
             fprintf(stderr, "[launcher] GBA: %s\n", rom.c_str());
             // (Cloud saves: a newer save comes down first; the save goes up when the game closes.)
             CloudAuto::Start(fo.saves, games[chosen].folder + "/" + games[chosen].saveName);
+            const auto gbaStart = std::chrono::steady_clock::now();
             GbaRa::Play(rom, o, fo.cfg);
+            PlayTime::Add(fo.saves, (long long)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - gbaStart).count());
             CloudAuto::Saved();
             CloudAuto::Finish();
             directGame = -1;

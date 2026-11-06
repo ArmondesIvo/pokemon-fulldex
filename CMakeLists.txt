@@ -108,6 +108,7 @@ set(SSRECOMP_SOURCES
     frontend/achievements_http.cpp
     frontend/cloud_saves.cpp
     frontend/cloud_autosync.cpp
+    frontend/hub_link.cpp
     frontend/trade_evolutions.cpp
     frontend/platform.cpp
     runtime/recomp_rt.cpp
@@ -497,4 +498,15 @@ if(SSR_POKEMON_HUB)
         ${PKSMCORE_INCLUDE_DIRS} "${PKSMCORE_DIR}/memecrypto" "${PKSMCORE_DIR}/pcg-cpp/include")
     target_link_libraries(ssrecomp PRIVATE pokemonhub)
     target_compile_definitions(ssrecomp PRIVATE SSR_POKEMON_HUB)
+endif()
+
+# Trades over Wi-Fi (frontend/hub_link.cpp): Windows' sockets.
+if(WIN32)
+    target_link_libraries(ssrecomp PRIVATE ws2_32)
+endif()
+
+# Online trades' meeting point (tools/relay, a Cloudflare Worker): its address, built in.
+set(FULLDEX_RELAY_URL "" CACHE STRING "The trade relay's address, e.g. https://fulldex-relay.example.workers.dev")
+if(FULLDEX_RELAY_URL)
+    target_compile_definitions(ssrecomp PRIVATE "FULLDEX_RELAY_URL=\"${FULLDEX_RELAY_URL}\"")
 endif()

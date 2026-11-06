@@ -240,6 +240,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
         const std::string keep = sel >= 0 && sel < (int)games.size() ? games[sel].rom : std::string();
         games = gamesIn;
         Launcher::BuildRomList(games, home); // (the ROMs page: before those taken off the list are left out)
+        if (PlayTime::AskNow(home)) Launcher::OpenBeer(); // (twenty hours played: the one Support message)
         library.Load(home + "/fulldex-library.txt");
         Launcher::ApplyLocal(games, home);
         Launcher::ApplyArt(games, home);
@@ -603,7 +604,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     {
                         const int a = Launcher::RomActionAt(tapX, tapY), r = Launcher::RomRowAt(tapX, tapY);
                         if (a >= 0) { F.side = -1; F.pact = a; aDown = true; }
-                        else if (r >= 0) { F.side = -1; F.pact = -1; F.prow = r; }
+                        else if (r >= 0) { if (F.page == Launcher::SIDE_HUB && Launcher::HubTop() && F.prow == r && F.side < 0) aDown = true; F.side = -1; F.pact = -1; F.prow = r; }
                     }
                     else if (F.page >= 0 && Launcher::NotesAt(tapX, tapY)) { if (F.prow == 2 && F.side < 0) aDown = true; F.side = -1; F.prow = 2; }
                     else if (F.page >= 0)
@@ -754,6 +755,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         }
                         else closeDialog();
                     }
+                    else if (F.dialog >= 10) closeDialog(); // (the beer message: its code is scanned, not chosen)
                     else if (F.dialog >= 5)
                     {
                         const std::string pick = F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
@@ -888,8 +890,8 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         else if (F.page == Launcher::SIDE_HUB)
                         {
                             // (The Hub: A on the list goes to the chosen row's actions; on those, does it.)
-                            if (F.pact < 0) { if (!Launcher::HubActions(F.prow).empty()) F.pact = 0; }
-                            else { const std::string said = Launcher::HubDo(F.prow, F.pact); if (!said.empty()) note = said; }
+                            if (F.pact < 0) { if (!Launcher::HubEnter(F.prow) && !Launcher::HubActions(F.prow).empty()) F.pact = 0; }
+                            else { const std::string said = Launcher::HubDo(F.prow, F.pact); if (!said.empty()) note = said; if (F.dialog == 3) { kbLayer = 0; kbBuild(); } }
                         }
                         else if (F.page == Launcher::SIDE_UPDATES && F.prow == 0) pageUpdateWork = true;
                         else if (!Launcher::PageUrl(F.page, F.prow).empty()) note = "OPEN IT ON YOUR PHONE OR PC";
@@ -1512,7 +1514,9 @@ bool Start(int& argc, char**& argv)
         // (Cloud saves: a newer save comes down first; the save goes up when the game closes.)
         const std::string cfgAt = SettingsPath(dir);
         CloudAuto::Start(cfgAt.substr(0, cfgAt.find_last_of('/')), game.folder + "/" + game.saveName);
+        const u64 gbaStart = armGetSystemTick();
         GbaRa::Play(game.rom, o, SettingsPath(dir));
+        PlayTime::Add(cfgAt.substr(0, cfgAt.find_last_of('/')), (long long)(armTicksToNs(armGetSystemTick() - gbaStart) / 1000000000ULL));
         CloudAuto::Saved();
         CloudAuto::Finish();
         if (!g_self.empty() && envHasNextLoad())

@@ -27,6 +27,7 @@
 #include "now_playing.h"
 #include "save_backups.h"
 #include "cloud_autosync.h"
+#include "play_time.h"
 #ifndef SSR_RA_VERSION
 #define SSR_RA_VERSION "0.0.0" // (CMakeLists.txt sets it from CHANGELOG.md)
 #endif
@@ -1962,6 +1963,12 @@ int main(int argc, char** argv)
 
     // CLOUD SAVES (cloud_autosync.h): a newer save in the cloud comes down before the game reads it.
     std::string cloudNote;
+    const std::string playDir = [&]() {
+        const std::string& at = opt.config.empty() ? opt.save : opt.config;
+        const size_t cs = at.find_last_of("/\\");
+        return cs == std::string::npos ? std::string(".") : at.substr(0, cs);
+    }();
+    const bool countPlay = !opt.noSave && !opt.headless && !opt.lockstep;
     if (!opt.noSave && !opt.headless && !opt.lockstep)
     {
         const std::string& at = opt.config.empty() ? opt.save : opt.config;
@@ -11207,6 +11214,7 @@ int main(int argc, char** argv)
         // (Cloud saves: the save just written goes up a little later; what happened at the start is said.)
         if (cloudDirty && !Host::SaveIsDirty) CloudAuto::Saved();
         CloudAuto::Tick();
+        if (countPlay && frame && frame % 18000 == 0) PlayTime::Add(playDir, 300); // (every five minutes)
         if (frame == 240 && !cloudNote.empty()) { say(cloudNote); cloudNote.clear(); }
         if (!opt.noSave && frame && frame % (60 * 60 * 30) == 0) BackupSave(opt.save); // (about every half hour)
         if (opt.frames && scriptClock >= opt.frames) running = false;
@@ -11233,6 +11241,7 @@ int main(int argc, char** argv)
             "Your latest progress could not be written reliably. Check disk space and save-folder permissions. Keep the save and .tmp files for recovery.", window);
     exitStep("cloud");
     CloudAuto::Finish();
+    if (countPlay) PlayTime::Add(playDir, (long long)((frame % 18000) / 60));
 #ifdef __SWITCH__
     // Closing the sound has now and then never returned on the Switch (the game hung at
     // "[exit] audio", in a test run with nothing else going on), QUIT after a save has frozen

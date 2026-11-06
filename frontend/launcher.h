@@ -31,6 +31,9 @@
 #include "ui.h"
 #include "optional_features.h"
 #include "cloud_saves.h"
+#include "hub_link.h"
+#include "support_qr.h"
+#include "play_time.h"
 #ifdef SSR_POKEMON_HUB
 #include "pokemon_hub.h"
 #include "companion_rom.h"
@@ -1346,9 +1349,9 @@ inline int ToolAt(int x, int y)
     return 0;
 }
 // The keyboard's title, line and done key for what it is for (GlassFocus::kbFor).
-inline const char* KbTitle() { const int k = Focus().kbFor; return k == 1 ? "NEW TAB" : k == 2 ? "SEARCH" : k == 3 ? "RENAME TAB" : "RENAME"; }
-inline const char* KbPrompt() { const int k = Focus().kbFor; return k == 1 || k == 3 ? "Tab Name" : k == 2 ? "Part Of A Game's Name" : "The Game's Own Name"; }
-inline const char* KbDone() { const int k = Focus().kbFor; return k == 1 ? "Make Tab" : k == 2 ? "Search" : "Save"; }
+inline const char* KbTitle() { const int k = Focus().kbFor; return k == 4 ? "TRADE CODE" : k == 1 ? "NEW TAB" : k == 2 ? "SEARCH" : k == 3 ? "RENAME TAB" : "RENAME"; }
+inline const char* KbPrompt() { const int k = Focus().kbFor; return k == 4 ? "The Other Player's Code" : k == 1 || k == 3 ? "Tab Name" : k == 2 ? "Part Of A Game's Name" : "The Game's Own Name"; }
+inline const char* KbDone() { const int k = Focus().kbFor; return k == 4 ? "Join" : k == 1 ? "Make Tab" : k == 2 ? "Search" : "Save"; }
 // Add To Tab (the game's menu): the player's tabs, each marked if the game is in it, New Tab and Close.
 inline void OpenAddToTab(const std::string& rom)
 {
@@ -1440,6 +1443,7 @@ inline int TabDialogPick(const std::string& pick, int& tab, std::string& note)
 }
 // The keyboard's done key for anything but a game's name: a new tab (the game it came from put in it),
 // the search ("" clears it), a tab's name. tab: the tab shown after.
+inline void TradeEnterCode(const std::string& code); // (the Hub's Trade page, below)
 inline void KeyboardDone(int& tab, std::string& note)
 {
     GlassFocus& F = Focus();
@@ -1461,6 +1465,7 @@ inline void KeyboardDone(int& tab, std::string& note)
         SearchText() = t;
         note = t.empty() ? "SEARCH CLEARED" : "";
     }
+    else if (F.kbFor == 4) TradeEnterCode(t);
     else if (F.kbFor == 3 && !t.empty() && F.kbTab >= 0 && F.kbTab < (int)tabs.size())
     {
         tabs[F.kbTab].name = t;
@@ -1556,12 +1561,14 @@ inline std::string HubDevice()
 }
 inline bool HubOnLocked(const HubState& h) { return h.set.provider != "off" && !(h.set.provider == "google" && h.set.googleRefreshToken.empty()); }
 inline const char* HubProvider(const std::string& p) { return p == "google" ? "Google Drive" : p == "webdav" ? "WebDAV" : p == "folder" ? "A Synced Folder" : "Off"; }
-inline std::string HubSig() { return std::to_string(Hub().version.load()); }
+inline std::string HubSig() { return std::to_string(Hub().version.load()) + "." + std::to_string(HubLink::Version()); }
 inline std::string SettingSentence(const std::string& s); // (below: capitals made a sentence)
 // MOVE POKEMON (the Hub's second row): the Pokémon in a box of one of the player's games, and moving
 // one to another of them (pokemon_hub.h: the rules, the conversion, both saves backed up first).
 // Its rows: 0 the game they come from, 1 its box, 2 the game they go to, then that box's Pokémon.
-const int HUB_FIRST = 2; // (the Hub's first save row: after Cloud Saves and Move Pokémon)
+const int HUB_FIRST = 1; // (Cloud Saves' first save row: after the account)
+// (The Hub's page: 0 its first, Cloud Saves and Move Pokémon to open; 1 Cloud Saves. Move Pokémon: Mover().open.)
+inline int& HubMode() { static int m = 0; return m; }
 struct MoverGame { std::string name, path; bool hack; };
 struct MoverState
 {
@@ -1571,6 +1578,14 @@ struct MoverState
 #ifdef SSR_POKEMON_HUB
     std::unique_ptr<PokemonHub::Save> a, b;
     std::string aPath, bPath, aErr, bErr;
+#endif
+    // (Where a Pokémon goes in the other game: -1 the first free place, -2 the party, else a box.
+    // Swapping: the Pokémon chosen in this game, while one is chosen in the other.)
+    int put = -1;
+    bool swapping = false;
+    int swapBox = 0, swapSlot = 0;
+    std::string swapName;
+#ifdef SSR_POKEMON_HUB
 #endif
 };
 inline MoverState& Mover() { static MoverState m; return m; }
@@ -1591,13 +1606,8 @@ inline void MoverOpenSaves(bool again = false)
     m.to = std::max(0, std::min(m.to, (int)gs.size() - 1));
     if (again || !m.a || m.aPath != gs[m.from].path) { m.aPath = gs[m.from].path; m.aErr.clear(); m.a = PokemonHub::Save::Open(m.aPath, m.aErr, gs[m.from].hack); }
     if (again || !m.b || m.bPath != gs[m.to].path) { m.bPath = gs[m.to].path; m.bErr.clear(); m.b = PokemonHub::Save::Open(m.bPath, m.bErr, gs[m.to].hack); }
-    if (m.a) m.box = std::max(0, std::min(m.box, m.a->Boxes() - 1));
-}
-inline std::vector<PokemonHub::Mon> MoverBox()
-{
-    MoverOpenSaves();
-    MoverState& m = Mover();
-    return m.a ? m.a->Box(m.box) : std::vector<PokemonHub::Mon>();
+    if (m.a && m.box != PokemonHub::PARTY) m.box = std::max(0, std::min(m.box, m.a->Boxes() - 1));
+    if (m.b && m.put >= 0) m.put = std::min(m.put, m.b->Boxes() - 1);
 }
 #endif
 #ifdef SSR_POKEMON_HUB
@@ -1751,10 +1761,57 @@ inline bool Drawable(const std::string& s)
     return any;
 }
 inline std::string Shown(const std::string& s, const std::string& otherwise) { return Drawable(s) ? s : otherwise; }
+// (Mover rows: 0 the game they come from, 1 its box (or party), 2 the game they go to, 3 where they
+// go in it (or, swapping, which of its boxes to choose from), then the Pokémon.)
+const int MOVER_FIRST = 4;
+#ifdef SSR_POKEMON_HUB
+inline std::vector<PokemonHub::Mon> MonsIn(const PokemonHub::Save* s, int box)
+{
+    if (!s) return {};
+    return box == PokemonHub::PARTY ? PokemonHub::Party(*s) : s->Box(std::max(0, box));
+}
+inline std::vector<PokemonHub::Mon> MoverBox()
+{
+    MoverOpenSaves();
+    return MonsIn(Mover().a.get(), Mover().box);
+}
+inline int MoverTargetBox()
+{
+    const int p = Mover().put;
+    return p == PokemonHub::TO_PARTY ? PokemonHub::PARTY : std::max(0, p);
+}
+// The Pokémon listed: those in the chosen box, or (swapping) those in the other game's.
+inline std::vector<PokemonHub::Mon> MoverList()
+{
+    MoverOpenSaves();
+    MoverState& m = Mover();
+    return m.swapping ? MonsIn(m.b.get(), MoverTargetBox()) : MonsIn(m.a.get(), m.box);
+}
+inline std::string BoxLabel(const PokemonHub::Save* s, int box)
+{
+    if (box == PokemonHub::PARTY) return "Party";
+    return s ? Shown(s->BoxName(box), "Box " + std::to_string(box + 1)) : std::string("-");
+}
+inline std::string PutLabel()
+{
+    MoverState& m = Mover();
+    if (m.put == PokemonHub::ANY_BOX) return "First Free Place";
+    if (m.put == PokemonHub::TO_PARTY) return "Party";
+    return BoxLabel(m.b.get(), m.put);
+}
+// (A box's next, its previous, or the party, in a game of n boxes.)
+inline int StepBox(int box, int n, int how)
+{
+    if (n <= 0) return 0;
+    if (how == 2) return PokemonHub::PARTY;
+    if (box < 0) return how == 0 ? 0 : n - 1;
+    return how == 0 ? (box + 1) % n : (box + n - 1) % n;
+}
+#endif
 inline int MoverRows()
 {
 #ifdef SSR_POKEMON_HUB
-    return 3 + (int)MoverBox().size();
+    return MOVER_FIRST + (int)MoverList().size();
 #else
     return 3;
 #endif
@@ -1769,15 +1826,32 @@ inline std::vector<std::string> MoverActions(int row)
         return r;
     }
 #ifdef SSR_POKEMON_HUB
-    if (row == 1) return { "Next Box", "Previous Box" };
     MoverState& m = Mover();
-    const std::vector<PokemonHub::Mon> mons = MoverBox();
-    const int i = row - 3;
-    if (i < 0 || i >= (int)mons.size() || !m.a || !m.b || m.from == m.to) return r;
-    const PokemonHub::Check ck = PokemonHub::CanMove(*m.a, mons[i].box, mons[i].slot, *m.b);
-    if (ck.verdict != PokemonHub::Verdict::Ok) return r;
-    r.push_back("Move To " + gs[m.to].name);
-    if (ck.evolvesTo) r.push_back("Move And Evolve");
+    if (row == 1) return { "Next Box", "Previous Box", "Party" };
+    if (row == 3) return m.swapping ? std::vector<std::string>{ "Next Box", "Previous Box", "Party" }
+                                    : std::vector<std::string>{ "First Free Place", "Party", "Next Box", "Previous Box" };
+    const std::vector<PokemonHub::Mon> mons = MoverList();
+    const int i = row - MOVER_FIRST;
+    if (i < 0 || i >= (int)mons.size() || !m.a || !m.b || m.from == m.to) return m.swapping ? std::vector<std::string>{ "Cancel Swap" } : r;
+    const std::string toName = gs[std::min(m.to, (int)gs.size() - 1)].name;
+    if (m.swapping)
+    {
+        const PokemonHub::Check ck = PokemonHub::CanSwap(*m.a, m.swapBox, m.swapSlot, *m.b, mons[i].box, mons[i].slot);
+        if (ck.verdict == PokemonHub::Verdict::Ok)
+        {
+            r.push_back("Swap");
+            if (ck.evolvesTo) r.push_back("Swap And Evolve");
+        }
+        r.push_back("Cancel Swap");
+        return r;
+    }
+    const PokemonHub::Check ck = PokemonHub::CanMoveTo(*m.a, mons[i].box, mons[i].slot, *m.b, m.put, -1);
+    if (ck.verdict == PokemonHub::Verdict::Ok)
+    {
+        r.push_back("Move To " + toName);
+        if (ck.evolvesTo) r.push_back("Move And Evolve");
+    }
+    if (m.a->Generation() == m.b->Generation()) r.push_back("Swap With One In " + toName);
 #endif
     return r;
 }
@@ -1787,29 +1861,283 @@ inline std::string MoverDo(int row, int act)
     const std::vector<std::string> acts = MoverActions(row);
     if (act < 0 || act >= (int)acts.size()) return "";
     Hub().version++;
-    if (row == 0) { m.from = act; m.box = 0; m.msg.clear(); return ""; }
-    if (row == 2) { m.to = act; m.msg.clear(); return ""; }
+    if (row == 0) { m.from = act; m.box = 0; m.swapping = false; m.msg.clear(); return ""; }
+    if (row == 2) { m.to = act; m.put = -1; m.swapping = false; m.msg.clear(); return ""; }
 #ifdef SSR_POKEMON_HUB
     MoverOpenSaves();
+    const std::string a = acts[act];
     if (row == 1)
     {
-        if (m.a && m.a->Boxes() > 0) m.box = (m.box + (act == 0 ? 1 : m.a->Boxes() - 1)) % m.a->Boxes();
+        if (m.a) m.box = StepBox(m.box, m.a->Boxes(), a == "Next Box" ? 0 : a == "Previous Box" ? 1 : 2);
         return "";
     }
-    const std::vector<PokemonHub::Mon> mons = MoverBox();
-    const int i = row - 3;
+    if (row == 3)
+    {
+        if (a == "First Free Place") m.put = PokemonHub::ANY_BOX;
+        else if (a == "Party") m.put = PokemonHub::TO_PARTY;
+        else if (m.b) m.put = StepBox(m.put == PokemonHub::TO_PARTY || m.put == PokemonHub::ANY_BOX ? -1 : m.put, m.b->Boxes(), a == "Next Box" ? 0 : 1);
+        return "";
+    }
+    const std::vector<PokemonHub::Mon> mons = MoverList();
+    const int i = row - MOVER_FIRST;
+    if (a == "Cancel Swap") { m.swapping = false; m.put = -1; m.msg.clear(); Focus().pact = -1; return ""; }
     if (i < 0 || i >= (int)mons.size() || !m.a || !m.b) return "";
+    const std::vector<MoverGame> gs = MoverGames();
+    const std::string toName = gs[std::min(m.to, (int)gs.size() - 1)].name;
+    auto nameOf = [](const PokemonHub::Mon& mon) {
+        const std::string n = Shown(mon.nickname, MonName(mon.speciesName));
+        return MonName(n) == MonName(mon.speciesName) ? MonName(mon.speciesName) : n + " (" + MonName(mon.speciesName) + ")";
+    };
     std::string err;
     std::vector<std::string> backups;
-    const std::string name = Shown(mons[i].nickname, MonName(mons[i].speciesName));
-    const std::string toName = MoverGames()[m.to].name;
-    if (!PokemonHub::Move(*m.a, mons[i].box, mons[i].slot, *m.b, acts[act] == "Move And Evolve", err)
+    if (a.rfind("Swap With", 0) == 0)
+    {
+        m.swapping = true;
+        m.swapBox = mons[i].box; m.swapSlot = mons[i].slot; m.swapName = nameOf(mons[i]);
+        if (m.put == PokemonHub::ANY_BOX) m.put = 0;
+        m.msg = "Now choose the Pok\xC3\xA9mon in " + toName + " to swap for " + m.swapName + ".";
+        Focus().prow = MOVER_FIRST; Focus().pact = -1; Focus().rScroll = 0;
+        return "";
+    }
+    if (m.swapping)
+    {
+        const std::string other = nameOf(mons[i]);
+        if (!PokemonHub::Swap(*m.a, m.swapBox, m.swapSlot, *m.b, mons[i].box, mons[i].slot, a == "Swap And Evolve", err)
+            || !PokemonHub::Commit(*m.a, *m.b, err, &backups))
+            m.msg = "Could not swap them. " + err;
+        else
+            m.msg = m.swapName + " and " + other + " swapped. Both saves were backed up first.";
+        m.swapping = false;
+        m.put = -1;
+        Focus().pact = -1;
+        MoverOpenSaves(true);
+        Hub().version++;
+        return "";
+    }
+    const std::string name = nameOf(mons[i]);
+    if (!PokemonHub::Move(*m.a, mons[i].box, mons[i].slot, *m.b, a == "Move And Evolve", err, m.put, -1)
         || !PokemonHub::Commit(*m.a, *m.b, err, &backups))
         m.msg = "Could not move it. " + err;
     else
-        m.msg = name + (mons[i].nickname != mons[i].speciesName && !mons[i].speciesName.empty() ? " (" + MonName(mons[i].speciesName) + ")" : std::string()) + " moved to " + toName + ". Both saves were backed up first.";
+        m.msg = name + " moved to " + toName + " (" + PutLabel() + "). Both saves were backed up first.";
     MoverOpenSaves(true);
     Hub().version++;
+#endif
+    return "";
+}
+// TRADE OVER WI-FI (the Hub's third page, hub_link.h): one of the player's games and its box, the
+// link to the other device, then the box's Pokémon to offer or send. Rows: 0 the game, 1 the box,
+// 2 the link (and what the other side offers), then the Pokémon.
+const int TRADE_FIRST = 3;
+struct TradeState
+{
+    int game = 0, box = 0;
+    std::string msg;
+    int offerBox = 0, offerSlot = 0, offerSpecies = 0; // (where this side's offer came from)
+    std::string checked;                               // (the other side's offer last checked)
+#ifdef SSR_POKEMON_HUB
+    std::unique_ptr<PokemonHub::Save> save;
+    std::string path, err;
+#endif
+};
+inline TradeState& Trade() { static TradeState t; return t; }
+#ifdef SSR_POKEMON_HUB
+inline void TradeOpenSave(bool again = false)
+{
+    TradeState& t = Trade();
+    const std::vector<MoverGame> gs = MoverGames();
+    if (gs.empty()) { t.save.reset(); t.path.clear(); return; }
+    t.game = std::max(0, std::min(t.game, (int)gs.size() - 1));
+    if (again || !t.save || t.path != gs[t.game].path) { t.path = gs[t.game].path; t.err.clear(); t.save = PokemonHub::Save::Open(t.path, t.err, gs[t.game].hack); }
+    if (t.save && t.box != PokemonHub::PARTY) t.box = std::max(0, std::min(t.box, t.save->Boxes() - 1));
+}
+inline std::vector<PokemonHub::Mon> TradeList() { TradeOpenSave(); return MonsIn(Trade().save.get(), Trade().box); }
+inline PokemonHub::Packed TheirPacked(const HubLink::Offer& o)
+{
+    PokemonHub::Packed p;
+    p.generation = o.generation;
+    p.data = o.data;
+    p.game = o.game;
+    return p;
+}
+// (Each time things change: the other side's offer checked against this game, and, once both have
+// said yes, this side's save written.)
+inline void TradeTick()
+{
+    TradeState& t = Trade();
+    const HubLink::Status s = HubLink::Snapshot();
+    if (s.state != HubLink::State::Linked) return;
+    TradeOpenSave();
+    if (s.theirs.any)
+    {
+        const std::string key = std::to_string(s.theirs.data.size()) + "/" + std::to_string(s.theirs.speciesId) + "/" + s.theirs.name + "/" + t.path;
+        if (key != t.checked && t.save)
+        {
+            t.checked = key;
+            const PokemonHub::Check ck = PokemonHub::CanReceive(TheirPacked(s.theirs), *t.save, s.mine.any ? t.offerSpecies : 0);
+            HubLink::TellCheck(ck.verdict == PokemonHub::Verdict::Ok, ck.reason);
+        }
+    }
+    else t.checked.clear();
+    if (!s.finish || !t.save) return;
+    std::string err;
+    std::vector<std::string> backups;
+    bool ok = true;
+    if (s.theirs.any) ok = PokemonHub::Receive(*t.save, TheirPacked(s.theirs), true, s.mine.any ? t.offerSpecies : 0, err);
+    if (ok && s.mine.any) ok = PokemonHub::Remove(*t.save, t.offerBox, t.offerSlot, err);
+    if (ok) ok = PokemonHub::Commit(*t.save, err, &backups);
+    const std::string got = s.theirs.any ? s.theirs.name : std::string();
+    t.msg = !ok ? "It could not be written: " + err
+          : s.mine.any && s.theirs.any ? "Traded! " + got + " arrived. The save was backed up first."
+          : s.theirs.any ? got + " arrived. The save was backed up first." : "Sent. The save was backed up first.";
+    HubLink::FinishDone(ok, ok ? (s.theirs.any ? "Done: " + got + " arrived." : "Done.") : err);
+    TradeOpenSave(true);
+    Hub().version++;
+}
+#endif
+// (The relay's address: fulldex-relay.txt beside the settings, for a test, else the one built in.)
+inline std::string TradeRelay()
+{
+    if (FILE* f = fopen((HubDir() + "/fulldex-relay.txt").c_str(), "rb"))
+    {
+        char b[256] = {};
+        if (!fgets(b, sizeof b, f)) b[0] = 0;
+        fclose(f);
+        std::string r = b;
+        while (!r.empty() && isspace((unsigned char)r.back())) r.pop_back();
+        if (!r.empty()) return r;
+    }
+#ifdef FULLDEX_RELAY_URL
+    return FULLDEX_RELAY_URL;
+#else
+    return "";
+#endif
+}
+inline std::string TradeGameName()
+{
+    const std::vector<MoverGame> gs = MoverGames();
+    return gs.empty() ? std::string() : gs[std::max(0, std::min(Trade().game, (int)gs.size() - 1))].name;
+}
+inline std::string TradeTrainer();
+inline void TradeEnterCode(const std::string& code)
+{
+    if (code.empty()) return;
+    HubLink::Online(TradeRelay(), code, TradeTrainer(), TradeGameName());
+    Hub().version++;
+}
+inline int TradeRows()
+{
+#ifdef SSR_POKEMON_HUB
+    return TRADE_FIRST + (int)TradeList().size();
+#else
+    return TRADE_FIRST;
+#endif
+}
+inline std::string TradeTrainer()
+{
+#ifdef SSR_POKEMON_HUB
+    TradeOpenSave();
+    if (Trade().save) return Shown(Trade().save->Trainer(), "A Trainer");
+#endif
+    return "A Trainer";
+}
+inline std::vector<std::string> TradeActions(int row)
+{
+    std::vector<std::string> r;
+    const std::vector<MoverGame> gs = MoverGames();
+    const HubLink::Status s = HubLink::Snapshot();
+    if (row == 0)
+    {
+        if (s.state == HubLink::State::Linked) return r; // (not while linked: the game is in the trade)
+        for (size_t i = 0; i < gs.size() && i < 7; i++) r.push_back(gs[i].name);
+        return r;
+    }
+    if (row == 1) return { "Next Box", "Previous Box", "Party" };
+    if (row == 2)
+    {
+        switch (s.state)
+        {
+        case HubLink::State::Off: return { "Open A Room", "Join A Room", "Make An Online Code", "Enter An Online Code" };
+        case HubLink::State::Online: return { "Stop" };
+        case HubLink::State::Hosting: return { "Close The Room" };
+        case HubLink::State::Browsing:
+            for (size_t i = 0; i < s.rooms.size() && i < 5; i++) r.push_back("Join " + s.rooms[i].name + " (" + s.rooms[i].game + ")");
+            r.push_back("Stop Looking");
+            return r;
+        case HubLink::State::Linked:
+            if (s.theirs.any && !s.iAccepted)
+            {
+                if (s.theirs.gift && !s.mine.any) r.push_back("Accept The Gift");
+                else if (!s.theirs.gift && s.mine.any && s.theyCanTake) r.push_back("Accept The Trade");
+            }
+            if (s.iAccepted) r.push_back("Not Yet");
+            if (s.mine.any) r.push_back("Take Back My Offer");
+            r.push_back("Leave");
+            return r;
+        }
+        return r;
+    }
+#ifdef SSR_POKEMON_HUB
+    if (s.state != HubLink::State::Linked) return r;
+    const std::vector<PokemonHub::Mon> mons = TradeList();
+    const int i = row - TRADE_FIRST;
+    if (i < 0 || i >= (int)mons.size() || !Trade().save) return r;
+    if (PokemonHub::CanRemove(*Trade().save, mons[i].box, mons[i].slot).verdict != PokemonHub::Verdict::Ok) return r;
+    r.push_back("Offer For A Trade");
+    r.push_back("Send As A Gift");
+#endif
+    return r;
+}
+inline std::string TradeDo(int row, int act)
+{
+    TradeState& t = Trade();
+    const std::vector<std::string> acts = TradeActions(row);
+    if (act < 0 || act >= (int)acts.size()) return "";
+    const std::string a = acts[act];
+    const std::vector<MoverGame> gs = MoverGames();
+    const HubLink::Status s = HubLink::Snapshot();
+    Hub().version++;
+    if (row == 0) { t.game = act; t.box = 0; return ""; }
+#ifdef SSR_POKEMON_HUB
+    TradeOpenSave();
+    if (row == 1) { if (t.save) t.box = StepBox(t.box, t.save->Boxes(), a == "Next Box" ? 0 : a == "Previous Box" ? 1 : 2); return ""; }
+    const std::string game = gs.empty() ? std::string() : gs[std::min(t.game, (int)gs.size() - 1)].name;
+    if (row == 2)
+    {
+        if (a == "Open A Room") HubLink::Host(TradeTrainer(), game);
+        else if (a == "Join A Room") HubLink::Browse(TradeTrainer(), game);
+        else if (a == "Close The Room" || a == "Stop Looking" || a == "Leave" || a == "Stop") HubLink::Leave();
+        else if ((a == "Make An Online Code" || a == "Enter An Online Code") && TradeRelay().empty()) t.msg = "Online trades are not set up in this build of Fulldex.";
+        else if (a == "Make An Online Code") HubLink::Online(TradeRelay(), HubLink::NewCode(), TradeTrainer(), game);
+        else if (a == "Enter An Online Code") { GlassFocus& K = Focus(); K.kbFor = 4; K.text.clear(); K.dialog = 3; K.drow = 0; t.msg.clear(); }
+        else if (a.rfind("Join ", 0) == 0 && act < (int)s.rooms.size()) HubLink::Join(s.rooms[act]);
+        else if (a == "Accept The Gift" || a == "Accept The Trade") HubLink::Accept(true);
+        else if (a == "Not Yet") HubLink::Accept(false);
+        else if (a == "Take Back My Offer") HubLink::SetOffer(HubLink::Offer());
+        Focus().pact = -1;
+        return "";
+    }
+    const std::vector<PokemonHub::Mon> mons = TradeList();
+    const int i = row - TRADE_FIRST;
+    if (i < 0 || i >= (int)mons.size() || !t.save) return "";
+    PokemonHub::Packed p;
+    std::string err;
+    if (!PokemonHub::Pack(*t.save, mons[i].box, mons[i].slot, p, err)) { t.msg = "It cannot be sent. " + err; return ""; }
+    HubLink::Offer o;
+    o.any = true;
+    o.gift = a == "Send As A Gift";
+    o.generation = p.generation;
+    o.data = p.data;
+    o.name = Shown(mons[i].nickname, MonName(mons[i].speciesName));
+    o.species = MonName(mons[i].speciesName);
+    o.game = game;
+    o.speciesId = mons[i].species;
+    o.level = mons[i].level;
+    o.shiny = mons[i].shiny;
+    t.offerBox = mons[i].box; t.offerSlot = mons[i].slot; t.offerSpecies = mons[i].species;
+    HubLink::SetOffer(o);
+    t.msg.clear();
+    Focus().prow = 2; Focus().pact = -1;
 #endif
     return "";
 }
@@ -1818,6 +2146,7 @@ inline void MoverShow(bool open)
     MoverState& m = Mover();
     m.open = open;
     m.msg.clear();
+    m.swapping = false;
     if (open && m.from == m.to) m.to = m.from == 0 ? 1 : 0;
     Hub().version++;
 }
@@ -1840,11 +2169,25 @@ inline void DrawCloud(Canvas& c, float cx, float cy, float s, uint32_t col)
     Glass::Round(c, (int)(cx - s * 0.7f), (int)(cy - s * 0.5f), (int)(s * 0.85f), (int)(s * 0.85f), s * 0.42f, col);
     Glass::Round(c, (int)(cx - s * 0.15f), (int)(cy - s * 0.8f), (int)(s * 1.0f), (int)(s * 1.0f), s * 0.5f, col);
 }
-inline int HubRows() { return Mover().open ? MoverRows() : HUB_FIRST + (int)HubGames().size(); }
+// A on the Hub's first page: Cloud Saves or Move Pokémon opened. (False: not that page.)
+inline bool HubEnter(int row)
+{
+    if (Mover().open || HubMode() != 0) return false;
+    GlassFocus& F = Focus();
+    if (row == 0) { HubMode() = 1; F.prow = 0; }
+    else if (row == 2) { HubMode() = 2; F.prow = 2; }
+    else { MoverShow(true); F.prow = MOVER_FIRST; }
+    F.pact = -1; F.rScroll = 0;
+    Hub().version++;
+    return true;
+}
+inline bool HubTop() { return !Mover().open && HubMode() == 0; }
+inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 3 : HubMode() == 2 ? TradeRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
     if (Mover().open) return MoverActions(row);
-    if (row == 1) return { "Choose Pok\xC3\xA9mon" };
+    if (HubMode() == 2) return TradeActions(row);
+    if (HubMode() == 0) return {};
     HubLoad();
     const std::vector<HubGame> games = HubGames();
     HubState& h = Hub();
@@ -1958,7 +2301,7 @@ inline void HubStart(std::function<void()> job)
 inline std::string HubDo(int row, int act)
 {
     if (Mover().open) return MoverDo(row, act);
-    if (row == 1) { MoverShow(true); Focus().prow = 3; Focus().pact = -1; Focus().rScroll = 0; return ""; }
+    if (HubMode() == 2) return TradeDo(row, act);
     const std::vector<std::string> acts = HubActions(row);
     if (act < 0 || act >= (int)acts.size()) return "";
     const std::string a = acts[act];
@@ -2018,10 +2361,41 @@ inline std::string HubStatus(const CloudSaves::Result* r, bool on, uint32_t& col
 }
 // The sidebar's pages (About; the others to come): page, the section shown (-1: the games); prow the
 // row chosen in its list; pX..pRow where its rows were drawn (for taps).
-inline int PageRows(int page) { return page == SIDE_ABOUT ? 4 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
+// A QR code (support_qr.h) on white, with the quiet edge round it that phones need.
+inline void DrawQr(Canvas& c, const char* const* rows, int n, int x, int y, int size)
+{
+    const int q = n + 8;
+    Glass::Round(c, x, y, size, size, size * 0.05f, 0xFFFFFFFFu);
+    const float m = size / (float)q;
+    for (int r = 0; r < n; r++)
+        for (int k = 0; k < n; k++)
+            if (rows[r][k] == '#')
+            {
+                const int x0 = x + (int)((k + 4) * m), y0 = y + (int)((r + 4) * m), x1 = x + (int)((k + 5) * m), y1 = y + (int)((r + 5) * m);
+                for (int yy = std::max(0, y0); yy < std::min(c.h, y1); yy++)
+                    for (int xx = std::max(0, x0); xx < std::min(c.w, x1); xx++) c.px[(size_t)yy * c.w + xx] = 0xFF000000u;
+            }
+}
+// The one message after 20 hours of play (PlayTime::AskNow): a beer, if they like.
+inline void OpenBeer()
+{
+    GlassFocus& F = Focus();
+    F.dialog = 10;
+    F.drow = 0;
+    F.dTitle = "Enjoying Fulldex?";
+    F.dMsg = "You've played for over 20 hours. Fulldex is free, made by one dude in his spare time: if it's given you some good hours, consider buying me a beer. Scan the code with your phone. Cheers, James";
+#if defined(__SWITCH__)
+    F.dItems = { "Done" };
+    F.dPaths = { "#close" };
+#else
+    F.dItems = { "Buy Me A Beer", "Maybe Later" };
+    F.dPaths = { "#beer", "#close" };
+#endif
+}
+inline int PageRows(int page) { return page == SIDE_ABOUT ? 5 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
 inline std::string AboutUrl(int row)
 {
-    return row == 1 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 3 ? "https://github.com/mamesj/pokemon-fulldex" : "";
+    return row == 0 ? "https://buymeacoffee.com/mamesj" : row == 2 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 4 ? "https://github.com/mamesj/pokemon-fulldex" : "";
 }
 // The page a row of a page opens (none: "").
 inline std::string PageUrl(int page, int row)
@@ -2110,7 +2484,10 @@ inline bool PageBack()
 {
     GlassFocus& F = Focus();
     if (F.page < 0) return false;
-    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); F.prow = 1; F.rScroll = 0; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() != 0) { HubMode() = 0; F.prow = 0; F.rScroll = 0; Hub().version++; return true; }
     if ((F.page == SIDE_ROMS || F.page == SIDE_HUB) && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
     if (F.side < 0) F.side = F.page;
     else { F.page = -1; F.side = SIDE_HOME; }
@@ -2121,6 +2498,7 @@ inline bool OpenSide(int side)
 {
     GlassFocus& F = Focus();
     if (side == SIDE_HOME) { F.page = -1; F.side = -1; return true; }
+    if (side == SIDE_HUB) { HubMode() = 0; Mover().open = false; Hub().version++; }
     if (PageRows(side) > 0) { F.page = side; F.prow = 0; F.side = -1; F.nScroll = 0; F.pact = -1; F.rScroll = 0; return true; }
     return false;
 }
@@ -2239,7 +2617,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -2389,6 +2767,327 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         F.sX = L; F.sY = top; F.sW = R - L; F.sH = bottom - top; F.sListW = lw2; F.sPvX = R - rw;
         return;
     }
+    if (F.page == SIDE_HUB && !Mover().open && HubMode() == 2)
+    {
+        TradeState& t = Trade();
+#ifdef SSR_POKEMON_HUB
+        TradeTick();
+#endif
+        const HubLink::Status s = HubLink::Snapshot();
+        const std::vector<MoverGame> gs = MoverGames();
+        const std::vector<std::string> acts = HubActions(F.prow);
+        auto fit = [&](std::string str, float px, bool bold, int w) {
+            if (GW(str, px, bold) <= w) return str;
+            while (!str.empty() && GW(str + "...", px, bold) > w)
+            {
+                while (!str.empty() && ((unsigned char)str.back() & 0xC0) == 0x80) str.pop_back();
+                if (!str.empty()) str.pop_back();
+            }
+            return str + "...";
+        };
+        const uint32_t okCol = 0xFF8FE3A2u, noCol = 0xFFF2C46Bu, linkCol = 0xFF8CC8FFu;
+        const std::string game = gs.empty() ? std::string("-") : gs[std::max(0, std::min(t.game, (int)gs.size() - 1))].name;
+        std::string linkV, linkChip;
+        uint32_t linkCol2 = hint;
+        switch (s.state)
+        {
+        case HubLink::State::Off: linkV = "Not Linked"; linkChip = "Same Wi-Fi"; break;
+        case HubLink::State::Hosting: linkV = "Room " + std::to_string(s.code); linkChip = "Waiting"; linkCol2 = noCol; break;
+        case HubLink::State::Browsing: linkV = "Looking For Rooms"; linkChip = std::to_string(s.rooms.size()) + " Found"; linkCol2 = linkCol; break;
+        case HubLink::State::Linked: linkV = "Linked With " + s.peerName; linkChip = s.onlineCode.empty() ? s.peerGame : "Online"; linkCol2 = okCol; break;
+        case HubLink::State::Online: linkV = "Code " + s.onlineCode; linkChip = "Waiting Online"; linkCol2 = noCol; break;
+        }
+#ifdef SSR_POKEMON_HUB
+        const std::vector<PokemonHub::Mon> mons = TradeList();
+#else
+        const std::vector<int> mons;
+#endif
+        const int n = TradeRows();
+        const int rw = (int)(380 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(12 * u);
+        const int rowH = (int)(46 * u), rg = (int)(6 * u);
+        Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
+        const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
+        F.prow = std::max(0, std::min(F.prow, n - 1));
+        if (F.pact >= (int)acts.size()) F.pact = acts.empty() ? -1 : (int)acts.size() - 1;
+        if (F.prow < F.rScroll) F.rScroll = F.prow;
+        if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+        F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
+        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
+        for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
+        {
+            const int rx = L + pad, ry = top + pad + (i - F.rScroll) * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+            if (i == F.prow)
+            {
+                if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            std::string k, v, chip, spn;
+            uint32_t chipCol = hint;
+            std::vector<uint32_t> ic;
+            if (i == 0) { k = "Game"; v = game; }
+            else if (i == 1) { k = "Box"; v = "-"; }
+            else if (i == 2) { k = "Link"; v = linkV; chip = linkChip; chipCol = linkCol2; }
+#ifdef SSR_POKEMON_HUB
+            if (i == 0 && t.save) chip = Shown(t.save->Trainer(), "-");
+            if (i == 1 && t.save) { v = BoxLabel(t.save.get(), t.box); chip = std::to_string(mons.size()) + " Pok\xC3\xA9mon"; }
+            if (i >= TRADE_FIRST)
+            {
+                const PokemonHub::Mon& mon = mons[i - TRADE_FIRST];
+                k = mon.egg ? std::string("Egg") : "Lv " + std::to_string(mon.level);
+                v = Shown(mon.nickname, MonName(mon.speciesName));
+                if (!mon.egg) spn = MonName(mon.speciesName);
+                if (s.mine.any && t.offerBox == mon.box && t.offerSlot == mon.slot) { chip = s.mine.gift ? "Sending" : "Offered"; chipCol = linkCol; }
+                if (MonIcon(mon.species, mon.egg, ic)) DrawMonIcon(c, ic, rx + (int)(2 * u), mid - (int)(21 * u), (int)(40 * u));
+                if (mon.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, rx + 38 * u, mid - 12 * u, 6 * u, 0xFFF2C46Bu);
+            }
+#endif
+            if (i < TRADE_FIRST) Glass::DrawIcon(c, i == 1 ? Glass::I_GRID : i == 2 ? Glass::I_GLOBE : Glass::I_POKEBALL, rx + 18 * u, mid, 9 * u, text);
+            if (!chip.empty())
+            {
+                const int chipW = GW(chip, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(10 * u) - chipW;
+                Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+                GT(c, chipX + (int)(10 * u), mid, chip, 12 * u, chipCol, true);
+            }
+            GT(c, rx + (int)(48 * u), mid, k, 13 * u, hint, true);
+            GT(c, rx + (int)(118 * u), mid, fit(v, 16 * u, true, (int)(230 * u)), 16 * u, text, true);
+            if (!spn.empty() && MonName(v) != spn)
+                GT(c, rx + (int)(118 * u) + std::min(GW(v, 16 * u, true), (int)(230 * u)) + (int)(12 * u), mid, spn, 14 * u, hint, true);
+        }
+        if (n > vis)
+        {
+            const int tx = L + lw2 - (int)(7 * u), ty = top + (int)(16 * u), th = bottom - top - (int)(32 * u);
+            Glass::Round(c, tx, ty, (int)(3 * u), th, 1.5f * u, 0x26FFFFFFu);
+            const int thumbH = std::max((int)(24 * u), th * vis / n), thumbY = ty + (th - thumbH) * F.rScroll / std::max(1, n - vis);
+            Glass::Round(c, tx, thumbY, (int)(3 * u), thumbH, 1.5f * u, 0xCCFFFFFFu);
+        }
+        // The panel: the link, both offers, or the chosen row.
+        const int dx = R - rw, ix = dx + (int)(20 * u), iw = rw - (int)(40 * u);
+        Menu::FrostBox(c, solid, dx, top, rw, bottom - top, 18 * u);
+        int y = top + (int)(20 * u);
+        auto para = [&](const std::string& str, uint32_t col, float px) {
+            for (const std::string& line : WrapLines(str, px, iw)) { GT(c, ix, y + px * 0.6f, line, px, col, false); y += (int)(px * 1.45f); }
+            y += (int)(8 * u);
+        };
+        auto offerCard = [&](const char* who, const HubLink::Offer& o, const std::string& under, uint32_t underCol) {
+            const int ch = (int)(78 * u);
+            Glass::Round(c, ix, y, iw, ch, 14 * u, 0x1AFFFFFFu, 0x3DFFFFFF, 1.0f * u);
+            GT(c, ix + (int)(14 * u), y + 16 * u, who, 12 * u, hint, true);
+            std::vector<uint32_t> oi;
+#ifdef SSR_POKEMON_HUB
+            if (o.any && MonIcon(o.speciesId, false, oi)) DrawMonIcon(c, oi, ix + iw - (int)(70 * u), y + (int)(6 * u), (int)(64 * u));
+#endif
+            if (o.any)
+            {
+                GT(c, ix + (int)(14 * u), y + 40 * u, fit(Shown(o.name, o.species) + (o.shiny ? "   \xC2\xB7   Shiny" : ""), 17 * u, true, iw - (int)(90 * u)), 17 * u, text, true);
+                GT(c, ix + (int)(14 * u), y + 62 * u, fit(o.species + "   \xC2\xB7   Lv " + std::to_string(o.level) + "   \xC2\xB7   " + o.game, 12 * u, true, iw - (int)(90 * u)), 12 * u, hint, true);
+            }
+            else GT(c, ix + (int)(14 * u), y + 46 * u, "Nothing yet", 15 * u, hint, true);
+            y += ch + (int)(6 * u);
+            if (!under.empty()) para(under, underCol, 12 * u);
+            else y += (int)(6 * u);
+        };
+        if (F.prow == 2 || (s.state == HubLink::State::Linked && F.prow >= TRADE_FIRST && s.mine.any))
+        {
+            GT(c, ix, y + 14 * u, s.state == HubLink::State::Linked ? "Linked With " + s.peerName : "Trade", 20 * u, text, true);
+            y += (int)(40 * u);
+            if (s.state == HubLink::State::Off)
+            {
+                para("Trade with a friend, or send Pok\xC3\xA9mon to another of your own devices, on the same Wi-Fi.", text, 14 * u);
+                para("Same Wi-Fi: one device chooses Open A Room, the other Join A Room. Online: one makes a code, the other enters it. Then each offers a Pok\xC3\xA9mon, or sends one as a gift.", hint, 13 * u);
+            }
+            else if (s.state == HubLink::State::Online)
+            {
+                para("Your code:", hint, 13 * u);
+                const int bh = (int)(70 * u);
+                Glass::Round(c, ix, y, iw, bh, 14 * u, 0x24FFFFFFu, 0x3DFFFFFF, 1.0f * u);
+                GT(c, ix + (iw - GW(s.onlineCode, 34 * u, true)) / 2, y + bh * 0.5f, s.onlineCode, 34 * u, text, true);
+                y += bh + (int)(16 * u);
+                para("The other player chooses Hub, Trade, Enter An Online Code, and types it. Share it on Discord or in a message. It works for a few minutes.", hint, 13 * u);
+            }
+            else if (s.state == HubLink::State::Hosting) para("Room " + std::to_string(s.code) + " is open. On the other device: Hub, Trade Over Wi-Fi, Join A Room.", hint, 13 * u);
+            if (!s.myAddress.empty() && s.state != HubLink::State::Linked) para("This device: " + s.myAddress, hint, 12 * u);
+            else if (s.state == HubLink::State::Browsing) para(s.rooms.empty() ? "Looking for rooms on this network. Open one on the other device." : "Rooms on this network are listed below: choose one to join.", hint, 13 * u);
+            else
+            {
+                std::string mineUnder, theirUnder;
+                uint32_t mineCol = hint, theirCol = hint;
+                if (s.mine.any) { mineUnder = s.theirReason.empty() && !s.theyCanTake ? "Waiting for " + s.peerName + "'s game to check it..." : s.theyCanTake ? s.peerName + "'s game can take it." : "Their game can't take it: " + SettingSentence(s.theirReason); mineCol = s.theyCanTake ? okCol : noCol; }
+#ifdef SSR_POKEMON_HUB
+                if (s.theirs.any && t.save)
+                {
+                    const PokemonHub::Check ck = PokemonHub::CanReceive(TheirPacked(s.theirs), *t.save, s.mine.any ? t.offerSpecies : 0);
+                    theirUnder = ck.verdict == PokemonHub::Verdict::Ok ? (ck.evolvesTo ? SettingSentence(ck.evolution) + "." : game + " can take it.") : "Your game can't take it: " + SettingSentence(ck.reason);
+                    theirCol = ck.verdict == PokemonHub::Verdict::Ok ? okCol : noCol;
+                }
+#endif
+                offerCard(s.mine.any && s.mine.gift ? "You Send" : "You Offer", s.mine, mineUnder, mineCol);
+                offerCard(s.theirs.any && s.theirs.gift ? (s.peerName + " Sends").c_str() : (s.peerName + " Offers").c_str(), s.theirs, theirUnder, theirCol);
+                if (s.iAccepted || s.theyAccepted)
+                    para(std::string(s.iAccepted ? "You said yes. " : "") + (s.theyAccepted ? s.peerName + " said yes." : "Waiting for " + s.peerName + "..."), linkCol, 13 * u);
+            }
+        }
+        else if (F.prow == 0) { GT(c, ix, y + 14 * u, game, 20 * u, text, true); y += (int)(40 * u); para(s.state == HubLink::State::Linked ? "Leave the link to change the game." : "The game to trade from and into.", hint, 13 * u); }
+        else if (F.prow == 1) { GT(c, ix, y + 14 * u, "Box", 20 * u, text, true); y += (int)(40 * u); para("Next Box and Previous Box go through its boxes; Party shows the Pok\xC3\xA9mon with you.", hint, 13 * u); }
+#ifdef SSR_POKEMON_HUB
+        else if (F.prow - TRADE_FIRST < (int)mons.size())
+        {
+            const PokemonHub::Mon& mon = mons[F.prow - TRADE_FIRST];
+            std::vector<uint32_t> big;
+            const int bs = (int)(96 * u);
+            if (MonIcon(mon.species, mon.egg, big)) DrawMonIcon(c, big, ix + iw - bs, y - (int)(18 * u), bs);
+            GT(c, ix, y + 14 * u, fit(Shown(mon.nickname, MonName(mon.speciesName)), 22 * u, true, iw - bs), 22 * u, text, true);
+            GT(c, ix, y + 42 * u, (mon.egg ? std::string("Egg") : MonName(mon.speciesName)) + (mon.shiny ? "   \xC2\xB7   Shiny" : ""), 15 * u, mon.shiny ? 0xFFF2C46Bu : hint, true);
+            y += (int)(72 * u);
+            if (s.state != HubLink::State::Linked) para("Link with the other device first: the Link row above.", hint, 13 * u);
+            else
+            {
+                const PokemonHub::Check rm = t.save ? PokemonHub::CanRemove(*t.save, mon.box, mon.slot) : PokemonHub::Check();
+                para(rm.verdict == PokemonHub::Verdict::Ok ? "Offer it for a trade (one each way, both say yes), or send it as a gift." : SettingSentence(rm.reason), rm.verdict == PokemonHub::Verdict::Ok ? hint : noCol, 13 * u);
+            }
+        }
+#endif
+        const int na = (int)acts.size(), ah = (int)(44 * u), ag = (int)(6 * u);
+        const int ay = bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag;
+        const std::string word = !t.msg.empty() ? t.msg : s.note;
+        if (!word.empty())
+        {
+            const std::vector<std::string> ml = WrapLines(word, 13 * u, iw);
+            int my = ay - (int)(14 * u) - (int)ml.size() * (int)(19 * u);
+            if (my > y) for (const std::string& line : ml) { GT(c, ix, my + 8 * u, line, 13 * u, linkCol, true); my += (int)(19 * u); }
+        }
+        F.aX = ix; F.aY = ay; F.aW = na > 0 ? iw : 0; F.aRow = ah + ag;
+        for (int a = 0; a < na; a++)
+        {
+            const int ry = ay + a * (ah + ag);
+            if (a == F.pact)
+            {
+                if (F.side < 0) Glass::Glow(c, ix, ry, iw, ah, 12 * u, u);
+                Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            else Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+            const int icon = F.prow == 1 ? Glass::I_GRID : F.prow == 2 ? (acts[a] == "Leave" || acts[a] == "Not Yet" || acts[a] == "Stop Looking" || acts[a] == "Close The Room" || acts[a] == "Take Back My Offer" ? Glass::I_BACK : Glass::I_GLOBE) : F.prow >= TRADE_FIRST ? Glass::I_PEOPLE : Glass::I_POKEBALL;
+            Glass::DrawIcon(c, icon, ix + 22 * u, ry + ah * 0.5f, 9 * u, text);
+            GT(c, ix + (int)(42 * u), ry + ah * 0.5f, fit(acts[a], 15 * u, true, iw - (int)(60 * u)), 15 * u, text, true);
+        }
+        return;
+    }
+    if (F.page == SIDE_HUB && !Mover().open && HubMode() == 0)
+    {
+        // The Hub's first page: what it holds, each opened with A.
+        HubLoad();
+        const std::vector<HubGame> games = HubGames();
+        HubState& h = Hub();
+        std::unique_lock<std::mutex> lk(h.m);
+        const bool on = HubOnLocked(h);
+        const int busy = h.busy;
+        const std::string msg = h.msg, prov = h.set.provider;
+        const std::string dev = h.set.deviceName.empty() ? HubDevice() : h.set.deviceName;
+        int synced = 0;
+        for (const HubGame& g : games)
+        {
+            const auto it = h.results.find(g.path);
+            if (h.synced.count(g.g ? g.g->saveName : std::string()) || (it != h.results.end() && (it->second.outcome == CloudSaves::Outcome::InSync || it->second.outcome == CloudSaves::Outcome::Pushed || it->second.outcome == CloudSaves::Outcome::Pulled))) synced++;
+        }
+        lk.unlock();
+        const int moverGames = (int)MoverGames().size();
+        const int rw = (int)(400 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(14 * u);
+        const int rowH = (int)(72 * u), rg = (int)(10 * u), n = 3;
+        const HubLink::Status link = HubLink::Snapshot();
+        Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
+        F.prow = std::max(0, std::min(F.prow, n - 1));
+        F.pact = -1;
+        F.rScroll = 0;
+        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = n;
+        F.aW = 0;
+        for (int i = 0; i < n; i++)
+        {
+            const int rx = L + pad, ry = top + pad + i * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+            if (i == F.prow)
+            {
+                if (F.side < 0) Glass::Glow(c, rx, ry, rww, rowH, 14 * u, u);
+                Glass::Round(c, rx, ry, rww, rowH, 14 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            else Glass::Round(c, rx, ry, rww, rowH, 14 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+            std::string name, sub, st;
+            uint32_t col = 0xFFAEB7C4u;
+            if (i == 0)
+            {
+                name = "Cloud Saves";
+                sub = on ? std::string(HubProvider(prov)) + "   \xC2\xB7   " + std::to_string(synced) + " of " + std::to_string(games.size()) + " up to date"
+                         : "Keep your saves the same on every device";
+                if (busy == 1) { st = "Signing In"; col = 0xFFF2C46Bu; }
+                else if (busy == 2) { st = "Syncing"; col = 0xFF8CC8FFu; }
+                else if (on) { st = "On"; col = 0xFF8FE3A2u; }
+                else st = "Off";
+            }
+            else if (i == 2)
+            {
+                name = "Trade";
+                sub = "With a friend online or on the same Wi-Fi, or to another of your devices";
+                st = link.state == HubLink::State::Linked ? "Linked" : link.state == HubLink::State::Online ? "Online" : link.state == HubLink::State::Hosting ? "Room Open" : link.state == HubLink::State::Browsing ? "Looking" : "Same Wi-Fi";
+                if (link.state != HubLink::State::Off) col = 0xFF8CC8FFu;
+            }
+            else
+            {
+                name = "Move Pok\xC3\xA9mon";
+                sub = "Between your own games, as a trade would";
+                st = std::to_string(moverGames) + (moverGames == 1 ? " Save" : " Saves");
+            }
+            Glass::DrawIcon(c, i == 0 ? Glass::I_GLOBE : i == 2 ? Glass::I_PEOPLE : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
+            GT(c, rx + (int)(60 * u), mid - 11 * u, name, 18 * u, text, true);
+            GT(c, rx + (int)(60 * u), mid + 13 * u, sub, 13 * u, hint, false);
+            const int chipW = GW(st, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(46 * u) - chipW;
+            Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+            GT(c, chipX + (int)(10 * u), mid, st, 12 * u, col, true);
+            GT(c, rx + rww - (int)(26 * u), mid, ">", 16 * u, hint, true);
+        }
+        // The chosen one: what it does, how it stands.
+        const int dx = R - rw, ix = dx + (int)(22 * u), iw = rw - (int)(44 * u);
+        Menu::FrostBox(c, solid, dx, top, rw, bottom - top, 18 * u);
+        int y = top + (int)(22 * u);
+        auto para = [&](const std::string& s, uint32_t col, float px) {
+            for (const std::string& line : WrapLines(s, px, iw)) { GT(c, ix, y + px * 0.6f, line, px, col, false); y += (int)(px * 1.45f); }
+            y += (int)(8 * u);
+        };
+        auto cell = [&](int cx, int cy, int cw, const std::string& k, const std::string& v) {
+            GT(c, cx, cy + 8 * u, k, 12 * u, hint, true);
+            GT(c, cx, cy + 28 * u, v, 15 * u, text, true);
+            (void)cw;
+        };
+        GT(c, ix, y + 14 * u, F.prow == 0 ? "Cloud Saves" : F.prow == 2 ? "Trade" : "Move Pok\xC3\xA9mon", 22 * u, text, true);
+        y += (int)(44 * u);
+        if (F.prow == 0)
+        {
+            if (on)
+            {
+                cell(ix, y, iw / 2, "Saved To", HubProvider(prov));
+                cell(ix + iw / 2, y, iw / 2, "This Device", dev);
+                y += (int)(52 * u);
+                cell(ix, y, iw / 2, "Up To Date", std::to_string(synced) + " of " + std::to_string(games.size()));
+                y += (int)(60 * u);
+                para("Saves sync when a game starts and when it closes, and the DS games after each save too. Open it to sync now, see each game, or choose which save to keep.", hint, 13 * u);
+            }
+            else
+            {
+                para("Keep your saves the same on every device: play on your PC, then carry on on the Switch.", text, 14 * u);
+                para("Open it to sign in with Google. Your saves go to your own Drive, in a folder called Fulldex Cloud Saves.", hint, 13 * u);
+            }
+            if (!msg.empty()) para(msg, busy ? 0xFF8CC8FFu : hint, 13 * u);
+        }
+        else if (F.prow == 2)
+        {
+            para("Trade with a friend, online or on the same Wi-Fi, or send Pok\xC3\xA9mon to another of your own devices: a PC and a Switch, say.", text, 14 * u);
+            para("Trades follow the real games' rules: one each way, both say yes, and those that evolve by trading evolve, Karrablast and Shelmet too. Each save is backed up before it is written.", hint, 13 * u);
+        }
+        else
+        {
+            para("Move a Pok\xC3\xA9mon from one of your games to another, as a trade between them would.", text, 14 * u);
+            para("They can go to a newer game, never an older one. Fulldex says first what one would lose on the way, and backs up both saves before it writes them.", hint, 13 * u);
+            cell(ix, y, iw, "Games With A Save", std::to_string(moverGames));
+            y += (int)(56 * u);
+        }
+        return;
+    }
     if (F.page == SIDE_HUB && Mover().open)
     {
         MoverState& m = Mover();
@@ -2403,19 +3102,22 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             }
             return s + "...";
         };
-        const uint32_t okCol = 0xFF8FE3A2u, noCol = 0xFFF2C46Bu, greyCol = 0xFFAEB7C4u;
+        const uint32_t okCol = 0xFF8FE3A2u, noCol = 0xFFF2C46Bu, greyCol = 0xFFAEB7C4u, swapCol = 0xFF8CC8FFu;
+        const std::string fromName = gs.empty() ? std::string("-") : gs[std::max(0, std::min(m.from, (int)gs.size() - 1))].name;
+        const std::string toName = gs.empty() ? std::string("-") : gs[std::max(0, std::min(m.to, (int)gs.size() - 1))].name;
 #ifdef SSR_POKEMON_HUB
-        const std::vector<PokemonHub::Mon> mons = MoverBox();
+        const std::vector<PokemonHub::Mon> mons = MoverList();
         auto check = [&](const PokemonHub::Mon& mon) {
             PokemonHub::Check ck;
             if (!m.a || !m.b) { ck.verdict = PokemonHub::Verdict::Empty; ck.reason = "That game's save could not be read."; }
             else if (m.from == m.to) { ck.verdict = PokemonHub::Verdict::Empty; ck.reason = "Choose two different games."; }
-            else ck = PokemonHub::CanMove(*m.a, mon.box, mon.slot, *m.b);
+            else if (m.swapping) ck = PokemonHub::CanSwap(*m.a, m.swapBox, m.swapSlot, *m.b, mon.box, mon.slot);
+            else ck = PokemonHub::CanMoveTo(*m.a, mon.box, mon.slot, *m.b, m.put, -1);
             return ck;
         };
+#else
+        const std::vector<int> mons;
 #endif
-        const std::string fromName = gs.empty() ? std::string("-") : gs[std::max(0, std::min(m.from, (int)gs.size() - 1))].name;
-        const std::string toName = gs.empty() ? std::string("-") : gs[std::max(0, std::min(m.to, (int)gs.size() - 1))].name;
         const int n = MoverRows();
         const int rw = (int)(360 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(12 * u);
         const int rowH = (int)(46 * u), rg = (int)(6 * u);
@@ -2435,42 +3137,59 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
                 Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
             }
+            else if (m.swapping && i == 3) Glass::Round(c, rx, ry, rww, rowH, 12 * u, 0x1A8CC8FFu);
             std::string k, v, chip, spn;
             std::vector<uint32_t> ic;
-            uint32_t col = greyCol;
+            uint32_t col = greyCol, chipCol = hint;
+            int icon = Glass::I_POKEBALL;
             if (i == 0) { k = "From"; v = fromName; }
-            else if (i == 1) { k = "Box"; v = "-"; }
+            else if (i == 1) { k = "Box"; v = "-"; icon = Glass::I_GRID; }
             else if (i == 2) { k = "To"; v = toName; }
+            else if (i == 3) { k = m.swapping ? "Swap In" : "Put In"; v = "-"; icon = m.swapping ? Glass::I_GRID : Glass::I_LOAD; }
 #ifdef SSR_POKEMON_HUB
             if (i == 0 && m.a) chip = Shown(m.a->Trainer(), "-");
             if (i == 2 && m.b) chip = Shown(m.b->Trainer(), "-");
-            if (i == 1 && m.a) { v = Shown(m.a->BoxName(m.box), "Box " + std::to_string(m.box + 1)); chip = std::to_string(mons.size()) + (mons.size() == 1 ? " Pok\xC3\xA9mon" : " Pok\xC3\xA9mon"); }
-            if (i >= 3)
+            if (i == 1 && m.a)
             {
-                const PokemonHub::Mon& mon = mons[i - 3];
+                v = BoxLabel(m.a.get(), m.box);
+                const size_t cnt = MonsIn(m.a.get(), m.box).size();
+                chip = std::to_string(cnt) + " Pok\xC3\xA9mon";
+            }
+            if (i == 3)
+            {
+                v = m.swapping ? BoxLabel(m.b.get(), MoverTargetBox()) : PutLabel();
+                if (m.swapping) { chip = "Swapping " + m.swapName; chipCol = swapCol; }
+                else if (m.b && m.put >= 0) chip = std::to_string(30 - (int)MonsIn(m.b.get(), m.put).size()) + " Free";
+                else if (m.b && m.put == PokemonHub::TO_PARTY) chip = std::to_string(6 - (int)PokemonHub::Party(*m.b).size()) + " Free";
+            }
+            if (i >= MOVER_FIRST)
+            {
+                const PokemonHub::Mon& mon = mons[i - MOVER_FIRST];
                 const PokemonHub::Check ck = check(mon);
                 col = ck.verdict == PokemonHub::Verdict::Ok ? okCol : noCol;
                 k = mon.egg ? std::string("Egg") : "Lv " + std::to_string(mon.level);
                 v = Shown(mon.nickname, MonName(mon.speciesName));
                 if (!mon.egg && !mon.speciesName.empty()) spn = MonName(mon.speciesName);
+                chip = ck.verdict == PokemonHub::Verdict::Ok ? (m.swapping ? (ck.evolvesTo ? "Can Swap, Evolves" : "Can Swap") : (ck.evolvesTo ? "Can Move, Evolves" : "Can Move"))
+                                                             : (m.swapping ? "Can't Swap" : "Can't Move");
+                chipCol = col;
                 if (MonIcon(mon.species, mon.egg, ic)) DrawMonIcon(c, ic, rx + (int)(2 * u), mid - (int)(21 * u), (int)(40 * u));
+                else Glass::Round(c, rx + (int)(14 * u), mid - (int)(4 * u), (int)(8 * u), (int)(8 * u), 4 * u, col);
                 if (mon.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, rx + 38 * u, mid - 12 * u, 6 * u, 0xFFF2C46Bu);
-                chip = ck.verdict == PokemonHub::Verdict::Ok ? (ck.evolvesTo ? "Can Move, Evolves" : "Can Move") : "Can't Move";
-                if (ic.empty()) Glass::Round(c, rx + (int)(14 * u), mid - (int)(4 * u), (int)(8 * u), (int)(8 * u), 4 * u, col);
             }
 #endif
-            if (i < 3) Glass::DrawIcon(c, i == 1 ? Glass::I_GRID : Glass::I_POKEBALL, rx + 18 * u, mid, 9 * u, text);
+            if (i < MOVER_FIRST) Glass::DrawIcon(c, icon, rx + 18 * u, mid, 9 * u, text);
             if (!chip.empty())
             {
                 const int chipW = GW(chip, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(10 * u) - chipW;
                 Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
-                GT(c, chipX + (int)(10 * u), mid, chip, 12 * u, i >= 3 ? col : hint, true);
+                GT(c, chipX + (int)(10 * u), mid, chip, 12 * u, chipCol, true);
             }
             GT(c, rx + (int)(48 * u), mid, k, 13 * u, hint, true);
-            GT(c, rx + (int)(108 * u), mid, fit(v, 16 * u, true, (int)(220 * u)), 16 * u, text, true);
+            GT(c, rx + (int)(118 * u), mid, fit(v, 16 * u, true, (int)(210 * u)), 16 * u, text, true);
             if (!spn.empty() && MonName(v) != spn)
             {
-                const int sx = rx + (int)(108 * u) + std::min(GW(v, 16 * u, true), (int)(220 * u)) + (int)(12 * u);
+                const int sx = rx + (int)(118 * u) + std::min(GW(v, 16 * u, true), (int)(210 * u)) + (int)(12 * u);
                 GT(c, sx, mid, spn, 14 * u, hint, true);
             }
         }
@@ -2513,15 +3232,24 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         else if (F.prow == 1)
         {
             GT(c, ix, y + 14 * u, "Box", 13 * u, hint, true);
-            GT(c, ix, y + 40 * u, fit(m.a ? Shown(m.a->BoxName(m.box), "Box " + std::to_string(m.box + 1)) : std::string("-"), 22 * u, true, iw), 22 * u, text, true);
+            GT(c, ix, y + 40 * u, fit(BoxLabel(m.a.get(), m.box), 22 * u, true, iw), 22 * u, text, true);
             y += (int)(64 * u);
-            if (m.a) cell(ix, y, iw / 2, "Box", std::to_string(m.box + 1) + " of " + std::to_string(m.a->Boxes()));
-            cell(ix + iw / 2, y, iw / 2, "Pok\xC3\xA9mon", std::to_string(mons.size()));
+            if (m.a) cell(ix, y, iw / 2, "Box", m.box == PokemonHub::PARTY ? std::string("Party") : std::to_string(m.box + 1) + " of " + std::to_string(m.a->Boxes()));
+            cell(ix + iw / 2, y, iw / 2, "Pok\xC3\xA9mon", std::to_string(MonsIn(m.a.get(), m.box).size()));
             y += (int)(56 * u);
+            para("Next Box and Previous Box go through its boxes; Party shows the Pok\xC3\xA9mon with you.", hint, 13 * u);
         }
-        else if (F.prow - 3 < (int)mons.size())
+        else if (F.prow == 3)
         {
-            const PokemonHub::Mon& mon = mons[F.prow - 3];
+            GT(c, ix, y + 14 * u, m.swapping ? "Swap In" : "Put In", 13 * u, hint, true);
+            GT(c, ix, y + 40 * u, fit(m.swapping ? BoxLabel(m.b.get(), MoverTargetBox()) : PutLabel(), 22 * u, true, iw), 22 * u, text, true);
+            y += (int)(64 * u);
+            if (m.swapping) para("Choose the box in " + toName + " to pick the Pok\xC3\xA9mon from, to swap for " + m.swapName + ". B: no swap.", hint, 13 * u);
+            else para("Where it goes in " + toName + ": the first free place in its boxes, the party, or a box of your choosing.", hint, 13 * u);
+        }
+        else if (F.prow - MOVER_FIRST < (int)mons.size())
+        {
+            const PokemonHub::Mon& mon = mons[F.prow - MOVER_FIRST];
             const PokemonHub::Check ck = check(mon);
             std::vector<uint32_t> big;
             const int bs = (int)(96 * u);
@@ -2532,13 +3260,13 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             cell(ix, y, iw / 2, "Level", mon.egg ? std::string("Egg") : std::to_string(mon.level));
             cell(ix + iw / 2, y, iw / 2, "Trainer", Shown(mon.trainer, "-"));
             y += (int)(58 * u);
-            GT(c, ix, y + 8 * u, "To " + toName, 12 * u, hint, true);
+            GT(c, ix, y + 8 * u, m.swapping ? "Swap For " + m.swapName : "To " + toName + "   \xC2\xB7   " + PutLabel(), 12 * u, m.swapping ? swapCol : hint, true);
             y += (int)(24 * u);
             if (ck.verdict == PokemonHub::Verdict::Ok)
             {
-                para(ck.losses.empty() ? "It can move, and keeps everything." : "It can move, but on the way:", okCol, 14 * u);
+                para(ck.losses.empty() ? (m.swapping ? "They can swap, and keep everything." : "It can move, and keeps everything.") : (m.swapping ? "They can swap, but on the way:" : "It can move, but on the way:"), okCol, 14 * u);
                 for (const std::string& l : ck.losses) para("\xC2\xB7  " + SettingSentence(l), text, 13 * u);
-                if (ck.evolvesTo) para(SettingSentence(ck.evolution) + ", if you choose Move And Evolve.", text, 13 * u);
+                if (ck.evolvesTo) para(SettingSentence(ck.evolution) + (m.swapping ? ", if you choose Swap And Evolve." : ", if you choose Move And Evolve."), text, 13 * u);
             }
             else para(ck.reason.empty() ? std::string("It can't go to that game.") : SettingSentence(ck.reason), noCol, 14 * u);
         }
@@ -2551,7 +3279,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         {
             const std::vector<std::string> ml = WrapLines(m.msg, 13 * u, iw);
             int my = ay - (int)(14 * u) - (int)ml.size() * (int)(19 * u);
-            if (my > y) for (const std::string& line : ml) { GT(c, ix, my + 8 * u, line, 13 * u, 0xFF8CC8FFu, true); my += (int)(19 * u); }
+            if (my > y) for (const std::string& line : ml) { GT(c, ix, my + 8 * u, line, 13 * u, swapCol, true); my += (int)(19 * u); }
         }
         F.aX = ix; F.aY = ay; F.aW = na > 0 ? iw : 0; F.aRow = ah + ag;
         const int cur = F.prow == 0 ? m.from : F.prow == 2 ? m.to : -1;
@@ -2564,9 +3292,9 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
             }
             else Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
-            const int icon = F.prow == 1 ? Glass::I_GRID : F.prow >= 3 ? Glass::I_LOAD : Glass::I_POKEBALL;
+            const int icon = F.prow == 1 || F.prow == 3 ? Glass::I_GRID : F.prow >= MOVER_FIRST ? (acts[a].rfind("Swap", 0) == 0 ? Glass::I_PEOPLE : acts[a] == "Cancel Swap" ? Glass::I_BACK : Glass::I_LOAD) : Glass::I_POKEBALL;
             Glass::DrawIcon(c, icon, ix + 22 * u, ry + ah * 0.5f, 9 * u, text);
-            GT(c, ix + (int)(42 * u), ry + ah * 0.5f, acts[a], 15 * u, text, true);
+            GT(c, ix + (int)(42 * u), ry + ah * 0.5f, fit(acts[a], 15 * u, true, iw - (int)(60 * u)), 15 * u, text, true);
             if (a == cur) GT(c, ix + iw - (int)(14 * u) - GW("Chosen", 12 * u, true), ry + ah * 0.5f, "Chosen", 12 * u, okCol, true);
         }
         return;
@@ -2619,20 +3347,13 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             std::string st, name, sub;
             if (i == 0)
             {
-                name = "Cloud Saves";
+                name = "Account";
                 sub = on ? std::string(HubProvider(prov)) + "   \xC2\xB7   " + dev : "Keep your saves the same on every device";
                 if (busy == 1) { st = "Signing In"; col = 0xFFF2C46Bu; }
                 else if (busy == 2) { st = "Syncing"; col = 0xFF8CC8FFu; }
                 else if (on) { st = "On"; col = 0xFF8FE3A2u; }
                 else st = "Off";
                 Glass::DrawIcon(c, Glass::I_GLOBE, rx + 18 * u, mid, 9 * u, text);
-            }
-            else if (i == 1)
-            {
-                name = "Move Pok\xC3\xA9mon";
-                sub = "Between your own games, as a trade would";
-                st = std::to_string(MoverGames().size()) + " Saves";
-                Glass::DrawIcon(c, Glass::I_POKEBALL, rx + 18 * u, mid, 9 * u, text);
             }
             else
             {
@@ -2670,7 +3391,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         };
         if (F.prow == 0)
         {
-            GT(c, ix, y + 14 * u, "Cloud Saves", 22 * u, text, true);
+            GT(c, ix, y + 14 * u, "Account", 22 * u, text, true);
             y += (int)(40 * u);
             if (busy == 1 && !code.empty())
             {
@@ -2702,14 +3423,6 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 y += (int)(56 * u);
                 para("Choose a game in the list to sync it on its own, or to choose which save to keep.", hint, 13 * u);
             }
-        }
-        else if (F.prow == 1)
-        {
-            GT(c, ix, y + 14 * u, "Move Pok\xC3\xA9mon", 22 * u, text, true);
-            y += (int)(40 * u);
-            para("Move a Pok\xC3\xA9mon from one of your games to another, as a trade between them would.", text, 14 * u);
-            para("They can go to a newer game, never an older one. Fulldex says first what it would lose on the way, such as an HM move, and backs up both saves before it writes them.", hint, 13 * u);
-            para("Those that evolve by trading can evolve as they arrive.", hint, 13 * u);
         }
         else
         {
@@ -2888,10 +3601,10 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     // The sections.
     const int lw = (int)(300 * u), pad = (int)(12 * u), rowH = (int)(50 * u), rg = (int)(6 * u);
     Menu::FrostBox(c, solid, L, top, lw, bottom - top, 18 * u);
-    static const char* names[] = { "Credits", "Report A Bug", "Licences", "Website" };
-    static const int icons[] = { Glass::I_PEOPLE, Glass::I_INFO, Glass::I_LAYERS, Glass::I_GLOBE };
+    static const char* names[] = { "Support", "Credits", "Report A Bug", "Licences", "Website" };
+    static const int icons[] = { Glass::I_SPARKLE, Glass::I_PEOPLE, Glass::I_INFO, Glass::I_LAYERS, Glass::I_GLOBE };
     F.pX = L + pad; F.pY = top + pad; F.pW = lw - 2 * pad; F.pRow = rowH + rg;
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 5; i++)
     {
         const int rx = L + pad, ry = top + pad + i * (rowH + rg), rw = lw - 2 * pad;
         if (i == F.prow)
@@ -2936,6 +3649,29 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #endif
     if (F.prow == 0)
     {
+        heading("Support Fulldex");
+        para("Hi, I'm James, AKA Mamesj, the mind behind Fulldex. I'm just a dude who wanted to play some Pok\xC3\xA9mon and got a bit carried away.");
+        para("Fulldex is free and always will be. If it's given you some good hours, a coffee or a beer is always appreciated, never expected.");
+        const int gap = (int)(16 * u), cw = (pw - 2 * ip - gap) / 2, ch = (int)(64 * u);
+        const int qs = std::max((int)(80 * u), std::min(cw - (int)(60 * u), bottom - ip - (y + ch + (int)(14 * u)) - (int)(30 * u)));
+        const char* names2[2] = { "Buy Me A Coffee", "PayPal" };
+        const char* where[2] = { "buymeacoffee.com/mamesj", "paypal.me/mamesj" };
+        for (int i = 0; i < 2; i++)
+        {
+            const int cx = px + ip + i * (cw + gap);
+            card(cx, y, cw, ch, names2[i], where[i]);
+            if (i == 0) DrawQr(c, kBeerQr, kBeerQrSize, cx + (cw - qs) / 2, y + ch + (int)(14 * u), qs);
+            else DrawQr(c, kPaypalQr, kPaypalQrSize, cx + (cw - qs) / 2, y + ch + (int)(14 * u), qs);
+        }
+        y += ch + (int)(14 * u) + qs + (int)(14 * u);
+#ifdef __SWITCH__
+        GT(c, px + ip, y + 8 * u, "Scan a code with your phone's camera.", 13 * u, hint, true);
+#else
+        GT(c, px + ip, y + 8 * u, "Choose Support to open Buy Me A Coffee, or scan a code with your phone.", 13 * u, hint, true);
+#endif
+    }
+    else if (F.prow == 1)
+    {
         heading("Credits And Acknowledgements");
         static const char* credits[][2] = {
             { "ssrecomp by ClickingMaster", "The single-screen and widescreen view Fulldex grew from" },
@@ -2952,14 +3688,14 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         for (int i = 0; i < 10; i++)
             card(px + ip + (i % 2) * (cw + gap), y + (i / 2) * (ch + (int)(10 * u)), cw, ch, credits[i][0], credits[i][1]);
     }
-    else if (F.prow == 1)
+    else if (F.prow == 2)
     {
         heading("Report A Bug");
         para("Found something wrong? Open an issue on the GitHub page: say which game, which device, and what happened just before.");
         para("A screenshot helps, and so does game.log from the folder Fulldex runs from.");
         card(px + ip, y, pw - 2 * ip, (int)(64 * u), "github.com/mamesj/pokemon-fulldex/issues", open);
     }
-    else if (F.prow == 2)
+    else if (F.prow == 3)
     {
         heading("Licences");
         static const char* lic[][2] = {
@@ -2982,7 +3718,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         para("Downloads, the latest changes and the full instructions are on the GitHub page.");
         card(px + ip, y, pw - 2 * ip, (int)(64 * u), "github.com/mamesj/pokemon-fulldex", open);
         y += (int)(84 * u);
-        para("Tips are welcome but never expected: buymeacoffee.com/mamesj or paypal.me/mamesj.");
+        para("Tips are welcome but never expected: see Support, at the top of this page.");
     }
 }
 
@@ -3009,7 +3745,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
-                    + "/t" + Focus().pageTitle + "/h" + HubSig() + (Focus().page == SIDE_HUB ? std::to_string(Mover().open) + "," + std::to_string(Focus().pact) + "," + std::to_string(Focus().rScroll) : std::string()) + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
+                    + "/t" + Focus().pageTitle + "/h" + HubSig() + (Focus().page == SIDE_HUB ? std::to_string(Mover().open) + std::to_string(HubMode()) + "," + std::to_string(Focus().pact) + "," + std::to_string(Focus().rScroll) : std::string()) + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
                     + (Focus().page == SIDE_UPDATES ? "/u" + std::to_string(Focus().upState) + std::to_string(Focus().upCan) + Focus().upHave + "/" + Focus().upNew + "/" + Focus().upText + "/" + Focus().upNotes + "/" + std::to_string(Focus().nScroll) : std::string())
                     + (Focus().page == SIDE_ROMS ? "/r" + std::to_string(Focus().pact) + "," + std::to_string(RomList().size()) + ","
                        + std::to_string(std::count_if(RomList().begin(), RomList().end(), [](const Game& g) { return g.hidden; })) : std::string());
@@ -3301,7 +4037,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             flush();
             if (!line.empty()) lines.push_back(line);
         }
-        const int ph = pad + (int)(36 * u) + (int)lines.size() * (int)(22 * u) + (int)(16 * u) + (F.dialog == 3 ? fieldH + rg : 0) + (F.dialog == 4 ? (int)(150 * u) + 2 * rg : 0)
+        const int ph = pad + (int)(36 * u) + (int)lines.size() * (int)(22 * u) + (int)(16 * u) + (F.dialog == 3 ? fieldH + rg : 0) + (F.dialog == 4 ? (int)(150 * u) + 2 * rg : 0) + (F.dialog == 10 ? (int)(200 * u) + 2 * rg : 0)
                      + (int)rows.size() * (rowH + rg) - rg + pad;
         const int px = (c.w - pw) / 2, py = (c.h - ph) / 2;
         Glass::Round(c, 0, 0, c.w, c.h, 0, 0x73000000u);
@@ -3328,6 +4064,13 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         }
         for (const std::string& l : lines) { GT(c, px + pad, y + 10 * u, l, 15 * u, hint, false); y += (int)(22 * u); }
         y += (int)(16 * u);
+        if (F.dialog == 10)
+        {
+            // (The beer message: its code, to scan with a phone.)
+            const int qs = (int)(200 * u);
+            DrawQr(c, kBeerQr, kBeerQrSize, px + (pw - qs) / 2, y, qs);
+            y += qs + 2 * rg;
+        }
         if (F.dialog == 3)
         {
             Glass::Round(c, px + pad, y, pw - 2 * pad, fieldH, 12 * u, 0x24FFFFFFu, 0xF2FFFFFFu, 1.5f * u);
