@@ -1859,14 +1859,15 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 {
                     // A tap on the chosen game plays it when the finger lifts (not as it lands:
                     // the finger would still be on the screen when the game starts, and touch it).
-                    const bool play = tapPlay >= 0 && i == tapPlay && e.button.which == SDL_TOUCH_MOUSEID;
+                    // (The glass launcher: a click on the chosen game opens its menu, as a tap does (glass).)
+                    const bool play = tapPlay >= 0 && i == tapPlay && (e.button.which == SDL_TOUCH_MOUSEID || Launcher::Glassy(canvas));
                     tapPlay = -1;
                     dragging = pressed = false;
                     if (play) choose();
                     break;
                 }
                 // A tap on another game chooses that one; a double click plays.
-                const bool touch = e.type == SDL_MOUSEBUTTONDOWN && e.button.which == SDL_TOUCH_MOUSEID;
+                const bool touch = e.type == SDL_MOUSEBUTTONDOWN && (e.button.which == SDL_TOUCH_MOUSEID || (Launcher::Glassy(canvas) && e.button.button == SDL_BUTTON_LEFT));
                 if (touch && i >= 0 && i == selected)
                 {
                     tapPlay = i;

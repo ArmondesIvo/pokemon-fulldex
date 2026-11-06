@@ -491,7 +491,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             if (down & HidNpadButton_Y) guide = false;
             if (down & HidNpadButton_Plus) break;
         }
-        else if ((down & (ctl.PadCustom() ? action(Controls::Y) : (u64)HidNpadButton_Y)) || tapSettings ||
+        else if ((down & (ctl.PadCustom() ? action(Controls::Y) : (u64)HidNpadButton_Y)) || (tapSettings && !Launcher::Glassy(canvas)) ||
                  (onSettings && (down & (ctl.PadCustom() ? action(Controls::A) : (u64)HidNpadButton_A))))
         {
             guide = true;
@@ -511,7 +511,8 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             const u64 tr = ctl.PadCustom() ? action(Controls::R) : (u64)HidNpadButton_R;
             const bool step = held == 1 || (held > 20 && held % 6 == 0);
             const int dir = !step ? 0 : lf ? 1 : rt ? 2 : up ? 3 : dn ? 4 : 0;
-            const bool aDown = (down & bA) != 0, bDown = (down & bB) != 0;
+            bool aDown = (down & bA) != 0;
+            const bool bDown = (down & bB) != 0;
             const bool valid = selected >= 0 && selected < (int)games.size();
             const bool banner = Launcher::ContinueGame(games, selected) >= 0;
             bool play = false, quitList = false;
@@ -530,6 +531,28 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             };
             auto settle = [&]() { const Launcher::View v = view(); if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v); };
             auto closeDialog = [&]() { F.dialog = 0; kb.open = false; };
+            // The glass launcher by touch: what a tap lands on is chosen and used, as A would (a tap on a
+            // game that is not the chosen one only chooses it); a tap beside the menu or a dialog closes it.
+            if (tapX >= 0)
+            {
+                if (F.dialog == 3 && kb.open) { const int hit = kb.ItemAt(tapX, tapY); if (hit >= 0) { kb.selected = hit; aDown = true; } }
+                else if (F.dialog) { const int row = Launcher::DialogAt(tapX, tapY); if (row >= 0) { F.drow = row; aDown = true; } else closeDialog(); }
+                else if (F.popup >= 0) { const int row = Launcher::PopupAt(tapX, tapY); if (row >= 0) { F.popup = row; aDown = true; } else F.popup = -1; }
+                else
+                {
+                    const int side = Launcher::SideAt(canvas, tapX, tapY), t = Launcher::TabAt(canvas, tapX, tapY);
+                    const int tile = Launcher::TileAt(view(), scroll, tapX, tapY);
+                    if (side >= 0) { F.side = side; F.banner = 0; onTabs = false; aDown = true; }
+                    else if (Launcher::ContinueAt(canvas, tapX, tapY)) { F.side = -1; onTabs = false; F.banner = 1; aDown = true; }
+                    else if (t >= 0) { F.side = -1; F.banner = 0; onTabs = false; if (t != tab) setTab(t - tab); }
+                    else if (tile >= 0)
+                    {
+                        F.side = -1; F.banner = 0; onTabs = false;
+                        if (tile == selected) aDown = true;
+                        else { selected = tile; note.clear(); }
+                    }
+                }
+            }
             if (F.dialog == 3)
             {
                 // Rename: the keyboard. A types, X deletes, + saves, B cancels.
