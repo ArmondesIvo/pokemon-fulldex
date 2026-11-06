@@ -4116,8 +4116,12 @@ inline void DrawSettingsPage(Canvas& c, Menu& m, const std::vector<Game>& games,
     for (const auto& r : std::vector<std::pair<std::string, std::string>>{ { "Retroachievements", "RetroAchievements" }, { "Fps", "FPS" }, { "Roms", "ROMs" }, { "Rom ", "ROM " }, { "Gba", "GBA" }, { "Ds ", "DS " } })
         for (size_t at = shown.find(r.first); at != std::string::npos; at = shown.find(r.first, at + r.second.size())) shown.replace(at, r.first.size(), r.second);
     F.page = SIDE_SETTINGS; F.side = -1; F.popup = -1; F.dialog = 0; F.onSort = false; F.pageTitle = shown;
+    F.sW = 0;
     Draw(c, games, tab, -1, scroll, std::string(), hint, theme, true, false, false);
-    m.laneX = F.sX; m.laneY = F.sY; m.laneW = F.sW; m.laneH = F.sH; m.laneListW = F.sListW; m.lanePvX = F.sPvX;
+    // (Where the page put them, kept: when nothing on the page changed it is copied, not drawn, and says nothing.)
+    static int lane[6] = {};
+    if (F.sW > 0) { lane[0] = F.sX; lane[1] = F.sY; lane[2] = F.sW; lane[3] = F.sH; lane[4] = F.sListW; lane[5] = F.sPvX; }
+    m.laneX = lane[0]; m.laneY = lane[1]; m.laneW = lane[2]; m.laneH = lane[3]; m.laneListW = lane[4]; m.lanePvX = lane[5];
     Focus() = kept;
     m.Draw(c, title, std::string());
     m.laneX = -1;
