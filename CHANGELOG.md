@@ -3,6 +3,7 @@
 
 ## Unreleased
 
+- **Launcher save detection**: auto-detect existing saves matching the ROM's filename, base game title or fallback name when opening a game.
 - **SoulSilver: the wild Pokémon's slide to the right of a wide battle follows the game's frames.** It was
   timed by how many pictures were drawn, so the display rate, skipped frames or screenshots changed
   when (and whether) it happened.
