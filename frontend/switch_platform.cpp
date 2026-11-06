@@ -198,7 +198,10 @@ std::string InstallHomeIcons(const std::vector<Launcher::Game>& games)
 // autoFrames > 0: the list is shown that many frames and the selected game played (test runs:
 // "arg --show-list" in test.txt, to time a game started after the list).
 // cfgPath: the settings file, for the settings page (Y).
-int PickGame(const std::vector<Launcher::Game>& games, int selected, const std::string& cfgPath, int autoFrames = 0)
+#include "library_history.h"
+#include "save_backups.h"
+
+int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std::string& cfgPath, int autoFrames = 0)
 {
     Framebuffer fb;
     if (R_FAILED(framebufferCreate(&fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888, 2))) return selected;
@@ -208,6 +211,37 @@ int PickGame(const std::vector<Launcher::Game>& games, int selected, const std::
     padInitializeDefault(&pad);
     Canvas canvas;
     canvas.Resize(1280, 720);
+    // The list as shown (the glass launcher's, as the PC's): the games with the player's names,
+    // pictures and Home (favourites), those taken off the list left out; kept beside the settings.
+    // The chosen game is handed back as its place in gamesIn.
+    const std::string home = cfgPath.substr(0, cfgPath.find_last_of('/'));
+    std::vector<Launcher::Game> games;
+    LibraryHistory library;
+    auto refresh = [&](int& sel) {
+        const std::string keep = sel >= 0 && sel < (int)games.size() ? games[sel].rom : std::string();
+        games = gamesIn;
+        library.Load(home + "/fulldex-library.txt");
+        Launcher::ApplyLocal(games, home);
+        Launcher::ApplyArt(games, home);
+        library.Apply(games, Launcher::ConfigValue(cfgPath, "list_sort"));
+        sel = -1;
+        for (size_t i = 0; i < games.size(); i++)
+            if (games[i].rom == keep) sel = (int)i;
+    };
+    {
+        const std::string keep = selected >= 0 && selected < (int)gamesIn.size() ? gamesIn[selected].rom : std::string();
+        int s = -1;
+        refresh(s);
+        selected = -1;
+        for (size_t i = 0; i < games.size(); i++)
+            if (games[i].rom == keep) selected = (int)i;
+        if (selected < 0 && !games.empty()) selected = 0;
+    }
+    // (Rename: the pause menu's keyboard page; kbLayer capitals, small letters or signs.)
+    Menu kb;
+    std::vector<int> kbIds;
+    int kbLayer = 0;
+    auto kbBuild = [&]() { Launcher::BuildKeyboard(kb, kbIds, Launcher::Focus().text, kbLayer, "The Game's Own Name", "Save"); };
     // The touch screen (handheld): SETTINGS at the right of the title band, BACK at its left in
     // the settings, as on a PC or a phone (pc_launcher.cpp). A tap counts as the finger lifts.
     hidInitializeTouchScreen();
@@ -465,6 +499,288 @@ int PickGame(const std::vector<Launcher::Game>& games, int selected, const std::
             page.Open(cfgPath);
             held = 0;
         }
+        else if (Launcher::Glassy(canvas))
+        {
+            // The glass launcher, as the PC's (pc_launcher.cpp): the sidebar (left from the first column,
+            // the first tab or Continue), the banner's Continue and Game Options, the tabs and the games;
+            // A on a game opens its menu, whose rows open the dialogs and the keyboard.
+            Launcher::GlassFocus& F = Launcher::Focus();
+            const u64 bA = ctl.PadCustom() ? action(Controls::A) : (u64)HidNpadButton_A;
+            const u64 bB = ctl.PadCustom() ? action(Controls::B) : (u64)HidNpadButton_B;
+            const u64 tl = ctl.PadCustom() ? action(Controls::L) : (u64)HidNpadButton_L;
+            const u64 tr = ctl.PadCustom() ? action(Controls::R) : (u64)HidNpadButton_R;
+            const bool step = held == 1 || (held > 20 && held % 6 == 0);
+            const int dir = !step ? 0 : lf ? 1 : rt ? 2 : up ? 3 : dn ? 4 : 0;
+            const bool aDown = (down & bA) != 0, bDown = (down & bB) != 0;
+            const bool valid = selected >= 0 && selected < (int)games.size();
+            const bool banner = Launcher::ContinueGame(games, selected) >= 0;
+            bool play = false, quitList = false;
+            auto setTab = [&](int by) {
+                tab = (tab + by + Launcher::TABS) % Launcher::TABS;
+                scroll = 0;
+                const Launcher::View v = view();
+                if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v);
+                if (Launcher::FirstIn(v) < 0) onTabs = true;
+                note.clear();
+            };
+            auto intoGames = [&]() {
+                const Launcher::View v = view();
+                if (Launcher::FirstIn(v) < 0) { if (banner) F.banner = 1; else onTabs = true; return; }
+                if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v);
+            };
+            auto settle = [&]() { const Launcher::View v = view(); if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v); };
+            auto closeDialog = [&]() { F.dialog = 0; kb.open = false; };
+            if (F.dialog == 3)
+            {
+                // Rename: the keyboard. A types, X deletes, + saves, B cancels.
+                if (!kb.open) { kbLayer = 0; kbBuild(); }
+                auto erase = [&]() {
+                    while (!F.text.empty() && ((unsigned char)F.text.back() & 0xC0) == 0x80) F.text.pop_back();
+                    if (!F.text.empty()) F.text.pop_back();
+                };
+                auto save = [&]() {
+                    std::string name = F.text;
+                    closeDialog();
+                    if (!valid) return;
+                    while (!name.empty() && name.back() == ' ') name.pop_back();
+                    while (!name.empty() && name.front() == ' ') name.erase(0, 1);
+                    Launcher::Game own = games[selected];
+                    own.customName.clear();
+                    if (name == Launcher::ShortName(own)) name.clear();
+                    const bool ok = Launcher::SetPair(home + "/fulldex-names.txt", games[selected].rom, name);
+                    refresh(selected);
+                    note = !ok ? "COULD NOT SAVE THE NAME" : name.empty() ? "NAME RESET" : "RENAMED";
+                };
+                if (bDown) closeDialog();
+                else if (down & HidNpadButton_X) { erase(); kbBuild(); }
+                else if (down & HidNpadButton_Plus) save();
+                else if (dir || aDown)
+                {
+                    MenuInput nav;
+                    nav.up = dir == 3; nav.down = dir == 4; nav.left = dir == 1; nav.right = dir == 2; nav.accept = aDown;
+                    int d = 0;
+                    const int hit = kb.Update(nav, d);
+                    const int id = hit >= 0 && hit < (int)kbIds.size() ? kbIds[hit] : -2;
+                    if (id == Launcher::KB_BACK) closeDialog();
+                    else if (id == Launcher::KB_DONE) save();
+                    else if (id != -2)
+                    {
+                        if (id == Launcher::KB_LAYER) kbLayer = kbLayer == 0 ? 1 : 0;
+                        else if (id == Launcher::KB_SYMBOLS) kbLayer = kbLayer == 2 ? 1 : 2;
+                        else if (id == Launcher::KB_DEL) erase();
+                        else if (id == Launcher::KB_SPACE) { if (F.text.size() < 48) F.text += ' '; }
+                        else if (id >= Launcher::KB_KEY0 && id < Launcher::KB_LAYER)
+                        {
+                            if (F.text.size() < 48) F.text += kb.items[hit].label;
+                            if (kbLayer == 0 && isupper((unsigned char)kb.items[hit].label[0])) kbLayer = 1;
+                        }
+                        kbBuild();
+                    }
+                }
+            }
+            else if (F.dialog)
+            {
+                // The dialogs' rows: up and down, A does it, B closes.
+                const int rows = F.dialog >= 5 ? std::max(1, (int)F.dItems.size()) : F.dialog == 1 ? 3 : F.dialog == 4 ? 5 : 2;
+                if (dir == 3 || dir == 4) F.drow = (F.drow + (dir == 3 ? rows - 1 : 1)) % rows;
+                if (bDown) closeDialog();
+                else if (aDown && valid)
+                {
+                    const std::string rom = games[selected].rom;
+                    if (F.dialog == 1)
+                    {
+                        if (F.drow == 0)
+                        {
+                            closeDialog();
+                            const bool ok = Launcher::SetPair(home + "/fulldex-hidden.txt", rom, "1");
+                            refresh(selected);
+                            settle();
+                            note = ok ? "REMOVED FROM THE LIST. THE ROM IS STILL ON THE SD CARD" : "COULD NOT SAVE THE LIST";
+                        }
+                        else if (F.drow == 1) { F.dialog = 2; F.drow = 1; }
+                        else closeDialog();
+                    }
+                    else if (F.dialog == 2)
+                    {
+                        closeDialog();
+                        if (F.drow == 0)
+                        {
+                            std::error_code ec;
+                            std::filesystem::remove(std::filesystem::u8path(rom), ec);
+                            fprintf(stderr, "[launcher] delete %s: %s\n", rom.c_str(), ec ? ec.message().c_str() : "deleted");
+                            if (ec) note = "COULD NOT DELETE THE ROM FILE";
+                            else
+                            {
+                                Launcher::SetPair(home + "/fulldex-hidden.txt", rom, "1"); // (gone from this list until the next start too)
+                                refresh(selected);
+                                settle();
+                                note = "ROM FILE DELETED. ITS SAVES ARE KEPT";
+                            }
+                        }
+                    }
+                    else if (F.dialog == 4)
+                    {
+                        if (F.drow == 0) note = "IMPORTING A PICTURE IS COMING TO THE SWITCH SOON";
+                        else if (F.drow == 1) note = "FIND ARTWORK ON YOUR PHONE OR PC";
+                        else if (F.drow == 2 || F.drow == 3)
+                        {
+                            const bool ok = Launcher::SetPair(home + "/fulldex-art.txt", rom, F.drow == 2 ? "placeholder" : "");
+                            closeDialog();
+                            refresh(selected);
+                            note = !ok ? "COULD NOT SAVE THE PICTURE" : F.drow == 2 ? "PLAIN CARD" : "ORIGINAL PICTURE BACK";
+                        }
+                        else closeDialog();
+                    }
+                    else if (F.dialog >= 5)
+                    {
+                        const std::string pick = F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
+                        const std::string save = games[selected].folder + "/" + games[selected].saveName;
+                        if (pick == "#close" || pick.empty()) closeDialog();
+                        else if (F.dialog == 5)
+                        {
+                            F.dTitle = "Go Back To This Backup?";
+                            F.dMsg = F.dItems[F.drow].substr(8) + ". Your save as it is now is kept beside it as a .before-restore copy.";
+                            F.dItems = { "Restore Backup", "Cancel" };
+                            F.dPaths = { pick, "#close" };
+                            F.dialog = 6;
+                            F.drow = 1;
+                        }
+                        else
+                        {
+                            std::error_code ec;
+                            const auto now = std::filesystem::file_size(std::filesystem::u8path(save), ec);
+                            const auto was = std::filesystem::file_size(std::filesystem::u8path(pick), ec);
+                            std::vector<unsigned char> restored;
+                            std::string error;
+                            const bool ok = SaveBackups::Restore(save, pick, now > 0 ? (size_t)now : (size_t)was, restored, error);
+                            closeDialog();
+                            note = ok ? "SAVE RESTORED. THE ONE BEFORE IS KEPT AS A .BEFORE-RESTORE COPY" : error;
+                        }
+                    }
+                }
+            }
+            else if (F.popup >= 0)
+            {
+                // The game's menu: up and down, A does it, B closes.
+                if (dir == 3) F.popup = std::max(0, F.popup - 1);
+                else if (dir == 4) F.popup = std::min(Launcher::PopupCount() - 1, F.popup + 1);
+                if (bDown) F.popup = -1;
+                else if (aDown && valid)
+                {
+                    const int item = F.popup;
+                    F.popup = -1;
+                    const Launcher::Game& g = games[selected];
+                    if (item == 0) play = true;
+                    else if (item == 1)
+                    {
+                        const bool ok = library.Toggle(g.rom);
+                        const bool now = library.Favourite(g.rom);
+                        refresh(selected);
+                        settle();
+                        note = !ok ? "COULD NOT SAVE HOME" : now ? "ADDED TO HOME" : "REMOVED FROM HOME";
+                    }
+                    else if (item == 2) { F.text = Launcher::ShortName(g); F.dialog = 3; F.drow = 0; kbLayer = 0; kbBuild(); }
+                    else if (item == 3) { F.dialog = 4; F.drow = 0; }
+                    else if (item == 4)
+                    {
+                        if (g.saveName.empty()) note = "THIS GAME'S SAVES CANNOT BE MANAGED HERE YET";
+                        else
+                        {
+                            const std::string save = g.folder + "/" + g.saveName;
+                            const auto list = SaveBackups::List(save);
+                            std::error_code ec;
+                            const bool has = std::filesystem::exists(std::filesystem::u8path(save), ec);
+                            static const char* months[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+                            F.dTitle = "Manage Saves";
+                            F.dMsg = !has ? "There is no save for this game yet."
+                                   : list.empty() ? "Fulldex backs up this save every time the game starts. There are no backups yet."
+                                                  : "Fulldex backs up this save every time the game starts. Choose one to go back to it.";
+                            F.dItems.clear();
+                            F.dPaths.clear();
+                            for (size_t k = 0; k < list.size() && k < 5; k++)
+                            {
+                                const std::string& l = list[k].label;
+                                const int m = std::max(1, std::min(12, atoi(l.substr(5, 2).c_str())));
+                                F.dItems.push_back("Restore " + std::to_string(atoi(l.substr(8, 2).c_str())) + " " + months[m - 1] + " " + l.substr(0, 4) + ", " + l.substr(11, 5));
+                                F.dPaths.push_back(list[k].path);
+                            }
+                            F.dItems.push_back("Close");
+                            F.dPaths.push_back("#close");
+                            F.dialog = 5;
+                            F.drow = 0;
+                        }
+                    }
+                    else if (item == 5) { F.dialog = 1; F.drow = 0; }
+                }
+            }
+            else
+            {
+                if (down & (tl | tr)) setTab((down & tr) ? 1 : -1);
+                if (F.side >= 0)
+                {
+                    if (dir == 3) F.side = std::max(0, F.side - 1);
+                    else if (dir == 4) F.side = std::min((int)Launcher::SIDES - 1, F.side + 1);
+                    else if (dir == 2) { F.side = -1; intoGames(); }
+                    if (aDown)
+                    {
+                        if (F.side == Launcher::SIDE_SETTINGS) { guide = true; page.Open(cfgPath); held = 0; }
+                        else if (F.side == Launcher::SIDE_HOME) F.side = -1;
+                        else note = std::string(Launcher::SideName(F.side)) + ": COMING SOON";
+                    }
+                }
+                else if (onTabs)
+                {
+                    if (dir == 1 && tab == 0) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                    else if (dir == 1 || dir == 2) setTab(dir == 2 ? 1 : -1);
+                    else if (dir == 4 || aDown) { onTabs = false; if (banner) F.banner = 1; else intoGames(); }
+                }
+                else if (F.banner)
+                {
+                    if (dir == 1) { if (F.banner == 2) F.banner = 1; else { F.banner = 0; F.side = Launcher::SIDE_HOME; } }
+                    else if (dir == 2) F.banner = 2;
+                    else if (dir == 3) { F.banner = 0; onTabs = true; }
+                    else if (dir == 4 && Launcher::FirstIn(view()) >= 0) { F.banner = 0; intoGames(); }
+                    else if (aDown)
+                    {
+                        if (F.banner == 2) note = "GAME OPTIONS: COMING SOON";
+                        else
+                        {
+                            const int cg = Launcher::ContinueGame(games, selected);
+                            F.banner = 0;
+                            if (cg >= 0) { selected = cg; play = true; }
+                        }
+                    }
+                }
+                else
+                {
+                    if (dir)
+                    {
+                        const Launcher::View v = view();
+                        const int k = v.SpotOf(selected);
+                        if (dir == 1 && (k < 0 || v.spots[k].x == v.g.gx)) F.side = Launcher::SIDE_HOME;
+                        else
+                        {
+                            const int to = v.spots.empty() ? -1 : Launcher::Step(v, selected, dir);
+                            if (to < 0) { if (dir == 3) { if (banner) F.banner = 1; else onTabs = true; } }
+                            else if (to != selected) { selected = to; note.clear(); }
+                        }
+                    }
+                    if (aDown && valid)
+                    {
+                        if (games[selected].known && !games[selected].comingSoon) { F.popup = 0; note.clear(); }
+                        else note = games[selected].comingSoon ? games[selected].name + ": COMING SOON" : "THIS GAME IS NOT ONE THAT THIS PLAYS";
+                    }
+                }
+                if ((down & HidNpadButton_Plus) || (bDown && F.side < 0 && !F.banner && !onTabs)) quitList = true;
+                if (bDown && (F.side >= 0 || F.banner || onTabs)) { F.side = -1; F.banner = 0; onTabs = false; intoGames(); }
+            }
+            if (play && selected >= 0 && selected < (int)games.size())
+            {
+                if (Playable(games[selected])) { result = selected; break; }
+                note = games[selected].known ? "THIS DOWNLOAD DOES NOT HAVE THIS GAME" : "THIS GAME IS NOT ONE THAT THIS PLAYS";
+            }
+            if (quitList) break;
+        }
         else
         {
             // L and R (or the buttons CONTROLS gave them): the tabs, keeping the chosen game if
@@ -532,8 +848,12 @@ int PickGame(const std::vector<Launcher::Game>& games, int selected, const std::
         }
         // (The game list only when the settings page is not open: drawn over it, the page was
         // hidden while it took the buttons, and the list seemed frozen.)
+        // (The glass list is drawn again only when something on it changed: the Switch draws in
+        // software about 20 times slower than a PC. Anything else drawn on the canvas forgets it.)
+        static std::string glassKey;
         if (guide)
         {
+            glassKey.clear();
             page.Draw(canvas, page.group < 0 ? "UP / DOWN: CHOOSE    A: OPEN    B: BACK"
                                              : "UP / DOWN: CHOOSE    LEFT / RIGHT / A: CHANGE    B: BACK", theme);
             if (keysOpen)
@@ -544,7 +864,43 @@ int PickGame(const std::vector<Launcher::Game>& games, int selected, const std::
                 keysMenu.Draw(canvas, "KEYS AND BUTTONS", kh);
             }
         }
-        else Launcher::Draw(canvas, games, tab, onSettings || onTabs ? -1 : selected, scroll, note, std::string(), theme, true, onTabs, onSettings);
+        else
+        {
+            {
+                // (The blurred background follows the chosen game once it has stayed on it 0.4 s.)
+                static int bgSel = -2;
+                static u64 bgSince = 0;
+                const u64 now = armGetSystemTick();
+                if (selected != bgSel) { bgSel = selected; bgSince = now; }
+                const std::string want = selected >= 0 && selected < (int)games.size() ? games[selected].rom : std::string();
+                if (!want.empty() && want != Launcher::BackdropRom() && (Launcher::BackdropRom().empty() || armTicksToNs(now - bgSince) > 400000000ULL))
+                    Launcher::BackdropRom() = want;
+            }
+            auto keyNow = [&]() { const Launcher::GlassFocus& F = Launcher::Focus();
+                                  return std::to_string(F.side) + "," + std::to_string(F.banner) + "," + std::to_string(F.popup) + "," + std::to_string(F.dialog) + ","
+                                         + std::to_string(F.drow) + "," + F.text + "," + std::to_string(kb.selected) + std::to_string(kbLayer) + "," + std::to_string(games.size()) + "/"
+                                         + Launcher::BackdropRom() + "/" + std::to_string(tab) + "/" + std::to_string(selected) + "/" + std::to_string(scroll) + "/" + note + "/"
+                                         + std::to_string(onTabs) + std::to_string(onSettings); };
+            bool overlay = false;
+#ifdef SSR_UPDATER
+            overlay = updateMenu.open;
+#endif
+            if (!Launcher::Glassy(canvas) || overlay || keyNow() != glassKey)
+            {
+                const u64 t0 = armGetSystemTick();
+                if (Launcher::Focus().dialog == 3 && kb.open && Launcher::Glassy(canvas))
+                {
+                    // (Rename: the pause menu's keyboard page over the whole screen.)
+                    Launcher::GlassBackdrop(canvas, selected >= 0 && selected < (int)games.size() ? &games[selected] : nullptr);
+                    kb.Draw(canvas, "RENAME", "A: TYPE    X: DELETE    +: SAVE    B: CANCEL");
+                }
+                else Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected,
+                                    scroll, note, Launcher::Focus().popup >= 0 || Launcher::Focus().dialog ? "A: CHOOSE    B: BACK" : "A: PLAY    L / R: TABS    +: QUIT",
+                                    theme, true, onTabs, onSettings);
+                glassKey = overlay ? std::string() : keyNow();
+                if (Launcher::Glassy(canvas)) fprintf(stderr, "[launcher] glass list drawn in %d ms\n", (int)(armTicksToNs(armGetSystemTick() - t0) / 1000000));
+            }
+        }
 #ifdef SSR_UPDATER
         if (updateMenu.open)
             updateMenu.Draw(canvas, Updater::PopupTitle(), "A: CHOOSE    B: LATER",
@@ -598,6 +954,14 @@ int PickGame(const std::vector<Launcher::Game>& games, int selected, const std::
         }
     }
     framebufferClose(&fb);
+    // (The chosen game handed back as its place in gamesIn: the list shown may be in another order.)
+    if (result >= 0 && result < (int)games.size())
+    {
+        const std::string rom = games[result].rom;
+        result = -1;
+        for (size_t i = 0; i < gamesIn.size(); i++)
+            if (gamesIn[i].rom == rom) result = (int)i;
+    }
     return result;
 }
 

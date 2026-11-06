@@ -67,17 +67,26 @@ struct Game
     bool comingSoon = false;
     bool favourite = false;
     std::string customName; // the player's own name for it (Rename; fulldex-names.txt), empty: its own
+    // Its own picture as found (art, hasIcon), kept so Change Picture can put it back (ApplyArt).
+    std::vector<uint32_t> ownArt;
+    bool ownIcon = false, ownKept = false;
     long long lastPlayed = 0;
 };
 
 inline std::string& ContinueRom() { static std::string r; return r; } // the game played last (last-game.txt)
+// The game whose picture is blurred behind the glass launcher; empty: the chosen one. (The Switch sets
+// it a moment after the chosen game changes: making it again takes most of a redraw there.)
+inline std::string& BackdropRom() { static std::string r; return r; }
 // Where the arrows are on the glass launcher besides the games and the tabs: a section of the
 // sidebar (side, -1: none) or the banner's Continue (banner 1) or Game Options (2).
 // popup: the game's menu (A on a game) open on that row, -1 closed; where it was drawn (for taps).
 // dialog: 1 Remove Game, 2 Delete ROM File (sure?), 3 Rename (text: what is typed); drow its row;
 // dX..dRows where its rows were drawn (for taps).
 struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0, popY = 0, popW = 0, popRow = 0;
-                    int dialog = 0, drow = 0; std::string text; int dX = 0, dY = 0, dW = 0, dRow = 0, dRows = 0; };
+                    int dialog = 0, drow = 0; std::string text; int dX = 0, dY = 0, dW = 0, dRow = 0, dRows = 0;
+                    // (Dialogs 5 and up, Manage Saves: their title, words and rows as the launcher made them;
+                    // dPaths each row's backup, or #folder / #close.)
+                    std::string dTitle, dMsg; std::vector<std::string> dItems, dPaths; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
 inline int PopupCount() { return 6; }
 inline std::string PopupLabel(const Game& g, int i)
@@ -500,6 +509,52 @@ inline std::vector<uint32_t> GamePicture(const Game& g, int m)
     for (int y = 0; y < m; y++)
         for (int x = 0; x < m; x++) out[(size_t)y * m + x] = g.icon[(y * 32 / m) * 32 + x * 32 / m];
     return out;
+}
+
+// A picture of the player's own (Change Picture): its middle square, made Art x Art. PNG or JPG.
+inline bool LoadSquareArt(const unsigned char* data, size_t size, std::vector<uint32_t>& out)
+{
+    if (!ImageAllowed(data, size)) return false;
+    int w = 0, h = 0, n = 0;
+    unsigned char* px = stbi_load_from_memory(data, (int)size, &w, &h, &n, 4);
+    if (!px) return false;
+    const int side = std::min(w, h), ox = (w - side) / 2, oy = (h - side) / 2;
+    out.assign((size_t)Art * Art, 0);
+    for (int y = 0; y < Art; y++)
+        for (int x = 0; x < Art; x++)
+        {
+            const int x0 = ox + x * side / Art, x1 = std::max(x0 + 1, ox + (x + 1) * side / Art);
+            const int y0 = oy + y * side / Art, y1 = std::max(y0 + 1, oy + (y + 1) * side / Art);
+            uint32_t sum[4] = {}, count = 0;
+            for (int yy = y0; yy < y1; yy++)
+                for (int xx = x0; xx < x1; xx++)
+                {
+                    const unsigned char* p = px + ((size_t)yy * w + xx) * 4;
+                    for (int k = 0; k < 4; k++) sum[k] += p[k];
+                    count++;
+                }
+            out[(size_t)y * Art + x] = (sum[3] / count) << 24 | (sum[0] / count) << 16 | (sum[1] / count) << 8 | sum[2] / count;
+        }
+    stbi_image_free(px);
+    return true;
+}
+// The pictures chosen with Change Picture (fulldex-art.txt beside the saves: a ROM's path, a tab, the
+// picture's file in saves/artwork, or placeholder for the plain card), over each game's own picture.
+inline void ApplyArt(std::vector<Game>& games, const std::string& savesDir)
+{
+    const auto chosen = ReadPairs(savesDir + "/fulldex-art.txt");
+    for (Game& g : games)
+    {
+        if (!g.ownKept) { g.ownArt = g.art; g.ownIcon = g.hasIcon; g.ownKept = true; }
+        g.art = g.ownArt;
+        g.hasIcon = g.ownIcon;
+        const auto it = chosen.find(g.rom);
+        if (it == chosen.end()) continue;
+        if (it->second == "placeholder") { g.art.clear(); g.hasIcon = false; continue; }
+        std::vector<unsigned char> data;
+        std::vector<uint32_t> art;
+        if (ReadFile(savesDir + "/artwork/" + it->second, data) && LoadSquareArt(data.data(), data.size(), art)) g.art = art;
+    }
 }
 
 inline void FindArt(Game& g, const std::string& listFolder)
@@ -999,11 +1054,14 @@ inline bool ContinueAt(const Canvas& c, int x, int y)
     const GlassSpots s = Spots(c);
     return x >= s.contX && x < s.contX + s.contW && y >= s.contY && y < s.contY + s.contH;
 }
-// The game the banner offers: the one played last, if it is still here, else the chosen one.
+// The game the banner offers: the one played last, if it is still here, else the first that can be played
+// (not the chosen one: the banner would change, and be drawn again, with every press).
 inline int ContinueGame(const std::vector<Game>& games, int selected)
 {
     for (size_t i = 0; i < games.size(); i++)
         if (!ContinueRom().empty() && games[i].rom == ContinueRom()) return (int)i;
+    for (size_t i = 0; i < games.size(); i++)
+        if (games[i].known && !games[i].comingSoon) return (int)i;
     return selected;
 }
 // A game's picture (or its DS icon on glass) filling a rounded box, cropped to fill it.
@@ -1037,6 +1095,16 @@ inline void DrawCover(Canvas& c, const Game& g, int x, int y, int w, int h, floa
         return;
     }
     Glass::Round(c, x, y, w, h, r, 0x26FFFFFF);
+    if (!g.hasIcon && g.comingSoon) return; // (its card says COMING SOON over it)
+    if (!g.hasIcon)
+    {
+        // (The plain card: the game's name in the middle.)
+        const std::string n = ShortName(g);
+        float px = h / 7.0f;
+        while (px > 8 && GW(n, px, true) > w - h / 8) px -= 1;
+        GT(c, x + (w - GW(n, px, true)) / 2, y + h * 0.5f, n, px, 0xE6FFFFFFu, true);
+        return;
+    }
     if (g.hasIcon)
     {
         const int is = std::max(1, std::min(w, h) / 40), ox = x + (w - 32 * is) / 2, oy = y + (h - 32 * is) / 2;
@@ -1051,7 +1119,7 @@ inline void GlassBackdrop(Canvas& c, const Game* g)
 {
     static std::string key;
     static int kw = 0, kh = 0;
-    const std::string k = g && !g->art.empty() ? g->rom : std::string();
+    const std::string k = g && !g->art.empty() ? g->rom + "#" + std::to_string(g->art[(size_t)Art * Art / 2 + Art / 2]) : std::string();
     if (k == key && kw == c.w && kh == c.h && c.backdrop.size() == (size_t)c.w * c.h) return;
     key = k; kw = c.w; kh = c.h;
     // (Made small, as MakeBackdrop blurs at a fraction of the size anyway, then drawn up by it.)
@@ -1090,9 +1158,59 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     const int cont = ContinueGame(games, selected);
     const Game* shown = selected >= 0 && selected < (int)games.size() ? &games[selected]
                       : cont >= 0 && cont < (int)games.size() ? &games[cont] : nullptr;
-    GlassBackdrop(c, shown);
-    const bool solid = Glass::Backdrop(c);
+    const Game* bg = shown;
+    if (!BackdropRom().empty())
+        for (const Game& g : games)
+            if (g.rom == BackdropRom()) { bg = &g; break; }
+    GlassBackdrop(c, bg);
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint, dark = 0xFF18222Eu;
+    FollowSelection(v, selected, scroll, follow);
+    // (Everything but the chosen card, the game's menu, the dialogs and the hints is kept as drawn and
+    // copied back while nothing on it changes; a press then redraws only the chosen card. The Switch
+    // draws in software about 20 times slower than a PC.)
+    auto sig = [](const Game& g) { return g.art.empty() ? std::string("-") : std::to_string(g.art[(size_t)Art * Art / 2 + Art / 2]); };
+    std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
+                    + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/" + std::to_string(Focus().side) + "/" + std::to_string(Focus().banner) + "/"
+                    + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom();
+    for (const Game& g : games) key += "|" + g.rom + g.customName + (g.favourite ? "*" : "") + sig(g);
+    static std::vector<uint32_t> base;
+    static std::string baseKey;
+    bool solid = c.backdrop.size() == c.px.size();
+    auto visible = [&](const View::Spot& s) { const int y = grid.top + s.y - scroll; return y >= grid.top - 2 && y + grid.ch <= grid.bottom + 2; };
+    auto drawCard = [&](const View::Spot& s, bool sel) {
+        const int x = s.x, y = grid.top + s.y - scroll;
+        const Game& g = games[s.game];
+        if (sel) Glass::Glow(c, x, y, grid.cw, grid.ch, 16 * u, u);
+        Menu::FrostBox(c, solid, x, y, grid.cw, grid.ch, 16 * u, sel, sel ? 1.5f * u : 1.0f);
+        const int ix = x + (int)(8 * u), iy = y + (int)(8 * u), iw = grid.tile, ih = grid.tile;
+        DrawCover(c, g, ix, iy, iw, ih, 10 * u);
+        if (g.comingSoon)
+        {
+            Glass::Round(c, ix, iy, iw, ih, 10 * u, 0x99000000u);
+            GT(c, ix + (iw - GW("Coming Soon", 14 * u, true)) / 2, iy + ih * 0.5f, "Coming Soon", 14 * u, text, true);
+        }
+        const float cy = iy + ih + 16 * u;
+        std::string name = ShortName(g);
+        float npx = 17 * u;
+        const int room = iw - GW(PlatformName(g.platform), 13 * u, true) - (int)(14 * u);
+        while (npx > 10 * u && GW(name, npx, true) > room) npx -= u;
+        GT(c, ix + (int)(4 * u), cy, name, npx, text, true);
+        const std::string sub = !g.known && !g.comingSoon ? "Not Playable" : PlatformName(g.platform);
+        GT(c, ix + iw - (int)(4 * u) - GW(sub, 13 * u, true), cy, sub, 13 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
+        if (g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, ix + iw - 14 * u, iy + 14 * u, 7 * u, 0xFFFFFFFFu);
+    };
+    auto moreBelow = [&]() {
+        if (scroll + (grid.bottom - grid.top) < v.height - grid.gap)
+            Glass::Round(c, sp.tabsX + grid.cols * grid.colStep / 2 - (int)(16 * u), grid.bottom + (int)(4 * u), (int)(32 * u), (int)(4 * u), 2 * u, 0x80FFFFFFu);
+    };
+    if (key == baseKey && base.size() == c.px.size())
+    {
+        std::copy(base.begin(), base.end(), c.px.begin());
+        Glass::Mark(c, 0, 0, c.w, c.h);
+    }
+    else
+    {
+    solid = Glass::Backdrop(c);
 
     // The sidebar: the sections, Home chosen (Settings while it is chosen with the arrows).
     // (Frosted, square, with a soft shadow and a faint line where it meets the rest of the screen.)
@@ -1172,43 +1290,35 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         GT(c, sp.bannerX + sp.bannerW - GW(n, 16 * u, true), sp.headY + 14 * u, n, 16 * u, hint, true);
     }
 
-    // The cards.
-    FollowSelection(v, selected, scroll, follow);
+    // The cards (none chosen: the chosen one is drawn over them below).
     for (const View::Head& h : v.heads)
         if (h.empty)
         {
-            const std::string none = tab == TAB_HOME ? "Add Games To Home With X In The Other Tabs"
+            const std::string none = tab == TAB_HOME ? "Add Games To Home From A Game's Menu (A On A Game)"
                                    : tab == TAB_HACKS ? "No Romhacks Yet" : "No " + std::string(TabLabel(tab)) + " Games Yet";
             GT(c, sp.tabsX + (grid.cols * grid.colStep - GW(none, 16 * u, true)) / 2, (grid.top + grid.bottom) * 0.5f, none, 16 * u, hint, true);
         }
     for (const View::Spot& s : v.spots)
-    {
-        const int x = s.x, y = grid.top + s.y - scroll;
-        if (y < grid.top - 2 || y + grid.ch > grid.bottom + 2) continue;
-        const Game& g = games[s.game];
-        const bool sel = s.game == selected;
-        if (sel) Glass::Glow(c, x, y, grid.cw, grid.ch, 16 * u, u);
-        Menu::FrostBox(c, solid, x, y, grid.cw, grid.ch, 16 * u, sel, sel ? 1.5f * u : 1.0f);
-        const int ix = x + (int)(8 * u), iy = y + (int)(8 * u), iw = grid.tile, ih = grid.tile;
-        DrawCover(c, g, ix, iy, iw, ih, 10 * u);
-        if (g.comingSoon)
-        {
-            Glass::Round(c, ix, iy, iw, ih, 10 * u, 0x99000000u);
-            GT(c, ix + (iw - GW("Coming Soon", 14 * u, true)) / 2, iy + ih * 0.5f, "Coming Soon", 14 * u, text, true);
-        }
-        const float cy = iy + ih + 16 * u;
-        std::string name = ShortName(g);
-        float npx = 17 * u;
-        const int room = iw - GW(PlatformName(g.platform), 13 * u, true) - (int)(14 * u);
-        while (npx > 10 * u && GW(name, npx, true) > room) npx -= u;
-        GT(c, ix + (int)(4 * u), cy, name, npx, text, true);
-        const std::string sub = !g.known && !g.comingSoon ? "Not Playable" : PlatformName(g.platform);
-        GT(c, ix + iw - (int)(4 * u) - GW(sub, 13 * u, true), cy, sub, 13 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
-        if (g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, ix + iw - 14 * u, iy + 14 * u, 7 * u, 0xFFFFFFFFu);
+        if (visible(s)) drawCard(s, false);
+    moreBelow();
+    base = c.px;
+    baseKey = key;
     }
-    // More below.
-    if (scroll + (grid.bottom - grid.top) < v.height - grid.gap)
-        Glass::Round(c, sp.tabsX + grid.cols * grid.colStep / 2 - (int)(16 * u), grid.bottom + (int)(4 * u), (int)(32 * u), (int)(4 * u), 2 * u, 0x80FFFFFFu);
+    // The chosen card, over the kept picture: the blurred background put back round it first.
+    {
+        const int k = v.SpotOf(selected);
+        if (k >= 0 && visible(v.spots[k]))
+        {
+            const View::Spot& s = v.spots[k];
+            const int m = (int)(7 * u), x0 = std::max(0, s.x - m), x1 = std::min(c.w, s.x + grid.cw + m);
+            const int y = grid.top + s.y - scroll, y0 = std::max(0, y - m), y1 = std::min(c.h, y + grid.ch + m);
+            if (solid)
+                for (int yy = y0; yy < y1; yy++)
+                    std::copy(c.backdrop.begin() + (size_t)yy * c.w + x0, c.backdrop.begin() + (size_t)yy * c.w + x1, c.px.begin() + (size_t)yy * c.w + x0);
+            drawCard(s, true);
+            moreBelow();
+        }
+    }
 
     // The game's menu (A on a game), beside its card: a glass panel of rows as the sidebar's.
     Focus().popW = 0;
@@ -1274,6 +1384,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             msg = "This deletes " + (sl == std::string::npos ? g.rom : g.rom.substr(sl + 1)) + " from your folder. Your saves are kept.";
             rows = { "Delete ROM File", "Cancel" }; red = 0;
         }
+        else if (F.dialog >= 5) { title = F.dTitle; msg = F.dMsg; rows = F.dItems; red = F.dialog == 6 ? 0 : -1; }
+        else if (F.dialog == 4) { title = "Change Picture"; msg = "Pictures stay on this device. Only use pictures you have permission to use."; rows = { "Import A Picture", "Find Artwork Online", "Plain Card", "Restore Original", "Cancel" }; }
         else { title = "Rename " + ShortName(own); msg = "Type a new name. Leave it empty to go back to the game's own name."; rows = { "Save", "Cancel" }; }
         const int pw = (int)(560 * u), pad = (int)(24 * u), rowH = (int)(48 * u), rg = (int)(8 * u), fieldH = (int)(52 * u);
         std::vector<std::string> lines;
@@ -1284,7 +1396,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             flush();
             if (!line.empty()) lines.push_back(line);
         }
-        const int ph = pad + (int)(36 * u) + (int)lines.size() * (int)(22 * u) + (int)(16 * u) + (F.dialog == 3 ? fieldH + rg : 0)
+        const int ph = pad + (int)(36 * u) + (int)lines.size() * (int)(22 * u) + (int)(16 * u) + (F.dialog == 3 ? fieldH + rg : 0) + (F.dialog == 4 ? (int)(150 * u) + 2 * rg : 0)
                      + (int)rows.size() * (rowH + rg) - rg + pad;
         const int px = (c.w - pw) / 2, py = (c.h - ph) / 2;
         Glass::Round(c, 0, 0, c.w, c.h, 0, 0x73000000u);
@@ -1302,6 +1414,13 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         int y = py + pad;
         GT(c, px + pad, y + 14 * u, title, 22 * u, text, true);
         y += (int)(36 * u);
+        if (F.dialog == 4)
+        {
+            // (The picture it has now.)
+            const int ps = (int)(150 * u);
+            DrawCover(c, g, px + (pw - ps) / 2, y, ps, ps, 14 * u);
+            y += ps + 2 * rg;
+        }
         for (const std::string& l : lines) { GT(c, px + pad, y + 10 * u, l, 15 * u, hint, false); y += (int)(22 * u); }
         y += (int)(16 * u);
         if (F.dialog == 3)

@@ -505,6 +505,39 @@ void OpenFolder(const std::string& path)
 
 // The list in its own window until a game is chosen: its index in games (which is updated as
 // ROMs come and go), or -1 when the window is closed.
+#ifdef _WIN32
+#include <commdlg.h>
+#include <SDL2/SDL_syswm.h>
+// Change Picture's Import A Picture on Windows: the system's own file picker (comdlg32, loaded when
+// it is needed, so the program links nothing more), over the launcher's window. Empty: none chosen.
+static std::string PickPictureFile(SDL_Window* window)
+{
+    typedef BOOL(WINAPI * OpenFn)(LPOPENFILENAMEW);
+    static HMODULE dll = LoadLibraryW(L"comdlg32.dll");
+    OpenFn open = dll ? (OpenFn)GetProcAddress(dll, "GetOpenFileNameW") : nullptr;
+    if (!open) return std::string();
+    wchar_t file[1024] = L"";
+    OPENFILENAMEW o = {};
+    o.lStructSize = sizeof o;
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (SDL_GetWindowWMInfo(window, &info)) o.hwndOwner = info.info.win.window;
+    o.lpstrFilter = L"Pictures (PNG, JPG)\0*.png;*.jpg;*.jpeg\0\0";
+    o.lpstrFile = file;
+    o.nMaxFile = 1024;
+    o.lpstrTitle = L"Choose a picture for the game";
+    o.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!open(&o)) return std::string();
+    const int n = WideCharToMultiByte(CP_UTF8, 0, file, -1, nullptr, 0, nullptr, nullptr);
+    std::string out(n > 0 ? n : 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, file, -1, &out[0], n, nullptr, nullptr);
+    if (!out.empty() && out.back() == '\0') out.pop_back();
+    return out;
+}
+#endif
+
+#include "save_backups.h"
+
 int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool& fullscreen, int winW, int winH)
 {
 #ifdef __ANDROID__
@@ -605,6 +638,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         const std::string keep=selected>=0 && selected<(int)games.size()?games[selected].rom:"";
         library.Load(fo.saves+"/fulldex-library.txt");
         Launcher::ApplyLocal(games, fo.saves); // (the player's names; the games taken off the list left out)
+        Launcher::ApplyArt(games, fo.saves); // (the pictures chosen with Change Picture)
         Launcher::Sort(games);
         library.Apply(games,Launcher::ConfigValue(fo.cfg,"list_sort"));
         for(size_t i=0;i<games.size();i++)if(games[i].rom==keep)selected=(int)i;
@@ -630,6 +664,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     if (const char* pp = getenv("SSR_LIST_POPUP")) Launcher::Focus().popup = atoi(pp);
     // (SSR_LIST_DIALOG=n: a dialog open, for the test picture: 1 Remove Game, 2 Delete, 3 Rename.)
     if (const char* dd = getenv("SSR_LIST_DIALOG")) { Launcher::Focus().dialog = atoi(dd); Launcher::Focus().text = "My HeartGold Run"; }
+    // (SSR_LIST_ITEM=n: the chosen game's menu row n chosen at once, for test pictures of its dialogs.)
+    const char* testItem = listsShown == 1 ? getenv("SSR_LIST_ITEM") : nullptr;
     // (The game chosen last, if it is in that tab; else the tab's first. The games are in the
     // view's order.)
     if (selected < 0 || selected >= (int)games.size() || !Launcher::InTab(games, selected, tab))
@@ -948,6 +984,39 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 const bool valid = selected >= 0 && selected < (int)games.size();
                 if (item == 2 && valid) { F.dialog = 3; F.drow = 0; F.text = Launcher::ShortName(games[selected]); SDL_StartTextInput(); return; }
                 if (item == 5 && valid) { F.dialog = 1; F.drow = 0; return; }
+                if (item == 3 && valid) { F.dialog = 4; F.drow = 0; return; }
+                if (item == 4 && valid)
+                {
+                    // Manage Saves: the newest backups (save_backups.h), the saves folder, close.
+                    const Launcher::Game& g = games[selected];
+                    if (g.saveName.empty()) { note = "THIS GAME'S SAVES CANNOT BE MANAGED HERE YET"; return; }
+                    const std::string save = fo.saves + "/" + g.saveName;
+                    const auto list = SaveBackups::List(save);
+                    std::error_code ec;
+                    const bool has = std::filesystem::exists(std::filesystem::u8path(save), ec);
+                    static const char* months[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+                    F.dTitle = "Manage Saves";
+                    F.dMsg = !has ? "There is no save for this game yet."
+                           : list.empty() ? "Fulldex backs up this save every time the game starts. There are no backups yet."
+                                          : "Fulldex backs up this save every time the game starts. Choose one to go back to it.";
+                    F.dItems.clear();
+                    F.dPaths.clear();
+                    for (size_t k = 0; k < list.size() && k < 5; k++)
+                    {
+                        // (2026-11-04 12:44:55 as Restore 4 Nov 2026, 12:44)
+                        const std::string& l = list[k].label;
+                        const int m = std::max(1, std::min(12, atoi(l.substr(5, 2).c_str())));
+                        F.dItems.push_back("Restore " + std::to_string(atoi(l.substr(8, 2).c_str())) + " " + months[m - 1] + " " + l.substr(0, 4) + ", " + l.substr(11, 5));
+                        F.dPaths.push_back(list[k].path);
+                    }
+                    F.dItems.push_back("Open Saves Folder");
+                    F.dPaths.push_back("#folder");
+                    F.dItems.push_back("Close");
+                    F.dPaths.push_back("#close");
+                    F.dialog = 5;
+                    F.drow = 0;
+                    return;
+                }
                 if (item >= 2) { if (valid) note = Launcher::PopupLabel(games[selected], item) + ": COMING SOON"; return; }
                 direct = true;
             }
@@ -1142,6 +1211,100 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             note = "ROM FILE DELETED. ITS SAVES ARE KEPT";
             return;
         }
+        if (F.dialog >= 5)
+        {
+            const std::string pick = F.drow >= 0 && F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
+            const std::string save = fo.saves + "/" + games[selected].saveName;
+            if (pick == "#close" || pick.empty()) { dialogClose(); return; }
+            if (pick == "#folder")
+            {
+                const std::string url = "file:///" + fo.saves;
+                if (SDL_OpenURL(url.c_str()) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", url.c_str(), SDL_GetError());
+                note = "SAVES FOLDER OPENED";
+                return;
+            }
+            if (F.dialog == 5)
+            {
+                // (Sure? Cancel chosen first.)
+                F.dTitle = "Go Back To This Backup?";
+                F.dMsg = F.dItems[F.drow].substr(8) + ". Your save as it is now is kept beside it as a .before-restore copy.";
+                F.dItems = { "Restore Backup", "Cancel" };
+                F.dPaths = { pick, "#close" };
+                F.dialog = 6;
+                F.drow = 1;
+                return;
+            }
+            std::error_code ec;
+            const auto now = std::filesystem::file_size(std::filesystem::u8path(save), ec);
+            const auto was = std::filesystem::file_size(std::filesystem::u8path(pick), ec);
+            std::vector<unsigned char> restored;
+            std::string error;
+            const bool ok = SaveBackups::Restore(save, pick, now > 0 ? (size_t)now : (size_t)was, restored, error);
+            fprintf(stderr, "[launcher] restore %s from %s: %s\n", save.c_str(), pick.c_str(), ok ? "done" : error.c_str());
+            dialogClose();
+            note = ok ? "SAVE RESTORED. THE ONE BEFORE IS KEPT AS A .BEFORE-RESTORE COPY" : error;
+            return;
+        }
+        if (F.dialog == 4)
+        {
+            const std::string artList = fo.saves + "/fulldex-art.txt";
+            if (F.drow == 0)
+            {
+#ifdef _WIN32
+                const std::string path = PickPictureFile(window);
+                if (path.empty()) return;
+                std::vector<unsigned char> data;
+                std::vector<uint32_t> test;
+                if (!Launcher::ReadFile(path, data) || !Launcher::LoadSquareArt(data.data(), data.size(), test))
+                { note = "THAT PICTURE COULD NOT BE READ: PNG OR JPG ONLY"; return; }
+                const std::string dir = fo.saves + "/artwork";
+                std::error_code ec;
+                std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
+                // (Kept as the ROM's own file name, with the picture's ending.)
+                std::string base = rom.substr(rom.find_last_of("/\\") + 1);
+                if (base.find('.') != std::string::npos) base = base.substr(0, base.find_last_of('.'));
+                std::string ext = path.substr(path.find_last_of('.'));
+                for (char& ch : ext) ch = (char)tolower((unsigned char)ch);
+                const std::string name = base + ext;
+                bool ok = false;
+                if (FILE* f = fopen((dir + "/" + name).c_str(), "wb"))
+                {
+                    ok = fwrite(data.data(), 1, data.size(), f) == data.size();
+                    ok = fclose(f) == 0 && ok;
+                }
+                ok = ok && Launcher::SetPair(artList, rom, name);
+                fprintf(stderr, "[launcher] picture for %s: %s (%s)\n", rom.c_str(), path.c_str(), ok ? "kept" : "not kept");
+                dialogClose();
+                reorderLibrary();
+                note = ok ? "PICTURE CHANGED" : "COULD NOT KEEP THE PICTURE";
+#else
+                note = "IMPORTING A PICTURE IS COMING TO THIS DEVICE SOON";
+#endif
+                return;
+            }
+            if (F.drow == 1)
+            {
+                // (The browser, with a search for the game's box art: the player saves one, then imports it.)
+                std::string q = Launcher::ShortName(games[selected]) + " Pokemon box art", url = "https://www.google.com/search?tbm=isch&q=";
+                for (unsigned char ch : q)
+                    if (isalnum(ch)) url += (char)ch;
+                    else if (ch == ' ') url += '+';
+                    else { char hex[4]; snprintf(hex, sizeof hex, "%%%02X", ch); url += hex; }
+                if (SDL_OpenURL(url.c_str()) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", url.c_str(), SDL_GetError());
+                note = "OPENED IN YOUR BROWSER: SAVE A PICTURE, THEN IMPORT IT HERE";
+                return;
+            }
+            if (F.drow == 2 || F.drow == 3)
+            {
+                const bool ok = Launcher::SetPair(artList, rom, F.drow == 2 ? "placeholder" : "");
+                dialogClose();
+                reorderLibrary();
+                note = !ok ? "COULD NOT SAVE THE PICTURE" : F.drow == 2 ? "PLAIN CARD" : "ORIGINAL PICTURE BACK";
+                return;
+            }
+            dialogClose();
+            return;
+        }
         if (F.dialog == 3)
         {
             std::string name = F.text;
@@ -1308,7 +1471,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     any = SDL_PollEvent(&e);
                     continue;
                 }
-                const int rows = F.dialog == 1 ? 3 : 2;
+                const int rows = F.dialog >= 5 ? std::max(1, (int)F.dItems.size()) : F.dialog == 1 ? 3 : F.dialog == 4 ? 5 : 2;
                 if (e.type == SDL_TEXTINPUT && F.dialog == 3)
                 {
                     for (const char* p = e.text.text; *p; p++)
@@ -1879,6 +2042,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (texture) SDL_DestroyTexture(texture);
             texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, ow, oh);
         }
+        // (SSR_LIST_ITEM: once the canvas has its size, so the glass launcher's menu is there to use.)
+        if (testItem && selected >= 0) { Launcher::Focus().popup = atoi(testItem); testItem = nullptr; choose(); }
         // A controller's buttons named as it has them (PlayStation's CROSS, TRIANGLE, ...) and as
         // CONTROLS has them, while one is connected.
         const bool padIn = !pads.empty() || !joys.empty();
