@@ -604,6 +604,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     auto reorderLibrary=[&]() {
         const std::string keep=selected>=0 && selected<(int)games.size()?games[selected].rom:"";
         library.Load(fo.saves+"/fulldex-library.txt");
+        Launcher::ApplyLocal(games, fo.saves); // (the player's names; the games taken off the list left out)
         Launcher::Sort(games);
         library.Apply(games,Launcher::ConfigValue(fo.cfg,"list_sort"));
         for(size_t i=0;i<games.size();i++)if(games[i].rom==keep)selected=(int)i;
@@ -627,6 +628,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     if (const char* t = getenv("SSR_LIST_TAB")) tab = std::max(0, std::min(Launcher::TABS - 1, atoi(t)));
     // (SSR_LIST_POPUP=n: the chosen game's menu open on row n, for the test picture.)
     if (const char* pp = getenv("SSR_LIST_POPUP")) Launcher::Focus().popup = atoi(pp);
+    // (SSR_LIST_DIALOG=n: a dialog open, for the test picture: 1 Remove Game, 2 Delete, 3 Rename.)
+    if (const char* dd = getenv("SSR_LIST_DIALOG")) { Launcher::Focus().dialog = atoi(dd); Launcher::Focus().text = "My HeartGold Run"; }
     // (The game chosen last, if it is in that tab; else the tab's first. The games are in the
     // view's order.)
     if (selected < 0 || selected >= (int)games.size() || !Launcher::InTab(games, selected, tab))
@@ -942,7 +945,10 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 const int item = F.popup;
                 F.popup = -1;
                 if (item == 1) { toggleFavourite(); return; }
-                if (item >= 2) { if (selected >= 0 && selected < (int)games.size()) note = Launcher::PopupLabel(games[selected], item) + ": COMING SOON"; return; }
+                const bool valid = selected >= 0 && selected < (int)games.size();
+                if (item == 2 && valid) { F.dialog = 3; F.drow = 0; F.text = Launcher::ShortName(games[selected]); SDL_StartTextInput(); return; }
+                if (item == 5 && valid) { F.dialog = 1; F.drow = 0; return; }
+                if (item >= 2) { if (valid) note = Launcher::PopupLabel(games[selected], item) + ": COMING SOON"; return; }
                 direct = true;
             }
             else if (!direct && !onTabs && !onSettings && selected >= 0 && selected < (int)games.size() && games[selected].known && !games[selected].comingSoon)
@@ -1094,6 +1100,63 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             note.clear();
         }
     };
+    // The glass launcher's dialogs (Remove Game, Delete ROM File, Rename): what their rows do.
+    // (Rename: the pause menu's keyboard page; kbLayer capitals, small letters or signs.)
+    Menu kb;
+    std::vector<int> kbIds;
+    int kbLayer = 0;
+    auto kbBuild = [&]() { Launcher::BuildKeyboard(kb, kbIds, Launcher::Focus().text, kbLayer, "The Game's Own Name", "Save"); };
+    auto dialogClose = [&]() { Launcher::Focus().dialog = 0; kb.open = false; SDL_StopTextInput(); };
+    auto dialogAct = [&]() {
+        Launcher::GlassFocus& F = Launcher::Focus();
+        if (selected < 0 || selected >= (int)games.size()) { dialogClose(); return; }
+        const std::string rom = games[selected].rom;
+        auto settle = [&]() { const Launcher::View v = view(); if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v); };
+        if (F.dialog == 1)
+        {
+            if (F.drow == 0)
+            {
+                dialogClose();
+                const bool ok = Launcher::SetPair(fo.saves + "/fulldex-hidden.txt", rom, "1");
+                fprintf(stderr, "[launcher] taken off the list: %s (%s)\n", rom.c_str(), ok ? "saved" : "not saved");
+                reorderLibrary();
+                settle();
+                note = ok ? "REMOVED FROM THE LIST. THE ROM IS STILL IN YOUR FOLDER" : "COULD NOT SAVE THE LIST";
+            }
+            else if (F.drow == 1) { F.dialog = 2; F.drow = 1; } // (Delete: sure? Cancel chosen first)
+            else dialogClose();
+            return;
+        }
+        if (F.dialog == 2)
+        {
+            dialogClose();
+            if (F.drow != 0) return;
+            std::error_code ec;
+            std::filesystem::remove(std::filesystem::u8path(rom), ec);
+            fprintf(stderr, "[launcher] delete %s: %s\n", rom.c_str(), ec ? ec.message().c_str() : "deleted");
+            if (ec) { note = "COULD NOT DELETE THE ROM FILE"; return; }
+            games.erase(games.begin() + selected);
+            selected = -1;
+            reorderLibrary();
+            settle();
+            note = "ROM FILE DELETED. ITS SAVES ARE KEPT";
+            return;
+        }
+        if (F.dialog == 3)
+        {
+            std::string name = F.text;
+            dialogClose();
+            if (F.drow != 0) return;
+            while (!name.empty() && name.back() == ' ') name.pop_back();
+            while (!name.empty() && name.front() == ' ') name.erase(0, 1);
+            Launcher::Game own = games[selected];
+            own.customName.clear();
+            if (name == Launcher::ShortName(own)) name.clear();
+            const bool ok = Launcher::SetPair(fo.saves + "/fulldex-names.txt", rom, name);
+            reorderLibrary();
+            note = !ok ? "COULD NOT SAVE THE NAME" : name.empty() ? "NAME RESET" : "RENAMED";
+        }
+    };
     while (!quit)
     {
         SDL_Event e;
@@ -1165,6 +1228,118 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         raActivate(row);
                         if (raOpen && row <= 1) SDL_StartTextInput(); // (a phone's keyboard, again)
                     }
+                }
+                else if (e.type == SDL_CONTROLLERDEVICEADDED || e.type == SDL_CONTROLLERDEVICEREMOVED || e.type == SDL_JOYDEVICEADDED ||
+                         e.type == SDL_JOYDEVICEREMOVED || e.type == SDL_WINDOWEVENT)
+                    goto normal;
+                any = SDL_PollEvent(&e);
+                continue;
+            }
+            // (A glass launcher dialog takes the keyboard, the buttons and taps while it is up.)
+            if (Launcher::Focus().dialog && e.type != SDL_QUIT && !guide)
+            {
+                Launcher::GlassFocus& F = Launcher::Focus();
+                if (F.dialog == 3)
+                {
+                    if (!kb.open) { kbLayer = 0; kbBuild(); }
+                    auto erase = [&]() {
+                        while (!F.text.empty() && ((unsigned char)F.text.back() & 0xC0) == 0x80) F.text.pop_back();
+                        if (!F.text.empty()) F.text.pop_back();
+                    };
+                    auto press = [&](int hit) {
+                        const int id = hit >= 0 && hit < (int)kbIds.size() ? kbIds[hit] : -2;
+                        if (id == Launcher::KB_BACK) { dialogClose(); return; }
+                        if (id == Launcher::KB_DONE) { F.drow = 0; dialogAct(); return; }
+                        if (id == Launcher::KB_LAYER) kbLayer = kbLayer == 0 ? 1 : 0;
+                        else if (id == Launcher::KB_SYMBOLS) kbLayer = kbLayer == 2 ? 1 : 2;
+                        else if (id == Launcher::KB_DEL) erase();
+                        else if (id == Launcher::KB_SPACE) { if (F.text.size() < 48) F.text += ' '; }
+                        else if (id >= Launcher::KB_KEY0 && id < Launcher::KB_LAYER)
+                        {
+                            if (F.text.size() < 48) F.text += kb.items[hit].label;
+                            if (kbLayer == 0 && isupper((unsigned char)kb.items[hit].label[0])) kbLayer = 1; // (a capital, then small letters)
+                        }
+                        kbBuild();
+                    };
+                    MenuInput nav;
+                    if (e.type == SDL_TEXTINPUT)
+                    {
+                        for (const char* p = e.text.text; *p; p++)
+                            if ((unsigned char)*p >= 32 && F.text.size() < 48) F.text += *p;
+                        kbBuild();
+                    }
+                    else if (e.type == SDL_KEYDOWN)
+                    {
+                        const SDL_Scancode sc = e.key.keysym.scancode;
+                        if (sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_AC_BACK) dialogClose();
+                        else if (sc == SDL_SCANCODE_BACKSPACE) { erase(); kbBuild(); }
+                        else if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER) { F.drow = 0; dialogAct(); }
+                        else { nav.up = sc == SDL_SCANCODE_UP; nav.down = sc == SDL_SCANCODE_DOWN; nav.left = sc == SDL_SCANCODE_LEFT; nav.right = sc == SDL_SCANCODE_RIGHT; }
+                    }
+                    else if (e.type == SDL_CONTROLLERBUTTONDOWN)
+                    {
+                        const int b = e.cbutton.button;
+                        if (b == SDL_CONTROLLER_BUTTON_B || b == SDL_CONTROLLER_BUTTON_BACK) dialogClose();
+                        else if (b == SDL_CONTROLLER_BUTTON_START) { F.drow = 0; dialogAct(); }
+                        else if (b == SDL_CONTROLLER_BUTTON_X) { erase(); kbBuild(); }
+                        else
+                        {
+                            nav.accept = b == SDL_CONTROLLER_BUTTON_A;
+                            nav.up = b == SDL_CONTROLLER_BUTTON_DPAD_UP; nav.down = b == SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+                            nav.left = b == SDL_CONTROLLER_BUTTON_DPAD_LEFT; nav.right = b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+                        }
+                    }
+                    else if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT)
+                    {
+                        int ww = 1, wh = 1;
+                        SDL_GetWindowSize(window, &ww, &wh);
+                        const int hit = kb.ItemAt(e.button.x * canvas.w / std::max(1, ww), e.button.y * canvas.h / std::max(1, wh));
+                        if (hit >= 0) { kb.selected = hit; press(hit); }
+                    }
+                    else if (e.type == SDL_CONTROLLERDEVICEADDED || e.type == SDL_CONTROLLERDEVICEREMOVED || e.type == SDL_JOYDEVICEADDED ||
+                             e.type == SDL_JOYDEVICEREMOVED || e.type == SDL_WINDOWEVENT)
+                        goto normal;
+                    if (kb.open && (nav.up || nav.down || nav.left || nav.right || nav.accept))
+                    {
+                        int dir = 0;
+                        const int hit = kb.Update(nav, dir);
+                        if (hit >= 0) press(hit);
+                    }
+                    any = SDL_PollEvent(&e);
+                    continue;
+                }
+                const int rows = F.dialog == 1 ? 3 : 2;
+                if (e.type == SDL_TEXTINPUT && F.dialog == 3)
+                {
+                    for (const char* p = e.text.text; *p; p++)
+                        if ((unsigned char)*p >= 32 && F.text.size() < 48) F.text += *p;
+                }
+                else if (e.type == SDL_KEYDOWN)
+                {
+                    const SDL_Scancode sc = e.key.keysym.scancode;
+                    if (sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_AC_BACK) dialogClose();
+                    else if (sc == SDL_SCANCODE_BACKSPACE && F.dialog == 3)
+                    {
+                        while (!F.text.empty() && ((unsigned char)F.text.back() & 0xC0) == 0x80) F.text.pop_back();
+                        if (!F.text.empty()) F.text.pop_back();
+                    }
+                    else if (sc == SDL_SCANCODE_UP || sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_TAB) F.drow = (F.drow + (sc == SDL_SCANCODE_UP ? rows - 1 : 1)) % rows;
+                    else if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER) dialogAct();
+                }
+                else if (e.type == SDL_CONTROLLERBUTTONDOWN)
+                {
+                    const int b = e.cbutton.button;
+                    if (b == SDL_CONTROLLER_BUTTON_B || b == SDL_CONTROLLER_BUTTON_BACK) dialogClose();
+                    else if (b == SDL_CONTROLLER_BUTTON_A || b == SDL_CONTROLLER_BUTTON_START) dialogAct();
+                    else if (b == SDL_CONTROLLER_BUTTON_DPAD_UP || b == SDL_CONTROLLER_BUTTON_DPAD_DOWN)
+                        F.drow = (F.drow + (b == SDL_CONTROLLER_BUTTON_DPAD_UP ? rows - 1 : 1)) % rows;
+                }
+                else if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT)
+                {
+                    int ww = 1, wh = 1;
+                    SDL_GetWindowSize(window, &ww, &wh);
+                    const int row = Launcher::DialogAt(e.button.x * canvas.w / std::max(1, ww), e.button.y * canvas.h / std::max(1, wh));
+                    if (row >= 0) { F.drow = row; dialogAct(); }
                 }
                 else if (e.type == SDL_CONTROLLERDEVICEADDED || e.type == SDL_CONTROLLERDEVICEREMOVED || e.type == SDL_JOYDEVICEADDED ||
                          e.type == SDL_JOYDEVICEREMOVED || e.type == SDL_WINDOWEVENT)
@@ -1754,7 +1929,15 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 keysMenu.Draw(canvas, "KEYS AND BUTTONS", kh);
             }
         }
-        else Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected, scroll, note, Launcher::Focus().popup >= 0 ? (padIn ? btn(Controls::A) + ": CHOOSE    " + btn(Controls::B) + ": BACK" : std::string("ENTER: CHOOSE    ESC: BACK")) : hint, theme, follow, onTabs, onSettings);
+        else if (!guide && Launcher::Focus().dialog == 3 && Launcher::Glassy(canvas))
+        {
+            // (Rename: the pause menu's keyboard page over the whole screen.)
+            if (!kb.open) { kbLayer = 0; kbBuild(); }
+            Launcher::GlassBackdrop(canvas, selected >= 0 && selected < (int)games.size() ? &games[selected] : nullptr); // (the game's picture, blurred)
+            kb.Draw(canvas, "RENAME", padIn ? btn(Controls::A) + ": TYPE    " + btn(Controls::X) + ": DELETE    START: SAVE    " + btn(Controls::B) + ": CANCEL"
+                                          : std::string("TYPE OR CLICK THE KEYS    ENTER: SAVE    ESC: CANCEL"));
+        }
+        else Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected, scroll, note, (Launcher::Focus().popup >= 0 || Launcher::Focus().dialog) ? (padIn ? btn(Controls::A) + ": CHOOSE    " + btn(Controls::B) + ": BACK" : std::string("ENTER: CHOOSE    ESC: BACK")) : hint, theme, follow, onTabs, onSettings);
 #ifdef SSR_UPDATER
         if (updateMenu.open)
             updateMenu.Draw(canvas, Updater::PopupTitle(),

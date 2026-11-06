@@ -15,6 +15,7 @@
 #include <utility>
 #include <cmath>
 #include <vector>
+#include <map>
 #include <dirent.h>
 #include "ssr_os.h"
 #include "gamecode.h"
@@ -65,6 +66,7 @@ struct Game
     // A game on its way (AddComingSoon): its tile says so and it cannot be played.
     bool comingSoon = false;
     bool favourite = false;
+    std::string customName; // the player's own name for it (Rename; fulldex-names.txt), empty: its own
     long long lastPlayed = 0;
 };
 
@@ -72,13 +74,99 @@ inline std::string& ContinueRom() { static std::string r; return r; } // the gam
 // Where the arrows are on the glass launcher besides the games and the tabs: a section of the
 // sidebar (side, -1: none) or the banner's Continue (banner 1) or Game Options (2).
 // popup: the game's menu (A on a game) open on that row, -1 closed; where it was drawn (for taps).
-struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0, popY = 0, popW = 0, popRow = 0; };
+// dialog: 1 Remove Game, 2 Delete ROM File (sure?), 3 Rename (text: what is typed); drow its row;
+// dX..dRows where its rows were drawn (for taps).
+struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0, popY = 0, popW = 0, popRow = 0;
+                    int dialog = 0, drow = 0; std::string text; int dX = 0, dY = 0, dW = 0, dRow = 0, dRows = 0; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
 inline int PopupCount() { return 6; }
 inline std::string PopupLabel(const Game& g, int i)
 {
     static const char* n[] = { "Play", "", "Rename", "Change Picture", "Manage Saves", "Remove Game" };
     return i == 1 ? (g.favourite ? "Remove From Home" : "Add To Home") : i >= 0 && i < 6 ? n[i] : "";
+}
+// The pause menu's keyboard page (Menu::keyGrid) for Rename: BACK, four rows of keys (capitals, small
+// letters or signs: layer), then the two layer keys, SPACE, DELETE and done. ids: each item's key.
+enum { KB_BACK = -1, KB_KEY0 = 1000, KB_LAYER = 2000, KB_SYMBOLS, KB_SPACE, KB_DEL, KB_DONE };
+inline void BuildKeyboard(Menu& m, std::vector<int>& ids, const std::string& text, int layer, const char* prompt, const char* done)
+{
+    const int keep = m.open ? m.selected : -1;
+    m.items.clear();
+    ids.clear();
+    m.open = true; m.style = 1; m.pageIcon = Glass::I_SPARKLE;
+    m.keyGrid = true; m.keySecret = false; m.keyText = text; m.keyPrompt = prompt;
+    m.items.push_back({ "BACK", "" });
+    m.items.back().kind = Menu::K_BACK;
+    ids.push_back(KB_BACK);
+    static const char* const layers[3][4] = {
+        { "1234567890", "QWERTYUIOP", "ASDFGHJKL-", "ZXCVBNM_.!" },
+        { "1234567890", "qwertyuiop", "asdfghjkl-", "zxcvbnm_.!" },
+        { "1234567890", "!#$%&*()+=", "[]{}<>/\\|~", ";:'\",?^`.@" } };
+    auto key = [&](int id, const std::string& label, int row, int col, int span) {
+        m.items.push_back({ label, "" });
+        ids.push_back(id);
+        MenuItem& it = m.items.back();
+        it.kind = Menu::K_KEY; it.keyRow = row; it.keyCol = col; it.keySpan = span;
+    };
+    const char* const* rows = layers[std::max(0, std::min(2, layer))];
+    for (int r = 0; r < 4; r++)
+    {
+        const int n = (int)strlen(rows[r]);
+        for (int i = 0; i < n; i++) key(KB_KEY0 + r * 16 + i, std::string(1, rows[r][i]), r, 10 - n + i * 2, 2);
+    }
+    key(KB_LAYER, layer == 0 ? "abc" : "ABC", 4, 0, 3);
+    key(KB_SYMBOLS, layer == 2 ? "abc" : "#+=", 4, 3, 3);
+    key(KB_SPACE, "Space", 4, 6, 6);
+    key(KB_DEL, "Delete", 4, 12, 4);
+    key(KB_DONE, done, 4, 16, 4);
+    m.selected = keep > 0 && keep < (int)m.items.size() ? keep : 1;
+}
+inline int DialogAt(int x, int y)
+{
+    const GlassFocus& f = Focus();
+    if (!f.dialog || f.dW <= 0 || f.dRow <= 0 || x < f.dX || x >= f.dX + f.dW || y < f.dY) return -1;
+    const int i = (y - f.dY) / f.dRow;
+    return i < f.dRows ? i : -1;
+}
+// The player's own changes to the list, kept beside the saves: fulldex-names.txt (a ROM's path, a tab,
+// the name it shows) and fulldex-hidden.txt (the ROMs taken off the list, the same way).
+inline std::map<std::string, std::string> ReadPairs(const std::string& path)
+{
+    std::map<std::string, std::string> out;
+    if (FILE* f = fopen(path.c_str(), "rb"))
+    {
+        char line[4096];
+        while (fgets(line, sizeof line, f))
+        {
+            std::string s = line;
+            while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+            const size_t t = s.find('\t');
+            if (t != std::string::npos && t > 0) out[s.substr(0, t)] = s.substr(t + 1);
+        }
+        fclose(f);
+    }
+    return out;
+}
+inline bool SetPair(const std::string& path, const std::string& key, const std::string& value)
+{
+    std::map<std::string, std::string> all = ReadPairs(path);
+    if (value.empty()) all.erase(key);
+    else all[key] = value;
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    for (const auto& kv : all) fprintf(f, "%s\t%s\n", kv.first.c_str(), kv.second.c_str());
+    return fclose(f) == 0;
+}
+inline void ApplyLocal(std::vector<Game>& games, const std::string& savesDir)
+{
+    const auto names = ReadPairs(savesDir + "/fulldex-names.txt");
+    const auto hidden = ReadPairs(savesDir + "/fulldex-hidden.txt");
+    for (Game& g : games)
+    {
+        const auto it = names.find(g.rom);
+        g.customName = it == names.end() ? std::string() : it->second;
+    }
+    games.erase(std::remove_if(games.begin(), games.end(), [&](const Game& g) { return hidden.count(g.rom) > 0; }), games.end());
 }
 inline int PopupAt(int x, int y)
 {
@@ -646,8 +734,8 @@ inline Grid Layout(const Canvas& c)
         const float u = c.h / 720.0f;
         g.gap = (int)(14 * u); g.labelH = 0; g.headH = 0;
         g.tabsY = (int)(28 * u); g.tabsH = (int)(44 * u);
-        g.panelX = (int)(248 * u); g.panelW = c.w - g.panelX - (int)(28 * u);
-        g.top = (int)(300 * u); g.bottom = c.h - (int)(82 * u);
+        g.panelX = (int)(204 * u); g.panelW = c.w - g.panelX - (int)(28 * u);
+        g.top = (int)(320 * u); g.bottom = c.h - (int)(82 * u);
         // (Box art is square: square pictures, two rows of cards in view, as many across as fit,
         // the room left over shared out between them.)
         const int minGap = (int)(14 * u);
@@ -853,6 +941,7 @@ inline void GT(Canvas& c, int x, float cy, const std::string& s, float px, uint3
 // A game's name as the cards show it: HeartGold, Black 2, Ultra Violet.
 inline std::string ShortName(const Game& g)
 {
+    if (!g.customName.empty()) return g.customName;
     std::string n = g.name;
     if (const KnownGame* k = Known(g.code)) n = k->name;
     else n = TitleCase(n);
@@ -874,19 +963,21 @@ inline GlassSpots Spots(const Canvas& c)
 {
     const float u = GU(c);
     GlassSpots s;
-    s.sideX = (int)(28 * u); s.sideY = (int)(28 * u); s.sideW = (int)(196 * u); s.sideH = c.h - (int)(110 * u);
-    s.rowH = (int)(46 * u); s.rowGap = (int)(6 * u); s.firstRow = s.sideY + (int)(12 * u);
-    s.tabsX = (int)(248 * u); s.tabsY = (int)(28 * u); s.tabsH = (int)(44 * u);
+    // (The sidebar flush with the screen's left, top and bottom edges; its rows start level with the tabs.)
+    s.sideX = 0; s.sideY = 0; s.sideW = (int)(180 * u); s.sideH = c.h;
+    // (text sizes: bigger since 6 November, the sidebar and tabs most)
+    s.rowH = (int)(54 * u); s.rowGap = (int)(6 * u); s.firstRow = (int)(22 * u); // (level with the tab pills)
+    s.tabsX = (int)(204 * u); s.tabsY = (int)(18 * u); s.tabsH = (int)(54 * u);
     int x = s.tabsX + (int)(4 * u);
     for (int t = 0; t < TABS; t++)
     {
-        const int w = GW(TabLabel(t), 14 * u, true) + (int)(36 * u);
+        const int w = GW(TabLabel(t), 18 * u, true) + (int)(40 * u);
         s.tabX.push_back(x); s.tabW.push_back(w);
         x += w + (int)(2 * u);
     }
-    s.bannerX = s.tabsX; s.bannerY = (int)(88 * u); s.bannerW = c.w - s.bannerX - (int)(28 * u); s.bannerH = (int)(160 * u);
+    s.bannerX = s.tabsX; s.bannerY = (int)(106 * u); s.bannerW = c.w - s.bannerX - (int)(28 * u); s.bannerH = (int)(160 * u);
     s.contX = s.bannerX + (int)(168 * u); s.contY = s.bannerY + (int)(100 * u); s.contW = (int)(150 * u); s.contH = (int)(44 * u);
-    s.headY = (int)(262 * u);
+    s.headY = (int)(282 * u);
     return s;
 }
 inline bool Glassy(const Canvas& c);
@@ -1004,10 +1095,15 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint, dark = 0xFF18222Eu;
 
     // The sidebar: the sections, Home chosen (Settings while it is chosen with the arrows).
-    Menu::FrostBox(c, solid, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 18 * u);
+    // (Frosted, square, with a soft shadow and a faint line where it meets the rest of the screen.)
+    Glass::Shadow(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, 18 * u, 0x60);
+    if (solid) Glass::Frost(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0);
+    else Glass::Round(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, Menu::GlassShade);
+    Glass::Round(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, 0x30101826);
+    Glass::Round(c, sp.sideX + sp.sideW - std::max(1, (int)u), sp.sideY, std::max(1, (int)u), sp.sideH, 0, 0x3DFFFFFF);
     for (int i = 0; i < SIDES; i++)
     {
-        const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + (int)(12 * u), rw = sp.sideW - (int)(24 * u);
+        const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + (int)(16 * u), rw = sp.sideW - (int)(32 * u);
         const int fs = Focus().side;
         const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == SIDE_HOME;
         const bool lit = fs >= 0 ? i == fs : settingsChosen && i == SIDE_SETTINGS; // (chosen with the arrows)
@@ -1016,14 +1112,18 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             if (lit) Glass::Glow(c, rx, ry, rw, sp.rowH, 12 * u, u);
             Glass::Round(c, rx, ry, rw, sp.rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
         }
-        Glass::DrawIcon(c, SideIcon(i), rx + 25 * u, ry + sp.rowH * 0.5f, 10 * u, text);
-        GT(c, rx + (int)(46 * u), ry + sp.rowH * 0.5f, SideName(i), 16 * u, text, true);
+        Glass::DrawIcon(c, SideIcon(i), rx + 27 * u, ry + sp.rowH * 0.5f, 12 * u, text);
+        GT(c, rx + (int)(52 * u), ry + sp.rowH * 0.5f, SideName(i), 19 * u, text, true);
     }
 
     // The tabs, as pills: the shown one white.
     {
-        const int gx = sp.tabsX, gw = sp.tabX.back() + sp.tabW.back() + (int)(4 * u) - gx;
-        Menu::FrostBox(c, solid, gx, sp.tabsY, gw, sp.tabsH, sp.tabsH * 0.5f);
+        // (A bar along the top, flush with the screen's top and right edges, meeting the sidebar.)
+        const int barX = sp.sideX + sp.sideW, barW = c.w - barX, barH = sp.tabsY * 2 + sp.tabsH, line = std::max(1, (int)u);
+        if (solid) Glass::Frost(c, barX, 0, barW, barH, 0);
+        else Glass::Round(c, barX, 0, barW, barH, 0, Menu::GlassShade);
+        Glass::Round(c, barX, 0, barW, barH, 0, 0x30101826);
+        Glass::Round(c, barX, barH - line, barW, line, 0, 0x3DFFFFFF);
         for (int t = 0; t < TABS; t++)
         {
             const int px = sp.tabX[t], py = sp.tabsY + (int)(4 * u), pw = sp.tabW[t], ph = sp.tabsH - (int)(8 * u);
@@ -1033,7 +1133,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 if (onTabs) Glass::Glow(c, px, py, pw, ph, ph * 0.5f, u);
                 Glass::Round(c, px, py, pw, ph, ph * 0.5f, 0xFFFFFFFFu);
             }
-            GT(c, px + (pw - GW(name, 14 * u, true)) / 2, py + ph * 0.5f, name, 14 * u, t == tab ? dark : text, true);
+            GT(c, px + (pw - GW(name, 18 * u, true)) / 2, py + ph * 0.5f, name, 18 * u, t == tab ? dark : text, true);
         }
     }
 
@@ -1048,28 +1148,28 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const bool played = !ContinueRom().empty() && g.rom == ContinueRom();
         const std::string meta = std::string(played ? "Continue Playing" : "Ready To Play") + "   \xC2\xB7   " + PlatformName(g.platform)
                                + "   \xC2\xB7   " + (g.hasSave ? "Save Found" : "New Game");
-        GT(c, tx, sp.bannerY + 32 * u, meta, 14 * u, hint, true);
-        GT(c, tx, sp.bannerY + 66 * u, ShortName(g), 32 * u, text, true);
+        GT(c, tx, sp.bannerY + 30 * u, meta, 16 * u, hint, true);
+        GT(c, tx, sp.bannerY + 66 * u, ShortName(g), 36 * u, text, true);
         // Continue (white) and Game Options.
         if (Focus().banner == 1) Glass::Glow(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, u);
         Glass::Round(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, 0xFFFFFFFFu);
         Glass::DrawIcon(c, Glass::I_PLAY, sp.contX + 30 * u, sp.contY + sp.contH * 0.5f, 8 * u, dark);
-        GT(c, sp.contX + (int)(48 * u), sp.contY + sp.contH * 0.5f, played ? "Continue" : "Play", 16 * u, dark, true);
-        const int ox = sp.contX + sp.contW + (int)(10 * u), ow = GW("Game Options", 16 * u, true) + (int)(36 * u);
+        GT(c, sp.contX + (int)(48 * u), sp.contY + sp.contH * 0.5f, played ? "Continue" : "Play", 18 * u, dark, true);
+        const int ox = sp.contX + sp.contW + (int)(10 * u), ow = GW("Game Options", 18 * u, true) + (int)(36 * u);
         if (Focus().banner == 2)
         {
             Glass::Glow(c, ox, sp.contY, ow, sp.contH, 12 * u, u);
             Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
         }
         else Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
-        GT(c, ox + (int)(18 * u), sp.contY + sp.contH * 0.5f, "Game Options", 16 * u, text, true);
+        GT(c, ox + (int)(18 * u), sp.contY + sp.contH * 0.5f, "Game Options", 18 * u, text, true);
     }
 
     // "Your Games" and how many.
-    GT(c, sp.tabsX, sp.headY + 14 * u, "Your Games", 20 * u, text, true);
+    GT(c, sp.tabsX, sp.headY + 14 * u, "Your Games", 24 * u, text, true);
     {
         const std::string n = std::to_string(v.spots.size()) + (v.spots.size() == 1 ? " Game" : " Games");
-        GT(c, sp.bannerX + sp.bannerW - GW(n, 14 * u, true), sp.headY + 14 * u, n, 14 * u, hint, true);
+        GT(c, sp.bannerX + sp.bannerW - GW(n, 16 * u, true), sp.headY + 14 * u, n, 16 * u, hint, true);
     }
 
     // The cards.
@@ -1098,12 +1198,12 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         }
         const float cy = iy + ih + 16 * u;
         std::string name = ShortName(g);
-        float npx = 15 * u;
-        const int room = iw - GW(PlatformName(g.platform), 12 * u, true) - (int)(16 * u);
+        float npx = 17 * u;
+        const int room = iw - GW(PlatformName(g.platform), 13 * u, true) - (int)(14 * u);
         while (npx > 10 * u && GW(name, npx, true) > room) npx -= u;
         GT(c, ix + (int)(4 * u), cy, name, npx, text, true);
         const std::string sub = !g.known && !g.comingSoon ? "Not Playable" : PlatformName(g.platform);
-        GT(c, ix + iw - (int)(4 * u) - GW(sub, 12 * u, true), cy, sub, 12 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
+        GT(c, ix + iw - (int)(4 * u) - GW(sub, 13 * u, true), cy, sub, 13 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
         if (g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, ix + iw - 14 * u, iy + 14 * u, 7 * u, 0xFFFFFFFFu);
     }
     // More below.
@@ -1150,22 +1250,92 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                     Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
                 }
                 Glass::DrawIcon(c, icons[i], rx + 22 * u, ry + rowH * 0.5f, 9 * u, ink);
-                GT(c, rx + (int)(44 * u), ry + rowH * 0.5f, PopupLabel(g, i), 15 * u, ink, true);
+                GT(c, rx + (int)(44 * u), ry + rowH * 0.5f, PopupLabel(g, i), 17 * u, ink, true);
             }
+        }
+    }
+
+    // A dialog from the game's menu (Remove Game, Delete ROM File, Rename) in the middle, the rest dimmed.
+    Focus().dW = 0;
+    if (Focus().dialog && Focus().dialog != 3 && selected >= 0 && selected < (int)games.size()) // (Rename: the keyboard page)
+    {
+        GlassFocus& F = Focus();
+        const Game& g = games[selected];
+        Game own = g;
+        own.customName.clear();
+        std::string title, msg;
+        std::vector<std::string> rows;
+        int red = -1;
+        if (F.dialog == 1) { title = "Remove " + ShortName(g) + "?"; msg = "Remove From List hides it here and keeps the ROM in your folder. Your saves are never deleted."; rows = { "Remove From List", "Delete ROM File", "Cancel" }; red = 1; }
+        else if (F.dialog == 2)
+        {
+            const size_t sl = g.rom.find_last_of("/\\");
+            title = "Delete The ROM File?";
+            msg = "This deletes " + (sl == std::string::npos ? g.rom : g.rom.substr(sl + 1)) + " from your folder. Your saves are kept.";
+            rows = { "Delete ROM File", "Cancel" }; red = 0;
+        }
+        else { title = "Rename " + ShortName(own); msg = "Type a new name. Leave it empty to go back to the game's own name."; rows = { "Save", "Cancel" }; }
+        const int pw = (int)(560 * u), pad = (int)(24 * u), rowH = (int)(48 * u), rg = (int)(8 * u), fieldH = (int)(52 * u);
+        std::vector<std::string> lines;
+        {
+            std::string line, word;
+            auto flush = [&]() { if (!word.empty()) { const std::string t = line.empty() ? word : line + " " + word; if (!line.empty() && GW(t, 15 * u, false) > pw - 2 * pad) { lines.push_back(line); line = word; } else line = t; word.clear(); } };
+            for (char ch : msg) { if (ch == ' ') flush(); else word += ch; }
+            flush();
+            if (!line.empty()) lines.push_back(line);
+        }
+        const int ph = pad + (int)(36 * u) + (int)lines.size() * (int)(22 * u) + (int)(16 * u) + (F.dialog == 3 ? fieldH + rg : 0)
+                     + (int)rows.size() * (rowH + rg) - rg + pad;
+        const int px = (c.w - pw) / 2, py = (c.h - ph) / 2;
+        Glass::Round(c, 0, 0, c.w, c.h, 0, 0x73000000u);
+        if (solid)
+        {
+            const int r = (int)(20 * u);
+            for (int yy = std::max(0, py); yy < std::min(c.h, py + ph); yy++)
+                for (int xx = std::max(0, px); xx < std::min(c.w, px + pw); xx++)
+                {
+                    const int ex = std::max(0, std::max(px + r - xx, xx - (px + pw - 1 - r))), ey = std::max(0, std::max(py + r - yy, yy - (py + ph - 1 - r)));
+                    if (ex * ex + ey * ey <= r * r) c.px[(size_t)yy * c.w + xx] = c.backdrop[(size_t)yy * c.w + xx];
+                }
+        }
+        Menu::FrostBox(c, solid, px, py, pw, ph, 20 * u);
+        int y = py + pad;
+        GT(c, px + pad, y + 14 * u, title, 22 * u, text, true);
+        y += (int)(36 * u);
+        for (const std::string& l : lines) { GT(c, px + pad, y + 10 * u, l, 15 * u, hint, false); y += (int)(22 * u); }
+        y += (int)(16 * u);
+        if (F.dialog == 3)
+        {
+            Glass::Round(c, px + pad, y, pw - 2 * pad, fieldH, 12 * u, 0x24FFFFFFu, 0xF2FFFFFFu, 1.5f * u);
+            GT(c, px + pad + (int)(16 * u), y + fieldH * 0.5f, F.text + "|", 18 * u, text, true);
+            y += fieldH + rg;
+        }
+        F.dX = px + pad; F.dY = y; F.dW = pw - 2 * pad; F.dRow = rowH + rg; F.dRows = (int)rows.size();
+        for (int i = 0; i < (int)rows.size(); i++)
+        {
+            const int ry = y + i * (rowH + rg), rx = px + pad, rw = pw - 2 * pad;
+            const uint32_t ink = i == red ? 0xFFF2A08Au : text;
+            if (i == F.drow)
+            {
+                Glass::Glow(c, rx, ry, rw, rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            else Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+            GT(c, rx + (rw - GW(rows[i], 16 * u, true)) / 2, ry + rowH * 0.5f, rows[i], 16 * u, ink, true);
         }
     }
 
     // The hints in the bottom right corner, lined up with the cards' right edge: each button a
     // white badge before what it does (a message, when there is one, in their place).
     {
-        const int bx = sp.sideX, bw = c.w - 2 * sp.sideX, bh = (int)(44 * u), by = c.h - (int)(24 * u) - bh;
+        const int bx = sp.tabsX, bw = c.w - sp.tabsX - (int)(28 * u), bh = (int)(44 * u), by = c.h - (int)(24 * u) - bh;
         const float cy = by + bh * 0.5f;
         if (!note.empty())
         {
             const std::string n = CleanFont::Title(UiLang::Tr(note));
-            const int w = (int)(26 * u) + GW(n, 14 * u, true), x0 = bx + bw - w;
+            const int w = (int)(26 * u) + GW(n, 16 * u, true), x0 = bx + bw - w;
             Glass::DrawIcon(c, Glass::I_INFO, x0 + 9 * u, cy, 9 * u, text);
-            GT(c, x0 + (int)(26 * u), cy, n, 14 * u, text, true);
+            GT(c, x0 + (int)(26 * u), cy, n, 16 * u, text, true);
         }
         else
         {
@@ -1194,7 +1364,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 for (const Item& it : items) w += (it.key.empty() ? 0 : keyW(it, f) + (int)(f * 0.6f)) + GW(it.act, f, true) + (int)(f * 2.4f);
                 return w - (int)(f * 2.4f);
             };
-            float fp = 14 * u;
+            float fp = 16 * u;
             while (fp > 9 * u && widthOf(fp) > bw - 40 * u) fp -= u;
             int x = bx + bw - widthOf(fp);
             for (const Item& it : items)
