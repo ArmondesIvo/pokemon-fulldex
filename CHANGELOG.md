@@ -3,6 +3,9 @@
 
 ## Unreleased
 
+- **SoulSilver and HeartGold: an evolution from a Rare Candy in the Bag gets coloured bars beside it,
+  not black ones.** Only a battle had its edges continued;
+  the Bag's evolution runs with no battle overlay, so it is now recognised by its own task.
 - **SoulSilver/HeartGold: the Poke Mart's item panel no longer shows a sliver of the map above it.** The
   description strip taken from the top screen started a row too high.
 - **GBA games: the pause menu works like the DS games'.** On the Switch, + is the GBA's START and
