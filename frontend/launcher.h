@@ -1179,7 +1179,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 std::string part = all.substr(i, j - i);
                 while (!part.empty() && part.front() == ' ') part.erase(0, 1);
                 while (!part.empty() && part.back() == ' ') part.pop_back();
-                if (!part.empty())
+                // (SETTINGS is not shown: it is in the sidebar, one press of left away. Its button still works.)
+                if (!part.empty() && part.find(": SETTINGS") == std::string::npos)
                 {
                     const size_t k = part.find(": ");
                     if (k == std::string::npos) items.push_back({ "", CleanFont::Title(UiLang::Tr(part)) });
