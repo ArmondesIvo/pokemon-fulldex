@@ -40,9 +40,11 @@ enum Platform { DS, GBA, N3DS, PLATFORMS };
 inline const char* PlatformName(int p) { return p == DS ? "DS" : p == GBA ? "GBA" : "3DS"; }
 // The tabs along the top: ALL (every section, each under its console's heading), then one per
 // console.
-constexpr int TABS = 1 + PLATFORMS;
-inline const char* TabName(int t) { return t <= 0 ? "ALL" : PlatformName(t - 1); }
-inline bool InTab(int platform, int tab) { return tab <= 0 || tab == platform + 1; }
+// (HOME: the games the player added with X, their favourites; until they add any, the game played
+// last. ROMHACKS: the hacks, whatever their console.)
+enum TabId { TAB_HOME, TAB_ALL, TAB_DS, TAB_GBA, TAB_3DS, TAB_HACKS, TABS };
+inline const char* TabName(int t) { static const char* n[] = { "HOME", "ALL", "DS", "GBA", "3DS", "ROMHACKS" }; return t >= 0 && t < TABS ? n[t] : "ALL"; }
+inline const char* TabLabel(int t) { static const char* n[] = { "Home", "All", "DS", "GBA", "3DS", "Romhacks" }; return t >= 0 && t < TABS ? n[t] : "All"; }
 
 struct Game
 {
@@ -65,6 +67,32 @@ struct Game
     bool favourite = false;
     long long lastPlayed = 0;
 };
+
+inline std::string& ContinueRom() { static std::string r; return r; } // the game played last (last-game.txt)
+// A romhack: a GBA game that is not one of the official ones by its code (Ultra Violet, ...). (DS
+// hacks keep their game's code: they will be told apart by the ROMs page's checks.)
+inline bool IsHack(const Game& g)
+{
+    if (!g.known || g.comingSoon || g.platform != GBA) return false;
+    const std::string c = g.code.substr(0, 3);
+    return c != "AXV" && c != "AXP" && c != "BPE" && c != "BPR" && c != "BPG";
+}
+inline bool InTab(const std::vector<Game>& games, int i, int tab)
+{
+    const Game& g = games[i];
+    switch (tab)
+    {
+    case TAB_HOME:
+        for (const Game& o : games)
+            if (o.favourite) return g.favourite;
+        return !ContinueRom().empty() && g.rom == ContinueRom();
+    case TAB_DS: return g.platform == DS;
+    case TAB_GBA: return g.platform == GBA;
+    case TAB_3DS: return g.platform == N3DS;
+    case TAB_HACKS: return IsHack(g);
+    default: return true;
+    }
+}
 
 // The size the larger pictures are kept at (the tiles of the list at 720 lines).
 constexpr int Art = 224;
@@ -661,11 +689,10 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
         std::vector<int> mine;
         for (int p = 0; p < PLATFORMS; p++)
         {
-            if (!InTab(p, tab)) continue;
             for (size_t i = 0; i < games.size(); i++)
-                if (games[i].platform == p) mine.push_back((int)i);
+                if (games[i].platform == p && InTab(games, (int)i, tab)) mine.push_back((int)i);
         }
-        if (mine.empty()) { v.heads.push_back({ tab > 0 ? tab - 1 : 0, 0, true }); return v; }
+        if (mine.empty()) { v.heads.push_back({ 0, 0, true }); return v; }
         for (size_t k = 0; k < mine.size(); k++)
             v.spots.push_back({ mine[k], g.gx + (int)(k % g.cols) * g.colStep, (int)(k / g.cols) * g.rowStep, games[mine[k]].platform });
         v.height = (int)((mine.size() + g.cols - 1) / g.cols) * g.rowStep;
@@ -675,12 +702,14 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
     int y = 0;
     for (int p = 0; p < PLATFORMS; p++)
     {
-        if (!InTab(p, tab)) continue;
+        if (tab >= TAB_DS && tab <= TAB_3DS && p != tab - TAB_DS) continue;
         std::vector<int> mine;
         for (size_t i = 0; i < games.size(); i++)
-            if (games[i].platform == p) mine.push_back((int)i);
+            if (games[i].platform == p && InTab(games, (int)i, tab)) mine.push_back((int)i);
+        // (HOME and ROMHACKS: only the consoles they have games of, without headings.)
+        if ((tab == TAB_HOME || tab == TAB_HACKS) && mine.empty()) continue;
         // (ALL: every console under its heading, also one without games yet.)
-        if (tab == 0)
+        if (tab == TAB_ALL)
         {
             v.heads.push_back({ p, y, false });
             y += g.headH;
@@ -695,6 +724,7 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
             v.spots.push_back({ mine[k], g.gx + (int)(k % g.cols) * g.colStep, y + (int)(k / g.cols) * g.rowStep, p });
         y += (int)((mine.size() + g.cols - 1) / g.cols) * g.rowStep + g.gap;
     }
+    if (v.spots.empty() && v.heads.empty()) v.heads.push_back({ 0, 0, true });
     v.height = y;
     return v;
 }
@@ -735,7 +765,7 @@ inline int TileAt(const View& v, int scroll, int x, int y)
 // Where the tabs are drawn (TabsDraw) and which one is at x, y, or -1.
 inline int TabX(const Canvas& c, const Grid& g, int t)
 {
-    const int step = 22 * 6 * g.s / 3; // (each tab's room, at the font's scale)
+    const int step = 28 * 6 * g.s / 3; // (each tab's room, at the font's scale)
     return c.w / 2 + (t * 2 - (TABS - 1)) * step / 2;
 }
 inline int TabAt(const Canvas& c, int x, int y)
@@ -743,7 +773,7 @@ inline int TabAt(const Canvas& c, int x, int y)
     if (Glassy(c)) return GlassTabAt(c, x, y);
     const Grid g = Layout(c);
     if (y < g.tabsY - 3 * g.s || y >= g.tabsY + g.tabsH + 3 * g.s) return -1;
-    const int step = 22 * 6 * g.s / 3;
+    const int step = 28 * 6 * g.s / 3;
     for (int t = 0; t < TABS; t++)
         if (std::abs(x - TabX(c, g, t)) < step / 2) return t;
     return -1;
@@ -783,7 +813,6 @@ inline int FirstIn(const View& v) { return v.spots.empty() ? -1 : v.spots[0].gam
 // and the tab's games as cards below it, all drawn with the pause menu's own glass (glass.h,
 // Menu::FrostBox) and clean font over the chosen game's picture, blurred. Used on landscape
 // screens with the clean font (Glassy); otherwise the classic list (DrawClassic).
-inline std::string& ContinueRom() { static std::string r; return r; } // the game played last (last-game.txt)
 enum Side { SIDE_HOME, SIDE_LIBRARY, SIDE_HUB, SIDE_ROMS, SIDE_UPDATES, SIDE_SETTINGS, SIDE_ABOUT, SIDES };
 inline const char* SideName(int i)
 {
@@ -833,7 +862,7 @@ inline GlassSpots Spots(const Canvas& c)
     int x = s.tabsX + (int)(4 * u);
     for (int t = 0; t < TABS; t++)
     {
-        const int w = GW(t == 0 ? "All" : PlatformName(t - 1), 14 * u, true) + (int)(36 * u);
+        const int w = GW(TabLabel(t), 14 * u, true) + (int)(36 * u);
         s.tabX.push_back(x); s.tabW.push_back(w);
         x += w + (int)(2 * u);
     }
@@ -978,7 +1007,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         for (int t = 0; t < TABS; t++)
         {
             const int px = sp.tabX[t], py = sp.tabsY + (int)(4 * u), pw = sp.tabW[t], ph = sp.tabsH - (int)(8 * u);
-            const std::string name = t == 0 ? "All" : PlatformName(t - 1);
+            const std::string name = TabLabel(t);
             if (t == tab)
             {
                 if (onTabs) Glass::Glow(c, px, py, pw, ph, ph * 0.5f, u);
@@ -1022,7 +1051,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     for (const View::Head& h : v.heads)
         if (h.empty)
         {
-            const std::string none = "No " + std::string(PlatformName(h.platform)) + " Games Yet";
+            const std::string none = tab == TAB_HOME ? "Add Games To Home With X In The Other Tabs"
+                                   : tab == TAB_HACKS ? "No Romhacks Yet" : "No " + std::string(TabLabel(tab)) + " Games Yet";
             GT(c, sp.tabsX + (grid.cols * grid.colStep - GW(none, 16 * u, true)) / 2, (grid.top + grid.bottom) * 0.5f, none, 16 * u, hint, true);
         }
     for (const View::Spot& s : v.spots)
@@ -1054,12 +1084,61 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     if (scroll + (grid.bottom - grid.top) < v.height - grid.gap)
         Glass::Round(c, sp.tabsX + grid.cols * grid.colStep / 2 - (int)(16 * u), grid.bottom + (int)(4 * u), (int)(32 * u), (int)(4 * u), 2 * u, 0x80FFFFFFu);
 
-    // The hints (or a message) along the bottom, as the pause menu's.
-    std::string h = !note.empty() ? note : !hintText.empty() ? hintText : "A: PLAY    Y: SETTINGS    L / R: TABS    +: QUIT";
-    h = CleanFont::Title(UiLang::Tr(h));
-    float hp = 14 * u;
-    while (hp > 9 * u && GW(h, hp, true) > c.w - 56 * u) hp -= u;
-    GT(c, (c.w - GW(h, hp, true)) / 2, c.h - 32 * u, h, hp, hint, true);
+    // The hints in the bottom right corner, lined up with the cards' right edge: each button a
+    // white badge before what it does (a message, when there is one, in their place).
+    {
+        const int bx = sp.sideX, bw = c.w - 2 * sp.sideX, bh = (int)(44 * u), by = c.h - (int)(24 * u) - bh;
+        const float cy = by + bh * 0.5f;
+        if (!note.empty())
+        {
+            const std::string n = CleanFont::Title(UiLang::Tr(note));
+            const int w = (int)(26 * u) + GW(n, 14 * u, true), x0 = bx + bw - w;
+            Glass::DrawIcon(c, Glass::I_INFO, x0 + 9 * u, cy, 9 * u, text);
+            GT(c, x0 + (int)(26 * u), cy, n, 14 * u, text, true);
+        }
+        else
+        {
+            const std::string all = !hintText.empty() ? hintText : "A: PLAY    Y: SETTINGS    L / R: TABS    +: QUIT";
+            struct Item { std::string key, act; };
+            std::vector<Item> items;
+            for (size_t i = 0; i < all.size();)
+            {
+                size_t j = all.find("    ", i);
+                if (j == std::string::npos) j = all.size();
+                std::string part = all.substr(i, j - i);
+                while (!part.empty() && part.front() == ' ') part.erase(0, 1);
+                while (!part.empty() && part.back() == ' ') part.pop_back();
+                if (!part.empty())
+                {
+                    const size_t k = part.find(": ");
+                    if (k == std::string::npos) items.push_back({ "", CleanFont::Title(UiLang::Tr(part)) });
+                    else items.push_back({ CleanFont::Title(part.substr(0, k)), CleanFont::Title(UiLang::Tr(part.substr(k + 2))) });
+                }
+                i = j + 4;
+            }
+            auto keyW = [&](const Item& it, float f) { return std::max((int)(f * 1.7f), GW(it.key, f * 0.9f, true) + (int)(f * 1.1f)); };
+            auto widthOf = [&](float f) {
+                int w = 0;
+                for (const Item& it : items) w += (it.key.empty() ? 0 : keyW(it, f) + (int)(f * 0.6f)) + GW(it.act, f, true) + (int)(f * 2.4f);
+                return w - (int)(f * 2.4f);
+            };
+            float fp = 14 * u;
+            while (fp > 9 * u && widthOf(fp) > bw - 40 * u) fp -= u;
+            int x = bx + bw - widthOf(fp);
+            for (const Item& it : items)
+            {
+                if (!it.key.empty())
+                {
+                    const int kh = (int)(fp * 1.7f), kw = keyW(it, fp);
+                    Glass::Round(c, x, (int)(cy - kh * 0.5f), kw, kh, kh * 0.5f, 0xF2FFFFFFu);
+                    GT(c, x + (kw - GW(it.key, fp * 0.9f, true)) / 2, cy, it.key, fp * 0.9f, dark, true);
+                    x += kw + (int)(fp * 0.6f);
+                }
+                GT(c, x, cy, it.act, fp, text, true);
+                x += GW(it.act, fp, true) + (int)(fp * 2.4f);
+            }
+        }
+    }
     if (solid) Glass::Opaque(c);
 }
 
@@ -1112,7 +1191,7 @@ inline void DrawClassic(Canvas& c, const std::vector<Game>& games, int tab, int 
         {
             const std::string none = UiLang::Tr("NO GAMES FOUND") + " (" + PlatformName(h.platform) + ")";
             // (On its own tab: in the middle of the page.)
-            if (tab != 0) c.Text((c.w - Canvas::TextWidth(none, s)) / 2, (top + bottom) / 2 - 4 * s, none, s, th.hint);
+            if (tab != TAB_ALL) c.Text((c.w - Canvas::TextWidth(none, s)) / 2, (top + bottom) / 2 - 4 * s, none, s, th.hint);
             else if (y >= top && y + 10 * s <= bottom) c.Text(grid.gx, y + 2 * s, none, s, th.hint);
             continue;
         }

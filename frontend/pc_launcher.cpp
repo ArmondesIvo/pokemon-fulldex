@@ -589,7 +589,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     // The tab shown (Launcher::TABS: ALL first, the list opens on it; back from a GBA game, the
     // tab it was chosen on) and how far down it is scrolled. selected: a game in that tab, or -1
     // when it has none.
-    static int lastTab = std::max(0, std::min(Launcher::TABS - 1, atoi(Launcher::ConfigValue(fo.cfg, "launcher_tab").c_str())));
+    static int lastTab = std::max(0, std::min(Launcher::TABS - 1, atoi(Launcher::ConfigValue(fo.cfg, "launcher_tab2").c_str())));
     int tab = lastTab, scroll = 0, result = -1;
     // false while the list is where a finger (or the mouse, held) dragged it, rather than where
     // the chosen game is; a key, button or tap that chooses a game makes it follow again.
@@ -613,7 +613,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     auto toggleFavourite=[&]() {
         if(selected<0||selected>=(int)games.size()||games[selected].comingSoon)return;
         bool saved=library.Toggle(games[selected].rom);
-        note=saved?(library.Favourite(games[selected].rom)?"ADDED TO FAVOURITES":"REMOVED FROM FAVOURITES"):"COULD NOT SAVE FAVOURITES";
+        note=saved?(library.Favourite(games[selected].rom)?"ADDED TO HOME":"REMOVED FROM HOME"):"COULD NOT SAVE HOME";
         reorderLibrary();
     };
     auto view = [&]() { return Launcher::MakeView(canvas, games, tab); };
@@ -627,11 +627,11 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     if (const char* t = getenv("SSR_LIST_TAB")) tab = std::max(0, std::min(Launcher::TABS - 1, atoi(t)));
     // (The game chosen last, if it is in that tab; else the tab's first. The games are in the
     // view's order.)
-    if (selected < 0 || selected >= (int)games.size() || !Launcher::InTab(games[selected].platform, tab))
+    if (selected < 0 || selected >= (int)games.size() || !Launcher::InTab(games, selected, tab))
     {
         selected = -1;
         for (size_t i = 0; i < games.size() && selected < 0; i++)
-            if (Launcher::InTab(games[i].platform, tab)) selected = (int)i;
+            if (Launcher::InTab(games, (int)i, tab)) selected = (int)i;
     }
     // L and R (Q and E, or a controller's shoulder buttons; a tap on a tab): the next tab, keeping
     // the chosen game if it is in it.
@@ -1610,7 +1610,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         const bool padIn = !pads.empty() || !joys.empty();
         auto btn = [&](int a) {
             const int def = a == Controls::A ? Controls::IN_A : a == Controls::B ? Controls::IN_B
-                          : a == Controls::L ? Controls::IN_LB : a == Controls::R ? Controls::IN_RB : Controls::IN_Y;
+                          : a == Controls::L ? Controls::IN_LB : a == Controls::R ? Controls::IN_RB : a == Controls::X ? Controls::IN_X : Controls::IN_Y;
             return std::string(Controls::InputName(ctl.PadCustom() ? ctl.Pad(a, ctl.byLabel) : def,
                 Controls::StyleOf(pads.empty() ? nullptr : pads[0])));
         };
@@ -1628,8 +1628,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                                            : std::string("TAP AN OPTION THEN TAP AGAIN TO CHANGE    DRAG TO SCROLL    BACK: DONE");
 #else
         const std::string hint = games.empty() ? std::string("O: OPEN THE ROMS FOLDER    H: SETTINGS    ESC: QUIT")
-                               : padIn ? btn(Controls::A) + ": PLAY    " + btn(Controls::L) + " / " + btn(Controls::R) + ": TABS    " + btn(Controls::Y) + ": SETTINGS    " + btn(Controls::B) + ": QUIT"
-                                       : std::string("ENTER: PLAY    Q / E: TABS    H: SETTINGS    O: ROMS    ESC: QUIT");
+                               : padIn ? btn(Controls::A) + ": PLAY    " + btn(Controls::X) + ": HOME    " + btn(Controls::L) + " / " + btn(Controls::R) + ": TABS    " + btn(Controls::Y) + ": SETTINGS    " + btn(Controls::B) + ": QUIT"
+                                       : std::string("ENTER: PLAY    F: HOME    Q / E: TABS    H: SETTINGS    O: ROMS    ESC: QUIT");
         const std::string pageHint = page.group < 0 ? (padIn ? "UP / DOWN: CHOOSE    " + btn(Controls::A) + ": OPEN    " + btn(Controls::B) + ": BACK"
                                                              : std::string("UP / DOWN: CHOOSE    ENTER: OPEN    ESC: BACK"))
                                    : padIn ? "UP / DOWN: CHOOSE    LEFT / RIGHT / " + btn(Controls::A) + ": CHANGE    " + btn(Controls::B) + ": BACK"
@@ -1806,7 +1806,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     }
     if(libraryDisplay)libraryDisplay->Stop();
     lastTab = tab;
-    SetConfigValues(fo.cfg, {{"launcher_tab", std::to_string(tab)}});
+    SetConfigValues(fo.cfg, {{"launcher_tab2", std::to_string(tab)}});
     for (SDL_GameController* p : pads) SDL_GameControllerClose(p);
     if (texture) SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
