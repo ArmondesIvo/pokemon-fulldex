@@ -179,7 +179,9 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     // (The tab bar's tools: which is chosen while onSort (1 +, 2 Search, 3 Sort), where they were drawn; the
                     // keyboard's use (0 a game's name, 1 a new tab (kbRom put in it), 2 the search, 3 tab kbTab's name).)
                     int tool = 3; int toolX[4] = {}, toolW[4] = {}, toolY = 0, toolH = 0;
-                    int kbFor = 0, kbTab = 0; std::string kbRom; };
+                    int kbFor = 0, kbTab = 0; std::string kbRom;
+                    // (The settings drawn as a page: its title; where its list and preview go, for the menu.)
+                    std::string pageTitle; int sX = 0, sY = 0, sW = 0, sH = 0, sListW = 0, sPvX = 0; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
 inline int PopupCount() { return 7; }
 inline std::string PopupLabel(const Game& g, int i)
@@ -1498,6 +1500,7 @@ struct HubGame { std::string name, path; const Game* g; };
 inline std::string WhereName(const std::string& w) { return w.rfind("IN ", 0) == 0 ? w.substr(3) : w; }
 inline std::string HubSavePath(const Game& g)
 {
+    if (g.platform == GBA) return g.folder + "/" + g.saveName;
 #ifdef __SWITCH__
     return g.folder + "/" + g.saveName;
 #else
@@ -2236,7 +2239,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : "Hub") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -2376,6 +2379,14 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 GT(c, ix + (int)(42 * u), ry + ah * 0.5f, labels[a], 15 * u, text, true);
             }
         }
+        return;
+    }
+    if (F.page == SIDE_SETTINGS)
+    {
+        // (Two frosted boxes; the settings menu draws its rows and preview in them: DrawSettingsPage.)
+        const int rw = (int)(400 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap;
+        Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
+        F.sX = L; F.sY = top; F.sW = R - L; F.sH = bottom - top; F.sListW = lw2; F.sPvX = R - rw;
         return;
     }
     if (F.page == SIDE_HUB && Mover().open)
@@ -2998,7 +3009,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
-                    + "/h" + HubSig() + (Focus().page == SIDE_HUB ? std::to_string(Mover().open) + "," + std::to_string(Focus().pact) + "," + std::to_string(Focus().rScroll) : std::string()) + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
+                    + "/t" + Focus().pageTitle + "/h" + HubSig() + (Focus().page == SIDE_HUB ? std::to_string(Mover().open) + "," + std::to_string(Focus().pact) + "," + std::to_string(Focus().rScroll) : std::string()) + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
                     + (Focus().page == SIDE_UPDATES ? "/u" + std::to_string(Focus().upState) + std::to_string(Focus().upCan) + Focus().upHave + "/" + Focus().upNew + "/" + Focus().upText + "/" + Focus().upNotes + "/" + std::to_string(Focus().nScroll) : std::string())
                     + (Focus().page == SIDE_ROMS ? "/r" + std::to_string(Focus().pact) + "," + std::to_string(RomList().size()) + ","
                        + std::to_string(std::count_if(RomList().begin(), RomList().end(), [](const Game& g) { return g.hidden; })) : std::string());
@@ -4085,6 +4096,31 @@ inline int SettingIcon(const Setting& s, int group)
     if (!strncmp(s.key, "list_", 5)) return Glass::I_GRID;
     if (!strncmp(s.key, "extra_", 6)) return Glass::I_SPARKLE;
     return group >= 0 && group < 9 ? groupIcon[group] : Glass::I_GEAR;
+}
+// The settings as a page of the launcher: the page drawn (sidebar, title, buttons at the bottom), then
+// the menu's rows and preview in it. The launcher's focus is as it was afterwards.
+inline void DrawSettingsPage(Canvas& c, Menu& m, const std::vector<Game>& games, int tab, int scroll, const std::string& title,
+                             const std::string& hint, const Theme& theme)
+{
+    const GlassFocus kept = Focus();
+    GlassFocus& F = Focus();
+    // ("GAME LIST" as "Game List", the names written as they are: RetroAchievements, FPS, ROMs.)
+    std::string shown;
+    bool start = true;
+    for (char ch : title)
+    {
+        const unsigned char b = (unsigned char)ch;
+        shown += b < 128 ? (char)(start ? toupper(b) : tolower(b)) : ch;
+        start = b == ' ' || b == '/' || b == '-';
+    }
+    for (const auto& r : std::vector<std::pair<std::string, std::string>>{ { "Retroachievements", "RetroAchievements" }, { "Fps", "FPS" }, { "Roms", "ROMs" }, { "Rom ", "ROM " }, { "Gba", "GBA" }, { "Ds ", "DS " } })
+        for (size_t at = shown.find(r.first); at != std::string::npos; at = shown.find(r.first, at + r.second.size())) shown.replace(at, r.first.size(), r.second);
+    F.page = SIDE_SETTINGS; F.side = -1; F.popup = -1; F.dialog = 0; F.onSort = false; F.pageTitle = shown;
+    Draw(c, games, tab, -1, scroll, std::string(), hint, theme, true, false, false);
+    m.laneX = F.sX; m.laneY = F.sY; m.laneW = F.sW; m.laneH = F.sH; m.laneListW = F.sListW; m.lanePvX = F.sPvX;
+    Focus() = kept;
+    m.Draw(c, title, std::string());
+    m.laneX = -1;
 }
 inline void BuildSettingsMenu(Menu& m, std::vector<int>& map, const SettingsPage& p, bool onBack)
 {

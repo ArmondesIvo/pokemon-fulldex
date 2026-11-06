@@ -23,6 +23,7 @@
 #include "thirdparty/stb_image.h"
 #undef STB_IMAGE_IMPLEMENTATION
 #include "launcher.h"
+#include "cloud_autosync.h"
 #include "ui_lang_sdl.h"
 #include "controls.h"
 #ifdef SSR_GBA
@@ -1071,8 +1072,8 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                 const u64 t0 = armGetSystemTick();
                 // (The pause menu's glass settings pages, ui_settings.h, over the chosen game's picture blurred.)
                 Launcher::BuildSettingsMenu(setMenu, setMap, page, false);
-                Launcher::GlassBackdrop(canvas, selected >= 0 && selected < (int)games.size() ? &games[selected] : nullptr);
-                setMenu.Draw(canvas, page.group < 0 ? "SETTINGS" : Launcher::SettingsGroups()[page.group].name, hint);
+                Launcher::DrawSettingsPage(canvas, setMenu, games, tab, scroll, page.group < 0 ? "Settings" : Launcher::SettingsGroups()[page.group].name,
+                                           page.group < 0 ? "A: OPEN    B: BACK" : "A: CHANGE    B: BACK", theme);
                 fprintf(stderr, "[launcher] glass settings drawn in %d ms\n", (int)(armTicksToNs(armGetSystemTick() - t0) / 1000000));
             }
             else page.Draw(canvas, hint, theme);
@@ -1508,7 +1509,12 @@ bool Start(int& argc, char**& argv)
         o.fullscreen = true;
         Launcher::SyncGbaSettings(SettingsPath(dir), o.data);
         fprintf(stderr, "[switch] GBA: %s, saves in %s\n", game.rom.c_str(), game.folder.c_str());
+        // (Cloud saves: a newer save comes down first; the save goes up when the game closes.)
+        const std::string cfgAt = SettingsPath(dir);
+        CloudAuto::Start(cfgAt.substr(0, cfgAt.find_last_of('/')), game.folder + "/" + game.saveName);
         GbaRa::Play(game.rom, o, SettingsPath(dir));
+        CloudAuto::Saved();
+        CloudAuto::Finish();
         if (!g_self.empty() && envHasNextLoad())
         {
             const std::string cmd = g_self.find(' ') == std::string::npos ? g_self : "\"" + g_self + "\"";

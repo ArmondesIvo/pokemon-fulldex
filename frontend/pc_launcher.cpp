@@ -43,6 +43,7 @@
 #include "thirdparty/stb_image.h"
 #undef STB_IMAGE_IMPLEMENTATION
 #include "launcher.h"
+#include "cloud_autosync.h"
 #include "library_history.h"
 #include "android_second_screen.h"
 #include "ui_lang_sdl.h"
@@ -2314,8 +2315,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             {
                 // (The pause menu's glass settings pages, ui_settings.h, over the chosen game's picture blurred.)
                 Launcher::BuildSettingsMenu(setMenu, setMap, page, onBack);
-                Launcher::GlassBackdrop(canvas, selected >= 0 && selected < (int)games.size() ? &games[selected] : nullptr);
-                setMenu.Draw(canvas, page.group < 0 ? "SETTINGS" : Launcher::SettingsGroups()[page.group].name, pageHint);
+                Launcher::DrawSettingsPage(canvas, setMenu, games, tab, scroll, page.group < 0 ? "Settings" : Launcher::SettingsGroups()[page.group].name,
+                                           padIn ? btn(Controls::A) + (page.group < 0 ? ": OPEN    " : ": CHANGE    ") + btn(Controls::B) + ": BACK"
+                                                 : std::string(page.group < 0 ? "ENTER: OPEN    ESC: BACK" : "ENTER: CHANGE    ESC: BACK"), theme);
             }
             else page.Draw(canvas, pageHint, theme);
             if (raOpen)
@@ -2719,7 +2721,11 @@ bool Start(int& argc, char**& argv)
             o.fullscreen = ConfigFullscreen(fo.cfg, o.w, o.h);
             Launcher::SyncGbaSettings(fo.cfg, o.data);
             fprintf(stderr, "[launcher] GBA: %s\n", rom.c_str());
+            // (Cloud saves: a newer save comes down first; the save goes up when the game closes.)
+            CloudAuto::Start(fo.saves, games[chosen].folder + "/" + games[chosen].saveName);
             GbaRa::Play(rom, o, fo.cfg);
+            CloudAuto::Saved();
+            CloudAuto::Finish();
             directGame = -1;
             games = FindGames(fo, artCache);
             chosen = 0;

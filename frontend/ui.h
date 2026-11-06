@@ -235,6 +235,9 @@ struct Menu
     std::vector<std::string> padLabels;
     std::string padNote; // (under the labelled controller: how else the menu opens, START + SELECT)
     float listShare = 0.605f;
+    // (Settings pages inside the launcher's own page: the whole area, the list's width and where the
+    // preview starts; no panel, header or hint of their own. laneX -1: the usual panel.)
+    int laneX = -1, laneY = 0, laneW = 0, laneH = 0, laneListW = 0, lanePvX = 0;
     float touchRows = 1.0f; // (phones: the settings rows this much larger, for a finger)
     bool tallRows = false;
     float rowTall = 1.0f; // (a settings page's rows this many times as high, their text and icons a little larger: BAG)

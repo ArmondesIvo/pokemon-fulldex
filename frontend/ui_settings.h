@@ -1692,7 +1692,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     static std::string frameKey;
     const std::string fk = std::to_string(c.w) + "x" + std::to_string(c.h) + " " + std::to_string(c.BackdropSig());
     const bool haveFrame = fk == frameKey && frame.size() == c.px.size();
-    const bool solid = haveFrame ? c.backdrop.size() == c.px.size() : Glass::Backdrop(c);
+    const bool solid = haveFrame || laneX >= 0 ? c.backdrop.size() == c.px.size() : Glass::Backdrop(c); // (in the launcher: its page is drawn already)
     const int n = (int)items.size();
     pickRects.clear();
     if (selected < 0 || selected >= n) return;
@@ -1711,12 +1711,16 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         k = std::min(pw / 560.0f, ph / 1000.0f);
     }
     k = std::max(k, 0.42f);
+    const bool lane = laneX >= 0;
+    if (lane) k = std::max(0.42f, c.h / 720.0f * 0.94f);
     auto K = [&](float v) { return (int)std::lround(v * k); };
-    const int px0 = (int)((c.w - pw) / 2), py0 = (int)((c.h - ph) / 2), W0 = (int)pw, H0 = (int)ph;
+    int px0 = (int)((c.w - pw) / 2), py0 = (int)((c.h - ph) / 2), W0 = (int)pw, H0 = (int)ph;
+    if (lane) { px0 = laneX; py0 = laneY; W0 = laneW; H0 = laneH; }
     drawnX = px0; drawnY = py0; drawnW = W0; drawnH = H0; drawnLineH = 0; drawnFirstY = 0;
 
     // The panel.
-    if (haveFrame)
+    if (lane) {}
+    else if (haveFrame)
     {
         std::copy(frame.begin(), frame.end(), c.px.begin());
         Glass::Mark(c, 0, 0, c.w, c.h);
@@ -1734,7 +1738,9 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
 
     { const double t = MenuProfNow(); MenuProf()[0] += t - profT; profT = t; }
     // Header: back button, the page's icon, its title, a line under them.
-    backS = K(54); backX = px0 + K(28); backY = py0 + K(18);
+    backS = lane ? 0 : K(54); backX = px0 + K(28); backY = py0 + K(18);
+    if (!lane)
+    {
     const bool backChosen = items[selected].kind == K_BACK;
     if (backChosen) GlowRound(c, backX, backY, backS, backS, 14 * k, k);
     Glass::Round(c, backX, backY, backS, backS, 14 * k, backChosen ? RowChosen : Row, backChosen ? ChosenEdge : PanelEdge, backChosen ? 2 * k : std::max(1.0f, k));
@@ -1745,11 +1751,12 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     T(c, iconX + iconS + K(20), iconY + K(41), title, K(34), GlassText, true);
     if (!headerNote.empty()) T(c, px0 + W0 - K(32) - W(headerNote, K(17)), iconY + K(37), headerNote, K(17), GlassHint);
     FadeLine(c, px0 + K(28), px0 + W0 - K(28), py0 + K(92), std::max(1, K(1.5f)), 0xFFFFFF, 0x90);
+    }
 
     // Where the rows and the preview go.
-    const int top = py0 + K(108), bottom = py0 + H0 - K(24);
-    if (slotGrid) { DrawSlotGrid(c, px0 + K(30), W0 - K(60), top, bottom, k); return; }
-    if (keyGrid) { DrawKeyGrid(c, px0 + K(30), W0 - K(60), top, bottom, k); return; }
+    const int top = lane ? py0 + K(14) : py0 + K(108), bottom = lane ? py0 + H0 - K(14) : py0 + H0 - K(24);
+    if (slotGrid) { DrawSlotGrid(c, px0 + K(lane ? 14 : 30), W0 - K(lane ? 28 : 60), top, bottom, k); return; }
+    if (keyGrid) { DrawKeyGrid(c, px0 + K(lane ? 14 : 30), W0 - K(lane ? 28 : 60), top, bottom, k); return; }
     int listX, listW, listBottom, pvX, pvY, pvW, pvH;
     if (wide)
     {
@@ -1760,7 +1767,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         pvY = top + K(4);
         pvW = px0 + W0 - K(22) - pvX;
         pvH = bottom - pvY;
-        Rule(c, listX + listW + K(18), top + K(8), std::max(1, K(1)), bottom - top - K(16), Line);
+        if (!lane) Rule(c, listX + listW + K(18), top + K(8), std::max(1, K(1)), bottom - top - K(16), Line);
     }
     else
     {
@@ -1771,6 +1778,11 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         pvY = listBottom + K(16);
         pvW = listW;
         pvH = bottom - pvY;
+    }
+    if (lane)
+    {
+        listX = px0 + K(14); listW = laneListW - K(28); listBottom = bottom;
+        pvX = lanePvX; pvY = py0; pvW = px0 + W0 - pvX; pvH = H0;
     }
 
     { const double t = MenuProfNow(); MenuProf()[1] += t - profT; profT = t; }
