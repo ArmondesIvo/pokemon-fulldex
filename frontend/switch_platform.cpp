@@ -544,7 +544,7 @@ int PickGame(const std::vector<Launcher::Game>& games, int selected, const std::
                 keysMenu.Draw(canvas, "KEYS AND BUTTONS", kh);
             }
         }
-        else Launcher::Draw(canvas, games, tab, onSettings || onTabs ? -1 : selected, scroll, note, std::string(), theme, true, onTabs);
+        else Launcher::Draw(canvas, games, tab, onSettings || onTabs ? -1 : selected, scroll, note, std::string(), theme, true, onTabs, onSettings);
 #ifdef SSR_UPDATER
         if (updateMenu.open)
             updateMenu.Draw(canvas, Updater::PopupTitle(), "A: CHOOSE    B: LATER",
@@ -559,7 +559,7 @@ int PickGame(const std::vector<Launcher::Game>& games, int selected, const std::
                 canvas.Text(x, 7 * s, text, s, on ? th.title : th.hint);
             };
             if (guide && !keysOpen) button(8 * s, "< BACK", false);
-            else if (!guide) button(canvas.w - 8 * s - Canvas::TextWidth("SETTINGS", s), "SETTINGS", onSettings);
+            else if (!guide && !Launcher::Glassy(canvas)) button(canvas.w - 8 * s - Canvas::TextWidth("SETTINGS", s), "SETTINGS", onSettings);
         }
         u32 stride;
         u32* out = (u32*)framebufferBegin(&fb, &stride);
@@ -810,6 +810,7 @@ bool Start(int& argc, char**& argv)
         }
         for (size_t i = 0; i < games.size(); i++)
             if (games[i].rom == last) chosen = (int)i;
+        Launcher::ContinueRom() = last;
         const auto showList = std::find(testArgs.begin(), testArgs.end(), "--show-list");
         if (testRun && showList != testArgs.end())
         {

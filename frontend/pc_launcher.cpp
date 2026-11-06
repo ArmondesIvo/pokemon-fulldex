@@ -1318,7 +1318,19 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 const int s = std::max(1, std::min(canvas.w, canvas.h) / 240);
                 // The buttons in the title band (touch screens): SETTINGS at the right, and in the
                 // settings BACK at the left; on Android FOLDER at the left of the list.
-                if (e.type == SDL_MOUSEBUTTONUP && my < (canvas.h > canvas.w ? 43 : 22) * s && !dragging)
+                // The glass launcher: a section in the sidebar (Settings opens the settings), or Continue.
+                if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging)
+                {
+                    const int side = Launcher::SideAt(canvas, mx, my);
+                    if (side >= 0) { if (side == Launcher::SIDE_SETTINGS) toggleGuide(); break; }
+                    if (Launcher::ContinueAt(canvas, mx, my))
+                    {
+                        const int cg = Launcher::ContinueGame(games, selected);
+                        if (cg >= 0) { selected = cg; onSettings = onTabs = false; choose(); }
+                        break;
+                    }
+                }
+                if ((guide || !Launcher::Glassy(canvas)) && e.type == SDL_MOUSEBUTTONUP && my < (canvas.h > canvas.w ? 43 : 22) * s && !dragging)
                 {
                     if (guide && mx < canvas.w / 4) { if (!page.Back()) guide = false; }
                     else if (!guide && mx > canvas.w * 3 / 4) toggleGuide();
@@ -1379,7 +1391,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 // A finger (or the mouse, held) dragged up or down scrolls the list; it chooses
                 // nothing and plays nothing.
                 const bool leftDown = e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT;
-                if (leftDown && my >= 22 * s)
+                if (leftDown && my >= (Launcher::Glassy(canvas) ? Launcher::Layout(canvas).top : 22 * s))
                 {
                     downY = my;
                     downScroll = scroll;
@@ -1439,7 +1451,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 }
 #ifdef __ANDROID__
                 // (Asking for the ROM folder: a tap anywhere.)
-                if (e.type == SDL_MOUSEBUTTONDOWN && i < 0 && my >= 22 * s && (needFolder || games.empty())) choose();
+                if (e.type == SDL_MOUSEBUTTONDOWN && i < 0 && my >= (Launcher::Glassy(canvas) ? Launcher::Layout(canvas).top : 22 * s) && (needFolder || games.empty())) choose();
 #endif
                 break;
             }
@@ -1643,7 +1655,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 keysMenu.Draw(canvas, "KEYS AND BUTTONS", kh);
             }
         }
-        else Launcher::Draw(canvas, games, tab, onSettings || onTabs ? -1 : selected, scroll, note, hint, theme, follow, onTabs);
+        else Launcher::Draw(canvas, games, tab, onSettings || onTabs ? -1 : selected, scroll, note, hint, theme, follow, onTabs, onSettings);
 #ifdef SSR_UPDATER
         if (updateMenu.open)
             updateMenu.Draw(canvas, Updater::PopupTitle(),
@@ -1662,7 +1674,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 Launcher::ModernText(canvas, x, buttonY + 7 * s, text, s, on ? theme.title : theme.pokemon ? 0xFFFFFFFFu : theme.hint);
             };
             if (guide) button(8 * s, "< BACK", onBack);
-            else
+            else if (!Launcher::Glassy(canvas))
             {
                 button(canvas.w - 8 * s - Canvas::TextWidth("SETTINGS", s), "SETTINGS", onSettings);
 #ifdef SSR_PHONE
@@ -1936,6 +1948,7 @@ bool Start(int& argc, char**& argv)
             while (!last.empty() && (last.back() == '\n' || last.back() == '\r')) last.pop_back();
             for (size_t i = 0; i < games.size(); i++)
                 if (games[i].rom == last) chosen = (int)i;
+            Launcher::ContinueRom() = last;
         }
         fclose(f);
     }

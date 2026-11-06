@@ -584,11 +584,35 @@ struct Grid
     int s, gap, labelH, tabsY, tabsH, headH, top, bottom, tile, cols, gx;
     int panelX = 0, panelW = 0;
     int rowH() const { return tile + labelH + gap; }
+    // A card's size and the steps between cards (the classic list: a tile with its name below).
+    int cw = 0, ch = 0, colStep = 0, rowStep = 0;
 };
+// The glass launcher (DrawGlass) on landscape screens with the clean font; the classic list otherwise.
+inline bool& GlassOn() { static bool on = true; return on; }
+inline bool Glassy(const Canvas& c) { return GlassOn() && c.w > c.h && Menu::UseClean(); }
+inline int GlassTabAt(const Canvas& c, int x, int y);
 inline Grid Layout(const Canvas& c)
 {
     Grid g;
     g.s = std::max(1, std::min(c.w, c.h) / 240); // the font's scale: 3 at 720 lines
+    if (Glassy(c))
+    {
+        const float u = c.h / 720.0f;
+        g.gap = (int)(14 * u); g.labelH = 0; g.headH = 0;
+        g.tabsY = (int)(28 * u); g.tabsH = (int)(44 * u);
+        g.panelX = (int)(248 * u); g.panelW = c.w - g.panelX - (int)(28 * u);
+        g.top = (int)(300 * u); g.bottom = c.h - (int)(82 * u);
+        // (Box art is square: square pictures, two rows of cards in view, as many across as fit,
+        // the room left over shared out between them.)
+        const int minGap = (int)(14 * u);
+        g.ch = (g.bottom - g.top - minGap) / 2;
+        g.tile = g.ch - (int)(38 * u); // the picture
+        g.cw = g.tile + (int)(16 * u);
+        g.cols = std::max(2, std::min(8, (g.panelW + minGap) / std::max(1, g.cw + minGap)));
+        g.gap = g.cols > 1 ? (g.panelW - g.cols * g.cw) / (g.cols - 1) : minGap;
+        g.gx = g.panelX; g.colStep = g.cw + g.gap; g.rowStep = g.ch + minGap;
+        return g;
+    }
     g.gap = 8 * g.s;
     g.labelH = (UiLang::Tall() ? 32 : 20) * g.s;
     g.tabsY = (c.h > c.w ? 46 : 25) * g.s;
@@ -602,6 +626,7 @@ inline Grid Layout(const Canvas& c)
     g.cols = std::max(1, std::min(4, (c.w - g.gap) / (g.tile + g.gap * 3)));
     const int gridW = g.cols * g.tile + (g.cols - 1) * g.gap * 3;
     g.gx = (c.w - gridW) / 2;
+    g.cw = g.tile; g.ch = g.tile + g.labelH; g.colStep = g.tile + g.gap * 3; g.rowStep = g.rowH();
     return g;
 }
 
@@ -630,6 +655,22 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
     v.g = Layout(c);
     v.tab = tab;
     const Grid& g = v.g;
+    if (Glassy(c))
+    {
+        // (One grid of cards, the consoles one after another, without headings.)
+        std::vector<int> mine;
+        for (int p = 0; p < PLATFORMS; p++)
+        {
+            if (!InTab(p, tab)) continue;
+            for (size_t i = 0; i < games.size(); i++)
+                if (games[i].platform == p) mine.push_back((int)i);
+        }
+        if (mine.empty()) { v.heads.push_back({ tab > 0 ? tab - 1 : 0, 0, true }); return v; }
+        for (size_t k = 0; k < mine.size(); k++)
+            v.spots.push_back({ mine[k], g.gx + (int)(k % g.cols) * g.colStep, (int)(k / g.cols) * g.rowStep, games[mine[k]].platform });
+        v.height = (int)((mine.size() + g.cols - 1) / g.cols) * g.rowStep;
+        return v;
+    }
     const int emptyH = 16 * g.s;
     int y = 0;
     for (int p = 0; p < PLATFORMS; p++)
@@ -651,8 +692,8 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
             continue;
         }
         for (size_t k = 0; k < mine.size(); k++)
-            v.spots.push_back({ mine[k], g.gx + (int)(k % g.cols) * (g.tile + g.gap * 3), y + (int)(k / g.cols) * g.rowH(), p });
-        y += (int)((mine.size() + g.cols - 1) / g.cols) * g.rowH() + g.gap;
+            v.spots.push_back({ mine[k], g.gx + (int)(k % g.cols) * g.colStep, y + (int)(k / g.cols) * g.rowStep, p });
+        y += (int)((mine.size() + g.cols - 1) / g.cols) * g.rowStep + g.gap;
     }
     v.height = y;
     return v;
@@ -671,7 +712,7 @@ inline void FollowSelection(const View& v, int selected, int& scroll, bool follo
         int top = v.spots[k].y;
         for (const View::Head& h : v.heads)
             if (!h.empty && h.platform == v.spots[k].section && top - h.y <= g.headH) top = h.y;
-        const int bottom = v.spots[k].y + g.tile + g.labelH;
+        const int bottom = v.spots[k].y + g.ch;
         if (top < scroll) scroll = top;
         if (bottom > scroll + viewH) scroll = bottom - viewH;
     }
@@ -686,7 +727,7 @@ inline int TileAt(const View& v, int scroll, int x, int y)
     for (const View::Spot& sp : v.spots)
     {
         const int ty = g.top + sp.y - scroll;
-        if (x >= sp.x && x < sp.x + g.tile && y >= ty && y < ty + g.tile + g.labelH) return sp.game;
+        if (x >= sp.x && x < sp.x + g.cw && y >= ty && y < ty + g.ch) return sp.game;
     }
     return -1;
 }
@@ -699,6 +740,7 @@ inline int TabX(const Canvas& c, const Grid& g, int t)
 }
 inline int TabAt(const Canvas& c, int x, int y)
 {
+    if (Glassy(c)) return GlassTabAt(c, x, y);
     const Grid g = Layout(c);
     if (y < g.tabsY - 3 * g.s || y >= g.tabsY + g.tabsH + 3 * g.s) return -1;
     const int step = 22 * 6 * g.s / 3;
@@ -736,13 +778,307 @@ inline int Step(const View& v, int selected, int dir)
 // A tab's own first game (when the one chosen is not in it), or -1 when it has none.
 inline int FirstIn(const View& v) { return v.spots.empty() ? -1 : v.spots[0].game; }
 
-// The list, drawn over the whole canvas (1280x720 on the Switch): the title band, the tabs, then
+// ---- The glass launcher (the new design: "Option A", the pause menu's frosted glass) ----------
+// A sidebar of sections on the left, the tabs as pills along the top, a Continue Playing banner
+// and the tab's games as cards below it, all drawn with the pause menu's own glass (glass.h,
+// Menu::FrostBox) and clean font over the chosen game's picture, blurred. Used on landscape
+// screens with the clean font (Glassy); otherwise the classic list (DrawClassic).
+inline std::string& ContinueRom() { static std::string r; return r; } // the game played last (last-game.txt)
+enum Side { SIDE_HOME, SIDE_LIBRARY, SIDE_HUB, SIDE_ROMS, SIDE_UPDATES, SIDE_SETTINGS, SIDE_ABOUT, SIDES };
+inline const char* SideName(int i)
+{
+    static const char* n[] = { "Home", "Library", "Hub", "ROMs", "Updates", "Settings", "About" };
+    return n[i];
+}
+inline int SideIcon(int i)
+{
+    static const int ic[] = { Glass::I_POKEBALL, Glass::I_GRID, Glass::I_PEOPLE, Glass::I_CHIP, Glass::I_LOAD, Glass::I_GEAR, Glass::I_INFO };
+    return ic[i];
+}
+inline float GU(const Canvas& c) { return c.h / 720.0f; } // one design pixel (the designs are 1280 x 720)
+inline int GPx(float px) { return std::max(6, (int)(px + 0.5f)); }
+inline int GW(const std::string& s, float px, bool bold) { return CleanFont::Width(s, GPx(px), bold); }
+// Text with its capitals centred on cy.
+inline void GT(Canvas& c, int x, float cy, const std::string& s, float px, uint32_t col, bool bold)
+{
+    CleanFont::Draw(c, x, (int)(cy + CleanFont::CapHeight(GPx(px), bold) * 0.5f), s, GPx(px), col, bold);
+}
+// A game's name as the cards show it: HeartGold, Black 2, Ultra Violet.
+inline std::string ShortName(const Game& g)
+{
+    std::string n = g.name;
+    if (const KnownGame* k = Known(g.code)) n = k->name;
+    else n = TitleCase(n);
+    for (const char* p : { "Pokemon ", "POKEMON ", "Pokémon " })
+        if (n.rfind(p, 0) == 0) { n = n.substr(strlen(p)); break; }
+    return n;
+}
+// Where the sidebar's sections and the tab pills are (Draw and the taps use the same).
+struct GlassSpots
+{
+    int sideX, sideY, sideW, sideH, rowH, rowGap, firstRow;
+    int tabsX, tabsY, tabsH;
+    std::vector<int> tabX, tabW;
+    int bannerX, bannerY, bannerW, bannerH;
+    int contX, contY, contW, contH; // the Continue button
+    int headY;
+};
+inline GlassSpots Spots(const Canvas& c)
+{
+    const float u = GU(c);
+    GlassSpots s;
+    s.sideX = (int)(28 * u); s.sideY = (int)(28 * u); s.sideW = (int)(196 * u); s.sideH = c.h - (int)(110 * u);
+    s.rowH = (int)(46 * u); s.rowGap = (int)(6 * u); s.firstRow = s.sideY + (int)(12 * u);
+    s.tabsX = (int)(248 * u); s.tabsY = (int)(28 * u); s.tabsH = (int)(44 * u);
+    int x = s.tabsX + (int)(4 * u);
+    for (int t = 0; t < TABS; t++)
+    {
+        const int w = GW(t == 0 ? "All" : PlatformName(t - 1), 14 * u, true) + (int)(36 * u);
+        s.tabX.push_back(x); s.tabW.push_back(w);
+        x += w + (int)(2 * u);
+    }
+    s.bannerX = s.tabsX; s.bannerY = (int)(88 * u); s.bannerW = c.w - s.bannerX - (int)(28 * u); s.bannerH = (int)(160 * u);
+    s.contX = s.bannerX + (int)(168 * u); s.contY = s.bannerY + (int)(100 * u); s.contW = (int)(150 * u); s.contH = (int)(44 * u);
+    s.headY = (int)(262 * u);
+    return s;
+}
+inline bool Glassy(const Canvas& c);
+inline int SideAt(const Canvas& c, int x, int y)
+{
+    if (!Glassy(c)) return -1;
+    const GlassSpots s = Spots(c);
+    if (x < s.sideX || x >= s.sideX + s.sideW) return -1;
+    for (int i = 0; i < SIDES; i++)
+    {
+        const int ry = s.firstRow + i * (s.rowH + s.rowGap);
+        if (y >= ry && y < ry + s.rowH) return i;
+    }
+    return -1;
+}
+inline bool ContinueAt(const Canvas& c, int x, int y)
+{
+    if (!Glassy(c)) return false;
+    const GlassSpots s = Spots(c);
+    return x >= s.contX && x < s.contX + s.contW && y >= s.contY && y < s.contY + s.contH;
+}
+// The game the banner offers: the one played last, if it is still here, else the chosen one.
+inline int ContinueGame(const std::vector<Game>& games, int selected)
+{
+    for (size_t i = 0; i < games.size(); i++)
+        if (!ContinueRom().empty() && games[i].rom == ContinueRom()) return (int)i;
+    return selected;
+}
+// A game's picture (or its DS icon on glass) filling a rounded box, cropped to fill it.
+inline void DrawCover(Canvas& c, const Game& g, int x, int y, int w, int h, float r)
+{
+    if (w <= 0 || h <= 0) return;
+    Glass::Mark(c, x, y, x + w, y + h);
+    const int ri = (int)r;
+    auto inside = [&](int px, int py) {
+        const int dx = std::max(0, std::max(ri - px, px - (w - 1 - ri))), dy = std::max(0, std::max(ri - py, py - (h - 1 - ri)));
+        return dx * dx + dy * dy <= ri * ri;
+    };
+    if (!g.art.empty())
+    {
+        const float sc = std::max(w, h) / (float)Art;
+        for (int py = 0; py < h; py++)
+        {
+            const int Y = y + py;
+            if (Y < 0 || Y >= c.h) continue;
+            const int sy = std::max(0, std::min(Art - 1, (int)((py - h * 0.5f) / sc + Art * 0.5f)));
+            for (int px = 0; px < w; px++)
+            {
+                const int X = x + px;
+                if (X < 0 || X >= c.w || !inside(px, py)) continue;
+                const int sx = std::max(0, std::min(Art - 1, (int)((px - w * 0.5f) / sc + Art * 0.5f)));
+                const uint32_t p = g.art[(size_t)sy * Art + sx];
+                uint32_t& d = c.px[(size_t)Y * c.w + X];
+                d = Glass::Over(d, p | 0xFF000000u, (int)(p >> 24));
+            }
+        }
+        return;
+    }
+    Glass::Round(c, x, y, w, h, r, 0x26FFFFFF);
+    if (g.hasIcon)
+    {
+        const int is = std::max(1, std::min(w, h) / 40), ox = x + (w - 32 * is) / 2, oy = y + (h - 32 * is) / 2;
+        for (int py = 0; py < 32; py++)
+            for (int px = 0; px < 32; px++)
+                if (g.icon[py * 32 + px] >> 24) c.Fill(ox + px * is, oy + py * is, is, is, g.icon[py * 32 + px]);
+    }
+}
+// The background: the chosen game's picture, blurred as the pause menu blurs the paused game
+// (made again only when the game or the window changes); a calm blue without one.
+inline void GlassBackdrop(Canvas& c, const Game* g)
+{
+    static std::string key;
+    static int kw = 0, kh = 0;
+    const std::string k = g && !g->art.empty() ? g->rom : std::string();
+    if (k == key && kw == c.w && kh == c.h && c.backdrop.size() == (size_t)c.w * c.h) return;
+    key = k; kw = c.w; kh = c.h;
+    // (Made small, as MakeBackdrop blurs at a fraction of the size anyway, then drawn up by it.)
+    std::vector<uint32_t> src((size_t)c.w * c.h);
+    if (!k.empty())
+    {
+        const float sc = std::max(c.w, c.h) / (float)Art;
+        for (int y = 0; y < c.h; y++)
+        {
+            const int sy = std::max(0, std::min(Art - 1, (int)((y - c.h * 0.5f) / sc + Art * 0.5f)));
+            for (int x = 0; x < c.w; x++)
+            {
+                const int sx = std::max(0, std::min(Art - 1, (int)((x - c.w * 0.5f) / sc + Art * 0.5f)));
+                const uint32_t p = g->art[(size_t)sy * Art + sx];
+                src[(size_t)y * c.w + x] = Glass::Over(0xFF1C2A3Au, p | 0xFF000000u, (int)(p >> 24));
+            }
+        }
+    }
+    else
+        for (int y = 0; y < c.h; y++)
+            for (int x = 0; x < c.w; x++)
+            {
+                const float t = (float)x / c.w * 0.6f + (float)y / c.h * 0.4f;
+                const int r = (int)(0x1E + t * 0x18), gg = (int)(0x36 + t * 0x30), b = (int)(0x5A + t * 0x10);
+                src[(size_t)y * c.w + x] = 0xFF000000u | (r << 16) | (gg << 8) | b;
+            }
+    Glass::MakeBackdrop(c.backdrop, src.data(), c.w, c.h);
+}
+
+inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, int tab, int selected, int& scroll,
+                      const std::string& note, const std::string& hintText, bool follow, bool onTabs, bool settingsChosen)
+{
+    const float u = GU(c);
+    const Grid& grid = v.g;
+    const GlassSpots sp = Spots(c);
+    const int cont = ContinueGame(games, selected);
+    const Game* shown = selected >= 0 && selected < (int)games.size() ? &games[selected]
+                      : cont >= 0 && cont < (int)games.size() ? &games[cont] : nullptr;
+    GlassBackdrop(c, shown);
+    const bool solid = Glass::Backdrop(c);
+    const uint32_t text = Menu::GlassText, hint = Menu::GlassHint, dark = 0xFF18222Eu;
+
+    // The sidebar: the sections, Home chosen (Settings while it is chosen with the arrows).
+    Menu::FrostBox(c, solid, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 18 * u);
+    for (int i = 0; i < SIDES; i++)
+    {
+        const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + (int)(12 * u), rw = sp.sideW - (int)(24 * u);
+        const bool on = settingsChosen ? i == SIDE_SETTINGS : i == SIDE_HOME;
+        if (on)
+        {
+            if (settingsChosen) Glass::Glow(c, rx, ry, rw, sp.rowH, 12 * u, u);
+            Glass::Round(c, rx, ry, rw, sp.rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+        }
+        Glass::DrawIcon(c, SideIcon(i), rx + 25 * u, ry + sp.rowH * 0.5f, 10 * u, text);
+        GT(c, rx + (int)(46 * u), ry + sp.rowH * 0.5f, SideName(i), 16 * u, text, true);
+    }
+
+    // The tabs, as pills: the shown one white.
+    {
+        const int gx = sp.tabsX, gw = sp.tabX.back() + sp.tabW.back() + (int)(4 * u) - gx;
+        Menu::FrostBox(c, solid, gx, sp.tabsY, gw, sp.tabsH, sp.tabsH * 0.5f);
+        for (int t = 0; t < TABS; t++)
+        {
+            const int px = sp.tabX[t], py = sp.tabsY + (int)(4 * u), pw = sp.tabW[t], ph = sp.tabsH - (int)(8 * u);
+            const std::string name = t == 0 ? "All" : PlatformName(t - 1);
+            if (t == tab)
+            {
+                if (onTabs) Glass::Glow(c, px, py, pw, ph, ph * 0.5f, u);
+                Glass::Round(c, px, py, pw, ph, ph * 0.5f, 0xFFFFFFFFu);
+            }
+            GT(c, px + (pw - GW(name, 14 * u, true)) / 2, py + ph * 0.5f, name, 14 * u, t == tab ? dark : text, true);
+        }
+    }
+
+    // The banner: the game played last, ready to carry on.
+    if (cont >= 0 && cont < (int)games.size())
+    {
+        const Game& g = games[cont];
+        Menu::FrostBox(c, solid, sp.bannerX, sp.bannerY, sp.bannerW, sp.bannerH, 18 * u);
+        const int ax = sp.bannerX + (int)(16 * u), ay = sp.bannerY + (int)(16 * u), ah = sp.bannerH - (int)(32 * u), aw = ah;
+        DrawCover(c, g, ax, ay, aw, ah, 12 * u);
+        const int tx = ax + aw + (int)(24 * u);
+        const bool played = !ContinueRom().empty() && g.rom == ContinueRom();
+        const std::string meta = std::string(played ? "Continue Playing" : "Ready To Play") + "   \xC2\xB7   " + PlatformName(g.platform)
+                               + "   \xC2\xB7   " + (g.hasSave ? "Save Found" : "New Game");
+        GT(c, tx, sp.bannerY + 32 * u, meta, 14 * u, hint, true);
+        GT(c, tx, sp.bannerY + 66 * u, ShortName(g), 32 * u, text, true);
+        // Continue (white) and Game Options.
+        Glass::Round(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, 0xFFFFFFFFu);
+        Glass::DrawIcon(c, Glass::I_PLAY, sp.contX + 30 * u, sp.contY + sp.contH * 0.5f, 8 * u, dark);
+        GT(c, sp.contX + (int)(48 * u), sp.contY + sp.contH * 0.5f, played ? "Continue" : "Play", 16 * u, dark, true);
+        const int ox = sp.contX + sp.contW + (int)(10 * u), ow = GW("Game Options", 16 * u, true) + (int)(36 * u);
+        Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+        GT(c, ox + (int)(18 * u), sp.contY + sp.contH * 0.5f, "Game Options", 16 * u, text, true);
+    }
+
+    // "Your Games" and how many.
+    GT(c, sp.tabsX, sp.headY + 14 * u, "Your Games", 20 * u, text, true);
+    {
+        const std::string n = std::to_string(v.spots.size()) + (v.spots.size() == 1 ? " Game" : " Games");
+        GT(c, sp.bannerX + sp.bannerW - GW(n, 14 * u, true), sp.headY + 14 * u, n, 14 * u, hint, true);
+    }
+
+    // The cards.
+    FollowSelection(v, selected, scroll, follow);
+    for (const View::Head& h : v.heads)
+        if (h.empty)
+        {
+            const std::string none = "No " + std::string(PlatformName(h.platform)) + " Games Yet";
+            GT(c, sp.tabsX + (grid.cols * grid.colStep - GW(none, 16 * u, true)) / 2, (grid.top + grid.bottom) * 0.5f, none, 16 * u, hint, true);
+        }
+    for (const View::Spot& s : v.spots)
+    {
+        const int x = s.x, y = grid.top + s.y - scroll;
+        if (y < grid.top - 2 || y + grid.ch > grid.bottom + 2) continue;
+        const Game& g = games[s.game];
+        const bool sel = s.game == selected;
+        if (sel) Glass::Glow(c, x, y, grid.cw, grid.ch, 16 * u, u);
+        Menu::FrostBox(c, solid, x, y, grid.cw, grid.ch, 16 * u, sel, sel ? 1.5f * u : 1.0f);
+        const int ix = x + (int)(8 * u), iy = y + (int)(8 * u), iw = grid.tile, ih = grid.tile;
+        DrawCover(c, g, ix, iy, iw, ih, 10 * u);
+        if (g.comingSoon)
+        {
+            Glass::Round(c, ix, iy, iw, ih, 10 * u, 0x99000000u);
+            GT(c, ix + (iw - GW("Coming Soon", 14 * u, true)) / 2, iy + ih * 0.5f, "Coming Soon", 14 * u, text, true);
+        }
+        const float cy = iy + ih + 16 * u;
+        std::string name = ShortName(g);
+        float npx = 15 * u;
+        const int room = iw - GW(PlatformName(g.platform), 12 * u, true) - (int)(16 * u);
+        while (npx > 10 * u && GW(name, npx, true) > room) npx -= u;
+        GT(c, ix + (int)(4 * u), cy, name, npx, text, true);
+        const std::string sub = !g.known && !g.comingSoon ? "Not Playable" : PlatformName(g.platform);
+        GT(c, ix + iw - (int)(4 * u) - GW(sub, 12 * u, true), cy, sub, 12 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
+        if (g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, ix + iw - 14 * u, iy + 14 * u, 7 * u, 0xFFFFFFFFu);
+    }
+    // More below.
+    if (scroll + (grid.bottom - grid.top) < v.height - grid.gap)
+        Glass::Round(c, sp.tabsX + grid.cols * grid.colStep / 2 - (int)(16 * u), grid.bottom + (int)(4 * u), (int)(32 * u), (int)(4 * u), 2 * u, 0x80FFFFFFu);
+
+    // The hints (or a message) along the bottom, as the pause menu's.
+    std::string h = !note.empty() ? note : !hintText.empty() ? hintText : "A: PLAY    Y: SETTINGS    L / R: TABS    +: QUIT";
+    h = CleanFont::Title(UiLang::Tr(h));
+    float hp = 14 * u;
+    while (hp > 9 * u && GW(h, hp, true) > c.w - 56 * u) hp -= u;
+    GT(c, (c.w - GW(h, hp, true)) / 2, c.h - 32 * u, h, hp, hint, true);
+    if (solid) Glass::Opaque(c);
+}
+
+inline int GlassTabAt(const Canvas& c, int x, int y)
+{
+    const GlassSpots s = Spots(c);
+    if (y < s.tabsY || y >= s.tabsY + s.tabsH) return -1;
+    for (int t = 0; t < TABS; t++)
+        if (x >= s.tabX[t] && x < s.tabX[t] + s.tabW[t]) return t;
+    return -1;
+}
+
+// The classic list, drawn over the whole canvas (1280x720 on the Switch): the title band, the tabs, then
 // the tab's games as tiles, each the game's picture (or its DS icon, enlarged) with its name and
 // whether it has a save, under each console's heading on ALL. selected: -1 for none. scroll is
 // kept so the chosen game is in view (follow false: as it is, a finger having scrolled the list).
 // hint: the line along the bottom (the Switch's buttons when empty). onTabs: the tabs are chosen
 // (up from the first row of games; left and right then change the tab), the shown one framed.
-inline void Draw(Canvas& c, const std::vector<Game>& games, int tab, int selected, int& scroll, const std::string& note,
+inline void DrawClassic(Canvas& c, const std::vector<Game>& games, int tab, int selected, int& scroll, const std::string& note,
                  const std::string& hintText = std::string(), const Theme& th = Theme(), bool follow = true, bool onTabs = false)
 {
     const View v = MakeView(c, games, tab);
@@ -851,6 +1187,21 @@ inline void Draw(Canvas& c, const std::vector<Game>& games, int tab, int selecte
     int hintScale=s;
         while(hintScale>1 && Canvas::TextWidth(hint,hintScale)>c.w-8)--hintScale;
     c.Text((c.w - Canvas::TextWidth(hint, hintScale)) / 2, c.h - 12 * s, hint, hintScale, th.hint);
+}
+
+// The list: the glass launcher where it can be drawn (Glassy), else the classic one. settingsChosen:
+// the sidebar's Settings chosen with the arrows (the classic list draws its own SETTINGS button).
+inline void Draw(Canvas& c, const std::vector<Game>& games, int tab, int selected, int& scroll, const std::string& note,
+                 const std::string& hintText = std::string(), const Theme& th = Theme(), bool follow = true, bool onTabs = false,
+                 bool settingsChosen = false)
+{
+    if (Glassy(c))
+    {
+        const View v = MakeView(c, games, tab);
+        DrawGlass(c, games, v, tab, selected, scroll, note, hintText, follow, onTabs, settingsChosen);
+        return;
+    }
+    DrawClassic(c, games, tab, selected, scroll, note, hintText, th, follow, onTabs);
 }
 
 // The settings page (Y on the Switch's list, H or a controller's Y on a PC's): the pause menu's
