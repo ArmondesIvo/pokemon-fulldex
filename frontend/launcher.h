@@ -44,8 +44,71 @@ inline const char* PlatformName(int p) { return p == DS ? "DS" : p == GBA ? "GBA
 // (HOME: the games the player added with X, their favourites; until they add any, the game played
 // last. ROMHACKS: the hacks, whatever their console.)
 enum TabId { TAB_HOME, TAB_ALL, TAB_DS, TAB_GBA, TAB_3DS, TAB_HACKS, TABS };
-inline const char* TabName(int t) { static const char* n[] = { "HOME", "ALL", "DS", "GBA", "3DS", "ROMHACKS" }; return t >= 0 && t < TABS ? n[t] : "ALL"; }
-inline const char* TabLabel(int t) { static const char* n[] = { "Home", "All", "DS", "GBA", "3DS", "Romhacks" }; return t >= 0 && t < TABS ? n[t] : "All"; }
+// Tabs of the player's own, after the built-in ones (tab TABS + k): a name and its games' ROM paths;
+// kept in fulldex-tabs.txt beside the saves, a line a tab (its name, then its ROMs), tab-separated.
+struct CustomTab { std::string name; std::vector<std::string> roms; };
+inline std::vector<CustomTab>& CustomTabs() { static std::vector<CustomTab> t; return t; }
+inline std::string& TabsFile() { static std::string f; return f; }
+inline int TabCount() { return TABS + (int)CustomTabs().size(); }
+inline std::string TabsSig() { std::string s; for (const CustomTab& t : CustomTabs()) s += t.name + "|" + std::to_string(t.roms.size()) + ";"; return s; }
+inline void LoadTabs(const std::string& dir)
+{
+    TabsFile() = dir + "/fulldex-tabs.txt";
+    std::vector<CustomTab>& tabs = CustomTabs();
+    tabs.clear();
+    if (FILE* f = fopen(TabsFile().c_str(), "rb"))
+    {
+        char line[8192];
+        while (fgets(line, sizeof line, f))
+        {
+            std::string l = line;
+            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+            CustomTab t;
+            size_t at = 0;
+            while (at <= l.size())
+            {
+                size_t end = l.find('\t', at);
+                if (end == std::string::npos) end = l.size();
+                const std::string part = l.substr(at, end - at);
+                if (t.name.empty() && at == 0) t.name = part;
+                else if (!part.empty()) t.roms.push_back(part);
+                at = end + 1;
+            }
+            if (!t.name.empty()) tabs.push_back(t);
+        }
+        fclose(f);
+    }
+}
+inline bool SaveTabs()
+{
+    if (TabsFile().empty()) return false;
+    const std::string tmp = TabsFile() + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    bool ok = true;
+    for (const CustomTab& t : CustomTabs())
+    {
+        std::string l = t.name;
+        for (const std::string& r : t.roms) l += "\t" + r;
+        if (fprintf(f, "%s\n", l.c_str()) < 0) ok = false;
+    }
+    ok = fclose(f) == 0 && ok;
+    if (!ok) return false;
+    if (rename(tmp.c_str(), TabsFile().c_str()) != 0) { remove(TabsFile().c_str()); if (rename(tmp.c_str(), TabsFile().c_str()) != 0) return false; }
+    return true;
+}
+// What the list is searched for (Search on the tab bar; "": not searched) and its order (list_sort):
+// kept apart from the focus, which a click can start again.
+inline std::string& SearchText() { static std::string s; return s; }
+inline std::string& SortKey() { static std::string s; return s; }
+inline const char* TabName(int t) { static const char* n[] = { "HOME", "ALL", "DS", "GBA", "3DS", "ROMHACKS" }; return t >= 0 && t < TABS ? n[t] : t < TabCount() ? "CUSTOM" : "ALL"; }
+inline std::string TabLabel(int t)
+{
+    static const char* n[] = { "Home", "All", "DS", "GBA", "3DS", "Romhacks" };
+    if (t >= 0 && t < TABS) return n[t];
+    const int k = t - TABS;
+    return k >= 0 && k < (int)CustomTabs().size() ? CustomTabs()[k].name : std::string("All");
+}
 
 struct Game
 {
@@ -100,13 +163,17 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     // aX..aRow where the actions were drawn.)
                     int pact = -1, rScroll = 0, rVis = 0, aX = 0, aY = 0, aW = 0, aRow = 0;
                     // (Sort at the tab bar's right end: chosen (with the tabs), the list's order, where it was drawn.)
-                    bool onSort = false; std::string sortKey; int sortX = 0, sortY = 0, sortW = 0, sortH = 0; };
+                    bool onSort = false; std::string sortKey; int sortX = 0, sortY = 0, sortW = 0, sortH = 0;
+                    // (The tab bar's tools: which is chosen while onSort (1 +, 2 Search, 3 Sort), where they were drawn; the
+                    // keyboard's use (0 a game's name, 1 a new tab (kbRom put in it), 2 the search, 3 tab kbTab's name).)
+                    int tool = 3; int toolX[4] = {}, toolW[4] = {}, toolY = 0, toolH = 0;
+                    int kbFor = 0, kbTab = 0; std::string kbRom; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
-inline int PopupCount() { return 6; }
+inline int PopupCount() { return 7; }
 inline std::string PopupLabel(const Game& g, int i)
 {
-    static const char* n[] = { "Play", "", "Rename", "Change Picture", "Manage Saves", "Remove Game" };
-    return i == 1 ? (g.favourite ? "Remove From Home" : "Add To Home") : i >= 0 && i < 6 ? n[i] : "";
+    static const char* n[] = { "Play", "", "Rename", "Change Picture", "Manage Saves", "Add To Tab", "Remove Game" };
+    return i == 1 ? (g.favourite ? "Remove From Home" : "Add To Home") : i >= 0 && i < 7 ? n[i] : "";
 }
 // The pause menu's keyboard page (Menu::keyGrid) for Rename: BACK, four rows of keys (capitals, small
 // letters or signs: layer), then the two layer keys, SPACE, DELETE and done. ids: each item's key.
@@ -206,9 +273,24 @@ inline bool IsHack(const Game& g)
     const std::string c = g.code.substr(0, 3);
     return c != "AXV" && c != "AXP" && c != "BPE" && c != "BPR" && c != "BPG";
 }
+// The search's words in a game's name (its own or the player's), any case.
+inline bool NameHas(const Game& g, const std::string& q)
+{
+    auto low = [](std::string s) { for (char& ch : s) ch = (char)tolower((unsigned char)ch); return s; };
+    const std::string k = low(q);
+    return low(g.customName).find(k) != std::string::npos || low(g.name).find(k) != std::string::npos;
+}
 inline bool InTab(const std::vector<Game>& games, int i, int tab)
 {
     const Game& g = games[i];
+    if (!SearchText().empty() && !NameHas(g, SearchText())) return false;
+    if (tab >= TABS)
+    {
+        const int k = tab - TABS;
+        if (k >= (int)CustomTabs().size()) return false;
+        for (const std::string& r : CustomTabs()[k].roms) if (r == g.rom) return true;
+        return false;
+    }
     switch (tab)
     {
     case TAB_HOME:
@@ -1023,6 +1105,7 @@ struct GlassSpots
 {
     int sideX, sideY, sideW, sideH, rowH, rowGap, firstRow;
     int tabsX, tabsY, tabsH;
+    float tabFont = 18;
     std::vector<int> tabX, tabW;
     int bannerX, bannerY, bannerW, bannerH;
     int contX, contY, contW, contH; // the Continue button
@@ -1037,10 +1120,16 @@ inline GlassSpots Spots(const Canvas& c)
     // (text sizes: bigger since 6 November, the sidebar and tabs most)
     s.rowH = (int)(54 * u); s.rowGap = (int)(6 * u); s.firstRow = (int)(12 * u); // (level with the tab pills)
     s.tabsX = (int)(204 * u); s.tabsY = (int)(14 * u); s.tabsH = (int)(46 * u);
+    // (The tabs smaller as they grow in number, to leave room for + after them and Search and Sort.)
+    const int room = c.w - (int)(28 * u) - (int)(470 * u) - s.tabsX;
+    s.tabFont = 18 * u;
+    float pad = 40 * u;
+    auto total = [&]() { int w = 0; for (int t = 0; t < TabCount(); t++) w += GW(TabLabel(t), s.tabFont, true) + (int)pad + (int)(2 * u); return w; };
+    while (total() > room && s.tabFont > 12 * u) { s.tabFont -= u; pad = std::max(20 * u, pad - 2 * u); }
     int x = s.tabsX + (int)(4 * u);
-    for (int t = 0; t < TABS; t++)
+    for (int t = 0; t < TabCount(); t++)
     {
-        const int w = GW(TabLabel(t), 18 * u, true) + (int)(40 * u);
+        const int w = GW(TabLabel(t), s.tabFont, true) + (int)pad;
         s.tabX.push_back(x); s.tabW.push_back(w);
         x += w + (int)(2 * u);
     }
@@ -1231,6 +1320,140 @@ inline bool SetConfigLine(const std::string& cfg, const std::string& key, const 
 // Sort on the tab bar: the next order, and how it is named.
 inline const char* NextSort(const std::string& now) { return now == "favourites" ? "recent" : now == "recent" ? "original" : "favourites"; }
 inline const char* SortLabel(const std::string& k) { return k == "favourites" ? "Favourites First" : k == "recent" ? "Recently Played" : "Original"; }
+// The tab bar's tools under a point (1 +, 2 Search, 3 Sort; 0 none).
+inline int ToolAt(int x, int y)
+{
+    const GlassFocus& f = Focus();
+    if (f.page >= 0 || y < f.toolY || y >= f.toolY + f.toolH) return 0;
+    for (int k = 1; k < 4; k++)
+        if (f.toolW[k] > 0 && x >= f.toolX[k] && x < f.toolX[k] + f.toolW[k]) return k;
+    return 0;
+}
+// The keyboard's title, line and done key for what it is for (GlassFocus::kbFor).
+inline const char* KbTitle() { const int k = Focus().kbFor; return k == 1 ? "NEW TAB" : k == 2 ? "SEARCH" : k == 3 ? "RENAME TAB" : "RENAME"; }
+inline const char* KbPrompt() { const int k = Focus().kbFor; return k == 1 || k == 3 ? "Tab Name" : k == 2 ? "Part Of A Game's Name" : "The Game's Own Name"; }
+inline const char* KbDone() { const int k = Focus().kbFor; return k == 1 ? "Make Tab" : k == 2 ? "Search" : "Save"; }
+// Add To Tab (the game's menu): the player's tabs, each marked if the game is in it, New Tab and Close.
+inline void OpenAddToTab(const std::string& rom)
+{
+    GlassFocus& F = Focus();
+    const std::vector<CustomTab>& tabs = CustomTabs();
+    F.dTitle = "Add To Tab";
+    F.dMsg = tabs.empty() ? "You have no tabs of your own yet. Make one and this game goes in it."
+                          : "Choose a tab to put this game in, or to take it out.";
+    F.dItems.clear();
+    F.dPaths.clear();
+    for (size_t k = 0; k < tabs.size() && k < 6; k++)
+    {
+        bool in = false;
+        for (const std::string& r : tabs[k].roms) in = in || r == rom;
+        F.dItems.push_back(tabs[k].name + (in ? "   \xC2\xB7   In This Tab" : ""));
+        F.dPaths.push_back("#tab:" + std::to_string(k));
+    }
+    F.dItems.push_back("New Tab");
+    F.dPaths.push_back("#new");
+    F.dItems.push_back("Close");
+    F.dPaths.push_back("#close");
+    F.dialog = 8;
+    F.drow = 0;
+    F.kbRom = rom;
+}
+// A tab of the player's own (A on it): Rename, Move Left, Move Right, Delete Tab, Close.
+inline void OpenTabMenu(int k)
+{
+    GlassFocus& F = Focus();
+    if (k < 0 || k >= (int)CustomTabs().size()) return;
+    F.dTitle = CustomTabs()[k].name;
+    F.dMsg = "A tab of your own. Deleting it keeps its games.";
+    F.dItems = { "Rename Tab", "Move Left", "Move Right", "Delete Tab", "Close" };
+    F.dPaths = { "#rename", "#left", "#right", "#delete", "#close" };
+    F.dialog = 9;
+    F.drow = 0;
+    F.kbTab = k;
+}
+// A row of those two chosen (pick: its path). tab: the tab shown, moved with its tab. Returns 1 when
+// the dialog stays (made again), 2 when the keyboard opens (dialog 3, kbFor set), else 0 (closed).
+inline int TabDialogPick(const std::string& pick, int& tab, std::string& note)
+{
+    GlassFocus& F = Focus();
+    std::vector<CustomTab>& tabs = CustomTabs();
+    auto upper = [](std::string s) { for (char& ch : s) ch = (char)toupper((unsigned char)ch); return s; };
+    if (pick.rfind("#tab:", 0) == 0)
+    {
+        const int k = atoi(pick.c_str() + 5);
+        if (k < 0 || k >= (int)tabs.size()) { F.dialog = 0; return 0; }
+        std::vector<std::string>& roms = tabs[k].roms;
+        const auto it = std::find(roms.begin(), roms.end(), F.kbRom);
+        const bool was = it != roms.end();
+        if (was) roms.erase(it);
+        else roms.push_back(F.kbRom);
+        note = !SaveTabs() ? "COULD NOT SAVE THE TABS" : was ? "TAKEN OUT OF " + upper(tabs[k].name) : "ADDED TO " + upper(tabs[k].name);
+        const int keep = F.drow;
+        OpenAddToTab(F.kbRom);
+        F.drow = keep;
+        return 1;
+    }
+    if (pick == "#new") { F.kbFor = 1; F.text.clear(); F.dialog = 3; F.drow = 0; return 2; }
+    const int k = F.kbTab;
+    if (k < 0 || k >= (int)tabs.size()) { F.dialog = 0; return 0; }
+    if (pick == "#rename") { F.kbFor = 3; F.text = tabs[k].name; F.dialog = 3; F.drow = 0; return 2; }
+    if (pick == "#left" || pick == "#right")
+    {
+        const int to = pick == "#left" ? k - 1 : k + 1;
+        if (to < 0 || to >= (int)tabs.size()) return 1;
+        std::swap(tabs[k], tabs[to]);
+        if (tab == TABS + k) tab = TABS + to;
+        else if (tab == TABS + to) tab = TABS + k;
+        if (!SaveTabs()) note = "COULD NOT SAVE THE TABS";
+        const int keep = F.drow;
+        OpenTabMenu(to);
+        F.drow = keep;
+        return 1;
+    }
+    if (pick == "#delete")
+    {
+        tabs.erase(tabs.begin() + k);
+        if (tab == TABS + k) tab = TAB_ALL;
+        else if (tab > TABS + k) tab--;
+        note = SaveTabs() ? "TAB DELETED. ITS GAMES ARE KEPT" : "COULD NOT SAVE THE TABS";
+        F.dialog = 0;
+        return 0;
+    }
+    F.dialog = 0;
+    return 0;
+}
+// The keyboard's done key for anything but a game's name: a new tab (the game it came from put in it),
+// the search ("" clears it), a tab's name. tab: the tab shown after.
+inline void KeyboardDone(int& tab, std::string& note)
+{
+    GlassFocus& F = Focus();
+    std::string t = F.text;
+    while (!t.empty() && t.back() == ' ') t.pop_back();
+    while (!t.empty() && t.front() == ' ') t.erase(0, 1);
+    std::vector<CustomTab>& tabs = CustomTabs();
+    if (F.kbFor == 1 && !t.empty())
+    {
+        CustomTab nt;
+        nt.name = t;
+        if (!F.kbRom.empty()) nt.roms.push_back(F.kbRom);
+        tabs.push_back(nt);
+        note = SaveTabs() ? "TAB MADE" : "COULD NOT SAVE THE TABS";
+        tab = TabCount() - 1;
+    }
+    else if (F.kbFor == 2)
+    {
+        SearchText() = t;
+        note = t.empty() ? "SEARCH CLEARED" : "";
+    }
+    else if (F.kbFor == 3 && !t.empty() && F.kbTab >= 0 && F.kbTab < (int)tabs.size())
+    {
+        tabs[F.kbTab].name = t;
+        note = SaveTabs() ? "TAB RENAMED" : "COULD NOT SAVE THE TABS";
+    }
+    F.kbFor = 0;
+    F.kbRom.clear();
+    F.dialog = 0;
+}
 inline bool SortAt(int x, int y)
 {
     const GlassFocus& f = Focus();
@@ -1836,7 +2059,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
-                    + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + Focus().sortKey
+                    + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
                     + (Focus().page == SIDE_UPDATES ? "/u" + std::to_string(Focus().upState) + std::to_string(Focus().upCan) + Focus().upHave + "/" + Focus().upNew + "/" + Focus().upText + "/" + Focus().upNotes + "/" + std::to_string(Focus().nScroll) : std::string())
                     + (Focus().page == SIDE_ROMS ? "/r" + std::to_string(Focus().pact) + "," + std::to_string(RomList().size()) + ","
                        + std::to_string(std::count_if(RomList().begin(), RomList().end(), [](const Game& g) { return g.hidden; })) : std::string());
@@ -1931,7 +2154,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         else Glass::Round(c, barX, 0, barW, barH, 0, Menu::GlassShade);
         Glass::Round(c, barX, 0, barW, barH, 0, 0x30101826);
         Glass::Round(c, barX, barH - line, barW, line, 0, 0x3DFFFFFF);
-        if (Focus().page < 0) for (int t = 0; t < TABS; t++)
+        if (Focus().page < 0) for (int t = 0; t < TabCount(); t++)
         {
             const int px = sp.tabX[t], py = sp.tabsY + (int)(4 * u), pw = sp.tabW[t], ph = sp.tabsH - (int)(8 * u);
             const std::string name = TabLabel(t);
@@ -1940,7 +2163,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 if (onTabs && !Focus().onSort) Glass::Glow(c, px, py, pw, ph, ph * 0.5f, u);
                 Glass::Round(c, px, py, pw, ph, ph * 0.5f, 0xFFFFFFFFu);
             }
-            GT(c, px + (pw - GW(name, 18 * u, true)) / 2, py + ph * 0.5f, name, 18 * u, t == tab ? dark : text, true);
+            GT(c, px + (pw - GW(name, sp.tabFont, true)) / 2, py + ph * 0.5f, name, sp.tabFont, t == tab ? dark : text, true);
         }
     }
 
@@ -1966,7 +2189,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     if (Focus().page < 0)
     {
     // "Your Games" and how many.
-    GT(c, sp.tabsX, sp.headY + 14 * u, "Your Games", 24 * u, text, true);
+    GT(c, sp.tabsX, sp.headY + 14 * u, SearchText().empty() ? std::string("Your Games") : "Results For \"" + SearchText() + "\"", 24 * u, text, true);
     {
         const std::string n = std::to_string(v.spots.size()) + (v.spots.size() == 1 ? " Game" : " Games");
         GT(c, sp.bannerX + sp.bannerW - GW(n, 16 * u, true), sp.headY + 14 * u, n, 16 * u, hint, true);
@@ -1976,7 +2199,9 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     for (const View::Head& h : v.heads)
         if (h.empty)
         {
-            const std::string none = tab == TAB_HOME ? "Add Games To Home From A Game's Menu (A On A Game)"
+            const std::string none = !SearchText().empty() ? "No Games Match \"" + SearchText() + "\""
+                                   : tab >= TABS ? std::string("Add Games To This Tab From A Game's Menu (A On A Game)")
+                                   : tab == TAB_HOME ? "Add Games To Home From A Game's Menu (A On A Game)"
                                    : tab == TAB_HACKS ? "No Romhacks Yet" : "No " + std::string(TabLabel(tab)) + " Games Yet";
             GT(c, sp.tabsX + (grid.cols * grid.colStep - GW(none, 16 * u, true)) / 2, (grid.top + grid.bottom) * 0.5f, none, 16 * u, hint, true);
         }
@@ -1989,22 +2214,42 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     }
     drawSideRows();
     drawBannerButtons();
-    // Sort, at the tab bar's right end (chosen: right past the last tab).
-    Focus().sortW = 0;
-    if (Focus().page < 0)
+    // The tab bar's tools: + (a tab of your own) after the tabs, Search and Sort at its right end
+    // (chosen: right past the last tab, then along them).
+    for (int k = 1; k < 4; k++) Focus().toolW[k] = 0;
+    if (Focus().page < 0 && !sp.tabX.empty())
     {
-        const std::string label = std::string("Sort: ") + SortLabel(Focus().sortKey);
-        const int barH = sp.tabsY * 2 + sp.tabsH, bh = (int)(40 * u), bw = GW(label, 15 * u, true) + (int)(52 * u);
-        const int bx = c.w - (int)(28 * u) - bw, by = (barH - bh) / 2;
-        Focus().sortX = bx; Focus().sortY = by; Focus().sortW = bw; Focus().sortH = bh;
-        if (onTabs && Focus().onSort)
-        {
-            Glass::Glow(c, bx, by, bw, bh, 12 * u, u);
-            Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
-        }
-        else Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
-        Glass::DrawIcon(c, Glass::I_LAYERS, bx + 22 * u, by + bh * 0.5f, 9 * u, text);
-        GT(c, bx + (int)(40 * u), by + bh * 0.5f, label, 15 * u, text, true);
+        const int barH = sp.tabsY * 2 + sp.tabsH, bh = (int)(40 * u), by = (barH - bh) / 2;
+        auto tool = [&](int k, int bx, int bw, const std::string& label, int icon) {
+            GlassFocus& F = Focus();
+            F.toolX[k] = bx; F.toolW[k] = bw; F.toolY = by; F.toolH = bh;
+            if (onTabs && F.onSort && F.tool == k)
+            {
+                Glass::Glow(c, bx, by, bw, bh, 12 * u, u);
+                Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            else Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+            if (icon >= 0)
+            {
+                Glass::DrawIcon(c, icon, bx + 22 * u, by + bh * 0.5f, 9 * u, text);
+                GT(c, bx + (int)(40 * u), by + bh * 0.5f, label, 15 * u, text, true);
+            }
+            else
+            {
+                const float px = label == "+" ? 24 * u : 15 * u;
+                GT(c, bx + (bw - GW(label, px, true)) / 2, by + bh * 0.5f, label, px, text, true);
+            }
+        };
+        const std::string sortL = std::string("Sort: ") + SortLabel(SortKey());
+        const int sortW = GW(sortL, 15 * u, true) + (int)(52 * u), sortX = c.w - (int)(28 * u) - sortW;
+        std::string q = SearchText();
+        if (q.size() > 14) q = q.substr(0, 13) + "...";
+        const std::string searchL = q.empty() ? std::string("Search") : "\"" + q + "\"";
+        const int searchW = GW(searchL, 15 * u, true) + (int)(36 * u), searchX = sortX - (int)(10 * u) - searchW;
+        const int last = (int)sp.tabX.size() - 1;
+        tool(1, sp.tabX[last] + sp.tabW[last] + (int)(10 * u), bh, "+", -1);
+        tool(2, searchX, searchW, searchL, -1);
+        tool(3, sortX, sortW, sortL, Glass::I_LAYERS);
     }
     // The chosen card, over the kept picture: the blurred background put back round it first.
     {
@@ -2029,7 +2274,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const int k = v.SpotOf(selected);
         if (k >= 0)
         {
-            static const int icons[] = { Glass::I_PLAY, Glass::I_POKEBALL, Glass::I_SPARKLE, Glass::I_WINDOW, Glass::I_SAVE, Glass::I_BACK };
+            static const int icons[] = { Glass::I_PLAY, Glass::I_POKEBALL, Glass::I_SPARKLE, Glass::I_WINDOW, Glass::I_SAVE, Glass::I_LAYERS, Glass::I_BACK };
             const Game& g = games[selected];
             const int cx = v.spots[k].x, cyy = grid.top + v.spots[k].y - scroll;
             const int n = PopupCount(), rowH = (int)(44 * u), rg = (int)(4 * u), pad = (int)(8 * u), pw = (int)(250 * u);
@@ -2055,7 +2300,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             for (int i = 0; i < n; i++)
             {
                 const int ry = py + pad + i * (rowH + rg), rx = px + pad, rw = pw - 2 * pad;
-                const uint32_t ink = i == 5 ? 0xFFF2A08Au : text;
+                const uint32_t ink = i == 6 ? 0xFFF2A08Au : text;
                 if (i == Focus().popup)
                 {
                     Glass::Glow(c, rx, ry, rw, rowH, 12 * u, u);
@@ -2069,10 +2314,12 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
 
     // A dialog from the game's menu (Remove Game, Delete ROM File, Rename) in the middle, the rest dimmed.
     Focus().dW = 0;
-    if (Focus().dialog && Focus().dialog != 3 && selected >= 0 && selected < (int)games.size()) // (Rename: the keyboard page)
+    // (Rename: the keyboard page. A tab of your own's menu: drawn with no game chosen too, from the tab bar.)
+    if (Focus().dialog && Focus().dialog != 3 && ((selected >= 0 && selected < (int)games.size()) || Focus().dialog >= 8))
     {
         GlassFocus& F = Focus();
-        const Game& g = games[selected];
+        static const Game none;
+        const Game& g = selected >= 0 && selected < (int)games.size() ? games[selected] : none;
         Game own = g;
         own.customName.clear();
         std::string title, msg;
@@ -2209,7 +2456,7 @@ inline int GlassTabAt(const Canvas& c, int x, int y)
 {
     const GlassSpots s = Spots(c);
     if (y < s.tabsY || y >= s.tabsY + s.tabsH) return -1;
-    for (int t = 0; t < TABS; t++)
+    for (int t = 0; t < TabCount() && t < (int)s.tabX.size(); t++)
         if (x >= s.tabX[t] && x < s.tabX[t] + s.tabW[t]) return t;
     return -1;
 }

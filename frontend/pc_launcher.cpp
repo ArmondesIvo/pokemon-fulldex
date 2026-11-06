@@ -643,7 +643,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     // The tab shown (Launcher::TABS: ALL first, the list opens on it; back from a GBA game, the
     // tab it was chosen on) and how far down it is scrolled. selected: a game in that tab, or -1
     // when it has none.
-    static int lastTab = std::max(0, std::min(Launcher::TABS - 1, atoi(Launcher::ConfigValue(fo.cfg, "launcher_tab2").c_str())));
+    Launcher::LoadTabs(fo.saves);
+    static int lastTab = std::max(0, std::min(Launcher::TabCount() - 1, atoi(Launcher::ConfigValue(fo.cfg, "launcher_tab2").c_str())));
     int tab = lastTab, scroll = 0, result = -1;
     // false while the list is where a finger (or the mouse, held) dragged it, rather than where
     // the chosen game is; a key, button or tap that chooses a game makes it follow again.
@@ -660,7 +661,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         library.Load(fo.saves+"/fulldex-library.txt");
         Launcher::ApplyLocal(games, fo.saves); // (the player's names; the games taken off the list left out)
         Launcher::ApplyArt(games, fo.saves); // (the pictures chosen with Change Picture)
-        Launcher::Focus().sortKey = Launcher::ConfigValue(fo.cfg, "list_sort");
+        Launcher::SortKey() = Launcher::ConfigValue(fo.cfg, "list_sort");
+        Launcher::LoadTabs(fo.saves);
         Launcher::Sort(games);
         library.Apply(games,Launcher::ConfigValue(fo.cfg,"list_sort"));
         for(size_t i=0;i<games.size();i++)if(games[i].rom==keep)selected=(int)i;
@@ -682,7 +684,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     listsShown++;
     const char* testShot = getenv("SSR_LIST_SHOT");
     const char* testPick = listsShown == 1 ? getenv("SSR_LIST_PICK") : nullptr;
-    if (const char* t = getenv("SSR_LIST_TAB")) tab = std::max(0, std::min(Launcher::TABS - 1, atoi(t)));
+    if (const char* t = getenv("SSR_LIST_TAB")) tab = std::max(0, std::min(Launcher::TabCount() - 1, atoi(t)));
+    // (SSR_LIST_SEARCH=words: the list searched, for the test picture.)
+    if (const char* sq = getenv("SSR_LIST_SEARCH")) Launcher::SearchText() = sq;
     // (SSR_LIST_POPUP=n: the chosen game's menu open on row n, for the test picture.)
     if (const char* pp = getenv("SSR_LIST_POPUP")) Launcher::Focus().popup = atoi(pp);
     // (SSR_LIST_PAGE=side,row: a page of the sidebar open on that row, for the test picture.)
@@ -704,7 +708,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     // (why: said in game.log, with the tab.)
     bool onTabs = false; // the tabs chosen by the arrows (up from the first row of games)
     auto setTab = [&](int t, const char* why) {
-        tab = (t + Launcher::TABS) % Launcher::TABS;
+        tab = (t + Launcher::TabCount()) % Launcher::TabCount();
         fprintf(stderr, "[launcher] tab %s (%s)\n", Launcher::TabName(tab), why);
         scroll = 0;
         follow = true;
@@ -989,6 +993,16 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         if (Launcher::Glassy(canvas))
         {
             Launcher::GlassFocus& F = Launcher::Focus();
+            if (onTabs && F.onSort && F.tool != 3)
+            {
+                // (The tab bar's + and Search: the keyboard, for a new tab or the search.)
+                F.kbFor = F.tool == 1 ? 1 : 2;
+                F.kbRom.clear();
+                F.text = F.tool == 2 ? Launcher::SearchText() : std::string();
+                F.dialog = 3; F.drow = 0; SDL_StartTextInput();
+                return;
+            }
+            if (onTabs && !F.onSort && tab >= Launcher::TABS) { Launcher::OpenTabMenu(tab - Launcher::TABS); return; } // (a tab of your own)
             if (onTabs && F.onSort)
             {
                 // (Sort on the tab bar: the next order, kept in the settings as SORT is.)
@@ -1061,8 +1075,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 F.popup = -1;
                 if (item == 1) { toggleFavourite(); return; }
                 const bool valid = selected >= 0 && selected < (int)games.size();
-                if (item == 2 && valid) { F.dialog = 3; F.drow = 0; F.text = Launcher::ShortName(games[selected]); SDL_StartTextInput(); return; }
-                if (item == 5 && valid) { F.dialog = 1; F.drow = 0; return; }
+                if (item == 2 && valid) { F.kbFor = 0; F.dialog = 3; F.drow = 0; F.text = Launcher::ShortName(games[selected]); SDL_StartTextInput(); return; }
+                if (item == 5 && valid) { Launcher::OpenAddToTab(games[selected].rom); return; }
+                if (item == 6 && valid) { F.dialog = 1; F.drow = 0; return; }
                 if (item == 3 && valid) { F.dialog = 4; F.drow = 0; return; }
                 if (item == 4 && valid)
                 {
@@ -1190,12 +1205,13 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (F.onSort)
                 {
                     // (Sort: left back to the tabs, down to the games.)
-                    if (dir == 1) F.onSort = false;
+                    if (dir == 1) { if (F.tool > 1) F.tool--; else F.onSort = false; }
+                    else if (dir == 2) F.tool = std::min(3, F.tool + 1);
                     else if (dir == 4) { F.onSort = false; onTabs = false; if (banner) F.banner = 1; else intoGames(); }
                     return;
                 }
                 if (dir == 1 && tab == 0) { onTabs = false; F.side = Launcher::SIDE_HOME; }
-                else if (dir == 2 && tab == Launcher::TABS - 1) F.onSort = true;
+                else if (dir == 2 && tab == Launcher::TabCount() - 1) { F.onSort = true; F.tool = 1; }
                 else if (dir == 1 || dir == 2) setTab(tab + (dir == 2 ? 1 : -1), "the arrows");
                 else if (dir == 4) { onTabs = false; if (banner) F.banner = 1; else intoGames(); }
                 return;
@@ -1263,7 +1279,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     Menu kb;
     std::vector<int> kbIds;
     int kbLayer = 0;
-    auto kbBuild = [&]() { Launcher::BuildKeyboard(kb, kbIds, Launcher::Focus().text, kbLayer, "The Game's Own Name", "Save"); };
+    auto kbBuild = [&]() { Launcher::BuildKeyboard(kb, kbIds, Launcher::Focus().text, kbLayer, Launcher::KbPrompt(), Launcher::KbDone()); };
     auto dialogClose = [&]() { Launcher::Focus().dialog = 0; kb.open = false; SDL_StopTextInput(); };
     auto dialogAct = [&]() {
         Launcher::GlassFocus& F = Launcher::Focus();
@@ -1305,6 +1321,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             const std::string pick = F.drow >= 0 && F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
             const std::string save = fo.saves + "/" + games[selected].saveName;
             if (pick == "#close" || pick.empty()) { dialogClose(); return; }
+            if (F.dialog == 8 || F.dialog == 9)
+            {
+                // (Add To Tab, or a tab of your own's menu.)
+                const int r = Launcher::TabDialogPick(pick, tab, note);
+                if (r == 2) { kb.open = false; SDL_StartTextInput(); }
+                if (r != 1) { scroll = 0; settle(); }
+                return;
+            }
             if (pick == "#folder")
             {
                 const std::string url = "file:///" + fo.saves;
@@ -1392,6 +1416,17 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 return;
             }
             dialogClose();
+            return;
+        }
+        if (F.dialog == 3 && F.kbFor)
+        {
+            // (The keyboard for a new tab, the search or a tab's name.)
+            const bool done = F.drow == 0;
+            dialogClose();
+            if (!done) { F.kbFor = 0; return; }
+            Launcher::KeyboardDone(tab, note);
+            reorderLibrary();
+            settle();
             return;
         }
         if (F.dialog == 3)
@@ -1897,7 +1932,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         }
                         break;
                     }
-                    if (Launcher::SortAt(mx, my)) { Launcher::Focus().side = -1; onSettings = false; onTabs = true; Launcher::Focus().onSort = true; choose(); break; }
+                    if (const int tl = Launcher::ToolAt(mx, my)) { Launcher::Focus().side = -1; onSettings = false; onTabs = true; Launcher::Focus().onSort = true; Launcher::Focus().tool = tl; choose(); break; }
                     if (Launcher::ContinueAt(canvas, mx, my))
                     {
                         const int cg = Launcher::ContinueGame(games, selected);
@@ -1975,6 +2010,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     if (t >= 0)
                     {
                         if (t != tab) setTab(t, "a tap");
+                        else if (t >= Launcher::TABS) Launcher::OpenTabMenu(t - Launcher::TABS); // (a tab of your own: its menu)
                         pressed = false;
                         break;
                     }
@@ -2263,7 +2299,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             // (Rename: the pause menu's keyboard page over the whole screen.)
             if (!kb.open) { kbLayer = 0; kbBuild(); }
             Launcher::GlassBackdrop(canvas, selected >= 0 && selected < (int)games.size() ? &games[selected] : nullptr); // (the game's picture, blurred)
-            kb.Draw(canvas, "RENAME", padIn ? btn(Controls::A) + ": TYPE    " + btn(Controls::X) + ": DELETE    START: SAVE    " + btn(Controls::B) + ": CANCEL"
+            kb.Draw(canvas, Launcher::KbTitle(), padIn ? btn(Controls::A) + ": TYPE    " + btn(Controls::X) + ": DELETE    START: SAVE    " + btn(Controls::B) + ": CANCEL"
                                           : std::string("TYPE OR CLICK THE KEYS    ENTER: SAVE    ESC: CANCEL"));
         }
         else
