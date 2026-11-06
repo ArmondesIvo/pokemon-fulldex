@@ -3,6 +3,7 @@
 // headless screenshots show the same thing.
 #pragma once
 #include <array>
+#include <chrono>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -17,6 +18,15 @@ struct Canvas
     std::vector<uint32_t> px; // ARGB; alpha 0 means "show the game underneath"
     // The paused game blurred (glass.h, Glass::MakeBackdrop) while the menu is open; empty otherwise.
     std::vector<uint32_t> backdrop;
+    // (Which backdrop this is, from a few of its pixels: a new one can be given the same memory as
+    // the last, so its address does not tell them apart. For drawings kept while it stays.)
+    uint64_t BackdropSig() const
+    {
+        uint64_t h = backdrop.size() * 1099511628211ull;
+        if (!backdrop.empty())
+            for (size_t i = 0; i < 97; i++) h = (h ^ backdrop[(i * 2654435761u) % backdrop.size()]) * 1099511628211ull;
+        return h;
+    }
     // The same moment unblurred (w x h), and the DS's two screens (256 x 192 each, top then bottom):
     // the pictures in a settings page's preview (ui_settings.h) are made from them. Empty when
     // there is nothing to read (the preview then draws plain shapes).
@@ -163,6 +173,11 @@ inline uint32_t AccentNamed(const std::string& name)
 #include "ui_clean_font.h"
 
 // Button presses the menu understands, edge-triggered.
+// (Where a settings page's drawing time goes, for the log's [menu] line: the panel, the header,
+// the rows, the preview, the choices, the rest.)
+inline double* MenuProf() { static double p[8] = {}; return p; }
+inline double MenuProfNow() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+
 struct MenuInput
 {
     bool up = false, down = false, left = false, right = false, accept = false, back = false;
@@ -188,6 +203,8 @@ struct MenuItem
     std::string desc, tip;
     int indent = 0; // (settings pages: a row inside an open folder, K_FOLDER, drawn further in)
     std::vector<uint32_t> thumb; int thumbW = 0, thumbH = 0; // (K_SLOT: the state's picture, ARGB)
+    bool noArt = false; // (a row of a page about one Pokemon or item: its icon not drawn in the row again)
+    int keyRow = -1, keyCol = 0, keySpan = 2; // (K_KEY: its row of the keyboard, where it starts and how wide, in half keys)
 };
 
 struct Menu
@@ -203,7 +220,7 @@ struct Menu
     // rows in sections on the left and a preview of the chosen row on the right.
     int style = 0;
     int pageIcon = -1;
-    enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK, K_FOLDER, K_SLOT };
+    enum { K_PLAIN, K_TOGGLE, K_PICKER, K_LINK, K_SECTION, K_BACK, K_FOLDER, K_SLOT, K_KEY };
     std::string headerNote; // (settings pages: a few words at the header's right, CHEATS' counts)
     // A preview's pictures (MenuItem::preview), one per choice (its art: which variant).
     enum { P_NONE, P_LAYOUT, P_LARGE, P_SECOND, P_ASPECT, P_FULLSCREEN, P_SMOOTH, P_BATTLE, P_FPS, P_COMPANION, P_PARTY, P_FILTER, P_MOTION, P_WIDE, P_RES, P_PAD, P_KEY, P_SHORTCUTS, P_TOUCH, P_CPARTY, P_CBAG, P_CDEX, P_CPLACE, P_CBATTLE, P_CMON, P_CITEM, P_CDEXMON, P_CGUIDE, P_CBFOE, P_CBMOVE, P_CBCOVER };
@@ -443,11 +460,13 @@ struct Menu
     // Frosted glass (Glass::Frost, the blurred game made lighter and more colourful) with a faint
     // white over it and a bright edge; the old grey shade where there is no blurred game to frost.
     static constexpr uint32_t FrostTint = 0x0FFFFFFF, FrostEdge = 0x5CFFFFFF, FrostChosen = 0x2EFFFFFF;
-    static void FrostBox(Canvas& c, bool solid, int x, int y, int w, int h, float r, bool chosen = false, float edge = 1.0f)
+    // over: drawn again over itself as already drawn (Menu::DrawChosenTile): its shadow is there,
+    // and its frost made from the game rather than from the frost.
+    static void FrostBox(Canvas& c, bool solid, int x, int y, int w, int h, float r, bool chosen = false, float edge = 1.0f, bool over = false)
     {
         // (Raised glass, as the settings pages': a soft shadow, the frost with a deep tint, a lit rim.)
-        Glass::Shadow(c, x, y, w, h, r, std::max(6.0f, h * 0.06f), 0x70);
-        if (solid) Glass::Frost(c, x, y, w, h, r);
+        if (!over) Glass::Shadow(c, x, y, w, h, r, std::max(6.0f, h * 0.06f), 0x70);
+        if (solid) Glass::Frost(c, x, y, w, h, r, over ? &c.backdrop : nullptr);
         else Glass::Round(c, x, y, w, h, r, GlassShade);
         Glass::Round(c, x, y, w, h, r, chosen ? FrostChosen : 0x30101826);
         if (chosen) Glass::Round(c, x, y, w, h, r, 0, GlassChosenEdge, edge);
@@ -546,8 +565,25 @@ struct Menu
         }
     }
 
+    // (The page without its highlight, kept: moving between tiles puts it back and draws only the
+    // chosen tile over it. Drawn whole each time, the Switch took about 200 ms a press.)
+    mutable std::vector<uint32_t> tilesBase;
+    mutable std::string tilesBaseKey;
     void DrawTiles(Canvas& c, const std::string& hint) const
     {
+        std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + " " + std::to_string(c.BackdropSig()) + " " + std::to_string(columns) + " " + std::to_string(npFocus) + " " + hint + "|" +
+            std::to_string(nowPlaying.shown) + std::to_string(nowPlaying.playing) + std::to_string(nowPlaying.idle) + std::to_string(nowPlaying.blind) +
+            std::to_string(nowPlaying.canPrev) + std::to_string(nowPlaying.canNext) + nowPlaying.title + "|" + nowPlaying.artist + "|" + nowPlaying.app + "|" +
+            std::to_string(nowPlaying.art.size()) + std::to_string(UiLang::lang);
+        for (const auto& it : items) key += "|" + it.label + "|" + it.value + std::to_string(it.icon) + std::to_string(it.disabled);
+        const bool reuse = key == tilesBaseKey && tilesBase.size() == c.px.size() && tileX.size() == items.size() && tileSize > 0;
+        if (reuse)
+        {
+            std::copy(tilesBase.begin(), tilesBase.end(), c.px.begin());
+            Glass::Mark(c, 0, 0, c.w, c.h);
+            DrawChosenTile(c);
+            return;
+        }
         const bool solid = Glass::Backdrop(c);
         int scale = std::min(c.w, c.h) / 240;
         if (scale < 1) scale = 1;
@@ -578,7 +614,7 @@ struct Menu
         {
             const int x = gx + (i % cols) * (s + gap), y = gy + (i / cols) * (s + gap);
             tileX[i] = x; tileY[i] = y;
-            const bool sel = i == selected && npFocus < 0, off = items[i].disabled;
+            const bool sel = false, off = items[i].disabled; // (the highlight: DrawChosenTile, over this)
             if (sel) Glass::Glow(c, x, y, s, s, s * 0.09f, s / 200.0f);
             FrostBox(c, solid, x, y, s, s, s * 0.09f, sel, sel ? (float)std::max(2, scale) : 1.0f);
             const uint32_t ink = off ? GlassOff : GlassText;
@@ -599,6 +635,39 @@ struct Menu
         else npS = 0;
         TX(c, (c.w - TW(hint, scale)) / 2, below + 2 * scale, hint, scale, GlassHint);
         if (solid) Glass::Opaque(c);
+        tilesSolid = solid;
+        tilesLabelScale = ls;
+        tilesScale = scale;
+        tilesBase = c.px;
+        tilesBaseKey = key;
+        DrawChosenTile(c);
+    }
+    mutable bool tilesSolid = false;
+    mutable int tilesLabelScale = 1, tilesScale = 1;
+    // The chosen tile, lit, over the page as DrawTiles left it.
+    void DrawChosenTile(Canvas& c) const
+    {
+        const int i = selected;
+        if (npFocus >= 0 || i < 0 || i >= (int)items.size() || i >= (int)tileX.size()) return;
+        const int s = tileSize, x = tileX[i], y = tileY[i], ls = tilesLabelScale, scale = tilesScale;
+        const bool off = items[i].disabled;
+        Glass::Glow(c, x, y, s, s, s * 0.09f, s / 200.0f);
+        FrostBox(c, tilesSolid, x, y, s, s, s * 0.09f, true, (float)std::max(2, scale), true);
+        const uint32_t ink = off ? GlassOff : GlassText;
+        if (items[i].icon >= 0) Glass::DrawIcon(c, items[i].icon, x + s * 0.5f, y + s * 0.4f, s * 0.19f, ink);
+        TX(c, x + (s - TW(items[i].label, ls, true)) / 2, y + (int)(s * 0.72f), items[i].label, ls, ink, true);
+        if (!items[i].value.empty())
+        {
+            const int vs = std::max(1, ls - 1);
+            TX(c, x + s - TW(items[i].value, vs) - s / 14, y + s / 14, items[i].value, vs, off ? GlassOff : GlassHint);
+        }
+        // (Made solid, as Glass::Opaque does the whole page: here only round the tile and its glow.)
+        if (tilesSolid)
+        {
+            const int m = s / 4;
+            for (int yy = std::max(0, y - m); yy < std::min(c.h, y + s + m); yy++)
+                for (int xx = std::max(0, x - m); xx < std::min(c.w, x + s + m); xx++) c.px[(size_t)yy * c.w + xx] |= 0xFF000000u;
+        }
     }
 
     // boxUnits: the box's width at scale 1 (0: 190, as the other pages). CHEATS passes 260 so a
@@ -650,9 +719,26 @@ struct Menu
         drawnLineH = lineH;
         drawnFirstY = by + (hasTitle ? lineH : 0) + 5 * scale - 2 * scale;
 
-        const bool solid = Glass::Backdrop(c);
+        // (The glass boxes over the game, the same while the page is up: drawn once and copied after,
+        // the rows drawn over them each press.)
         const float radius = 5.0f * scale;
-        FrostBox(c, solid, bx, by, boxW, boxH, radius);
+        const int noteY = by + boxH + 3 * scale;
+        const std::string listKey = std::to_string(c.w) + "x" + std::to_string(c.h) + " " + std::to_string(c.BackdropSig()) + " " + std::to_string(bx) + "," +
+            std::to_string(by) + "," + std::to_string(boxW) + "," + std::to_string(boxH) + "," + std::to_string(noteLines.empty() ? 0 : noteH);
+        bool solid;
+        if (listKey == listBaseKey && listBase.size() == c.px.size())
+        {
+            std::copy(listBase.begin(), listBase.end(), c.px.begin());
+            Glass::Mark(c, 0, 0, c.w, c.h);
+            solid = listBaseSolid;
+        }
+        else
+        {
+            solid = Glass::Backdrop(c);
+            FrostBox(c, solid, bx, by, boxW, boxH, radius);
+            if (!noteLines.empty()) FrostBox(c, solid, bx, noteY, boxW, noteH, radius);
+            listBase = c.px; listBaseKey = listKey; listBaseSolid = solid;
+        }
         if (hasTitle) TX(c, bx + (boxW - TW(title, scale, true)) / 2, by + 3 * scale, title, scale, GlassText, true);
 
         int y = by + (hasTitle ? lineH : 0) + 5 * scale;
@@ -686,14 +772,16 @@ struct Menu
         TX(c, bx + (boxW - TW(hint, scale)) / 2, y + 4 * scale, hint, scale, GlassHint);
         if (!noteLines.empty())
         {
-            const int ny = by + boxH + 3 * scale;
-            FrostBox(c, solid, bx, ny, boxW, noteH, radius);
+            const int ny = noteY;
             for (size_t i = 0; i < noteLines.size(); i++)
                 TXRaw(c, bx + 6 * scale, ny + 4 * scale + (int)i * UiLang::LineUnits() * scale, noteLines[i], scale, GlassText);
         }
         if (solid) Glass::Opaque(c);
     }
 
+    mutable std::vector<uint32_t> listBase; // (a list page's boxes over the game, as drawn: Draw)
+    mutable std::string listBaseKey;
+    mutable bool listBaseSolid = false;
     // Settings pages (style 1): ui_settings.h.
     int UpdateSettings(const MenuInput& in, int& dir);
     int SettingsItemAt(int x, int y) const;
@@ -704,6 +792,7 @@ struct Menu
     int dialogIcon = -1;
     mutable int dialogX[2] = {}, dialogY = 0, dialogW = 0, dialogH = 0;
     void DrawDialog(Canvas& c, const std::string& title, const std::string& text, const std::string& hint) const;
+    void DrawDialogButtons(Canvas& c, int py, int ph, float k, bool solid) const;
     // (A settings page of state slots, SAVE and LOAD: its other rows as pills across the top, the
     // K_SLOT rows as cards in a grid, each with its picture and date. Where each was drawn:
     // slotRects {x, y, w, h, item}; the grid's columns: slotCols.)
@@ -711,6 +800,13 @@ struct Menu
     mutable std::vector<std::array<int, 5>> slotRects;
     mutable int slotCols = 5;
     void DrawSlotGrid(Canvas& c, int x0, int w0, int top, int bottom, float k) const;
+    // (A settings page that is a keyboard, SEARCH and RetroAchievements' log in: what is typed in a
+    // box across the top (keyText; dots when keySecret; keyPrompt while empty), then the K_KEY rows as
+    // keys, chosen with the stick or a tap. Where each was drawn: keyRects {x, y, w, h, item}.)
+    bool keyGrid = false, keySecret = false;
+    std::string keyText, keyPrompt;
+    mutable std::vector<std::array<int, 5>> keyRects;
+    void DrawKeyGrid(Canvas& c, int x0, int w0, int top, int bottom, float k) const;
     int FirstRow() const; // the first row that can be chosen (not a section's heading or the back button)
     // Where the settings page was last drawn: each item's row (y, -1 when not shown), the rows' x
     // and size, the controls' box on the right of them, and the back button.

@@ -1156,6 +1156,25 @@ std::string Status()
     return buf;
 }
 
+// The Switch's own keyboard (the system's software keyboard, full screen): the text typed, or false
+// if it was closed without. (SDL's text input brought the console down on SEARCH.)
+bool Keyboard(const char* guide, bool password, std::string& out)
+{
+    SwkbdConfig kbd;
+    if (R_FAILED(swkbdCreate(&kbd, 0))) return false;
+    if (password) swkbdConfigMakePresetPassword(&kbd);
+    else swkbdConfigMakePresetDefault(&kbd);
+    if (guide && *guide) swkbdConfigSetGuideText(&kbd, guide);
+    swkbdConfigSetStringLenMax(&kbd, 128);
+    char text[512] = {};
+    const Result rc = swkbdShow(&kbd, text, sizeof(text));
+    swkbdClose(&kbd);
+    fprintf(stderr, "[switch] keyboard: 0x%x\n", (unsigned)rc);
+    if (R_FAILED(rc)) return false;
+    out = text;
+    return true;
+}
+
 void ForceExit()
 {
     fflush(stderr);

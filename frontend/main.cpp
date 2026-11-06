@@ -1817,6 +1817,19 @@ static const char* LayoutName(LayoutMode m)
     }
 }
 
+// The phone's or a real keyboard for typing (SEARCH, RetroAchievements' log in), as well as the
+// menu's own keys. Not on the Switch: its system keyboard brought the whole console down there (a
+// fatal error in its controller service, hid, 2001-0132, seen with sys-botbase running; other
+// homebrew's keyboard too), so there the menu's own keyboard is the only one.
+static void StartTyping(const char* guide = "", bool password = false)
+{
+    (void)guide; (void)password;
+#ifndef __SWITCH__
+    SDL_StartTextInput();
+#endif
+}
+static void SearchTyping(const char* guide) { StartTyping(guide); }
+
 // Draws the overlay canvas over an ARGB image of the same size.
 static void BlendCanvas(const Canvas& c, std::vector<uint32_t>& img)
 {
@@ -2175,6 +2188,11 @@ int main(int argc, char** argv)
     if (!opt.headless && !opt.lockstep && Achievements::Available())
     {
         const std::string cfgPath = opt.config;
+        {
+            // (The achievements' badges, kept beside the settings file once they have come.)
+            const size_t cs = cfgPath.find_last_of("/\\");
+            Achievements::SetBadgeFolder((cs == std::string::npos ? std::string(".") : cfgPath.substr(0, cs)) + "/ra-badges");
+        }
         Achievements::Start(&cfg.ra, std::string("PokemonDSWidescreen/") + SSR_RA_VERSION, [&cfg, cfgPath]() { cfg.Save(cfgPath); });
         Achievements::SetGame(nds.get(), romFingerprint);
         Achievements::SetCheats(cheats.On() > 0 || (cfg.bothVersions && exclusives.Supported()));
@@ -2291,6 +2309,8 @@ int main(int argc, char** argv)
     SDL_Texture* tex[2] = { nullptr, nullptr };
     SDL_Texture* overlayTex = nullptr;
     int overlayTexW = 0, overlayTexH = 0;
+    bool canvasStale = true; // (the canvas drawn again since its texture was filled: see menuKeep)
+    int menuDrawCount = 0, menuOpenFrames = 0;
     // The live companion (COMPANION WINDOW, HUD, STATUS BAR) in a layer of its own: drawn again
     // only when something on it changes (the companion's reading, the glass read again, the
     // clock), and shown from its texture every frame. (Drawn every frame it took 38 to 75 ms
@@ -4953,6 +4973,7 @@ int main(int argc, char** argv)
         M_SHORTCUTS, // (CONTROLS: Fulldex's own four shortcuts, opening KEYS AND BUTTONS at them)
         M_EXTRAS, M_EXTRA0=92000, M_EXTRA_END=92006, M_PLAYBACK=93000, M_FAST_SPEED, M_SMART_FAST, M_SLOW_MOTION, M_REWIND_MB, M_REWIND, M_TURBO_A, M_SCREEN_FILTER, M_COMPANION_OVERLAY, M_PARTY_HUD, M_STATUS_BAR,
         M_STATES, M_SLOT_SAVE, M_SLOT_LOAD, M_SLOT_PREVIOUS, M_UNDO_LOAD,
+        M_KEY0=94000, M_KEY_LAYER=94900, M_KEY_SPACE, M_KEY_DEL, M_KEY_DONE, M_KEY_SYMBOLS, // (the keyboard's keys, Menu::keyGrid: SEARCH, the log in)
         M_CPARTY0=80000, M_CDEX0=81000, M_CITEM0=83000, M_RRESULT0=86000, M_SLOT0=90000, M_GUIDE0=91000,
         M_BACKUP0 = 70000,
         M_CHEAT0 = 1000, // (M_CHEAT0 + i: cheat i, CHEATS)
@@ -4995,6 +5016,7 @@ int main(int argc, char** argv)
     int companionReferenceKind=0,companionReferenceId=0;
     bool companionReferenceReturn=false;
     int searchLetter = 0, cheatDetail = -1;
+    int keyLayer = 0; // (the keyboard's letters: 0 capitals, 1 small, 2 signs)
     const std::string searchLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     std::vector<SaveBackups::Entry> saveBackups;
     int restoreChoice = -1;
@@ -5066,6 +5088,8 @@ int main(int argc, char** argv)
         menu.tallRows = false;
         menu.rowTall = 1.0f;     // (BAG, POKEDEX and the rest of COMPANION's pages set their own)
         menu.slotGrid = false;   // (SAVE and LOAD)
+        menu.keyGrid = false;    // (SEARCH, the log in)
+        menu.keySecret = false;
         #ifdef SSR_PHONE
         menu.touchRows = 1.5f; // (settings rows big enough for a finger)
         #endif
@@ -5170,6 +5194,13 @@ int main(int argc, char** argv)
             menuIds.push_back(id);
         };
         auto onOff = [](bool on) { return std::string(on ? "ON" : "OFF"); };
+        // (An achievement's title as RetroAchievements writes it, apostrophes and all, cut at 44.)
+        auto raTitle = [](const std::string& t) {
+            if (t.size() <= 44) return t;
+            size_t n = 41;
+            while (n > 0 && ((unsigned char)t[n] & 0xC0) == 0x80) n--;
+            return t.substr(0, n) + "...";
+        };
         // Settings pages (ui_settings.h, Menu::style 1): Back in the header, rows in sections, and a
         // preview of the chosen row (a picture of each choice, made from the paused game).
         auto settingsPage = [&](int icon) {
@@ -5177,6 +5208,49 @@ int main(int argc, char** argv)
             menu.pageIcon = icon;
             add(M_BACK, "BACK", "");
             menu.items.back().kind = Menu::K_BACK;
+        };
+        // A keyboard page (Menu::keyGrid): the text and four rows of keys, then SPACE, DELETE and
+        // done (full: capitals, small letters and signs in turn, as a log in needs; else the
+        // capitals and figures SEARCH looks for).
+        auto keyboard = [&](const std::string& text, bool secret, const char* prompt, bool full, const char* done) {
+            menu.keyGrid = true;
+            menu.keyText = text;
+            menu.keySecret = secret;
+            menu.keyPrompt = prompt;
+            static const char* const searchRows[4] = { "1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" };
+            static const char* const layers[3][4] = {
+                { "1234567890", "QWERTYUIOP", "ASDFGHJKL-", "ZXCVBNM_.@" },
+                { "1234567890", "qwertyuiop", "asdfghjkl-", "zxcvbnm_.@" },
+                { "1234567890", "!#$%&*()+=", "[]{}<>/\\|~", ";:'\",?^`.@" } };
+            const char* const* rows = full ? layers[std::clamp(keyLayer, 0, 2)] : searchRows;
+            auto key = [&](int id, const std::string& label, int row, int col, int span) {
+                menu.items.push_back({ label, "" });
+                menuIds.push_back(id);
+                MenuItem& it = menu.items.back();
+                it.kind = Menu::K_KEY;
+                it.keyRow = row;
+                it.keyCol = col;
+                it.keySpan = span;
+            };
+            for (int r = 0; r < 4; r++)
+            {
+                const int m = (int)strlen(rows[r]);
+                for (int i = 0; i < m; i++) key(M_KEY0 + r * 16 + i, std::string(1, rows[r][i]), r, 10 - m + i * 2, 2);
+            }
+            if (full)
+            {
+                key(M_KEY_LAYER, keyLayer == 0 ? "abc" : "ABC", 4, 0, 3);
+                key(M_KEY_SYMBOLS, keyLayer == 2 ? "abc" : "#+=", 4, 3, 3);
+                key(M_KEY_SPACE, "Space", 4, 6, 6);
+                key(M_KEY_DEL, "Delete", 4, 12, 4);
+                key(M_KEY_DONE, done, 4, 16, 4);
+            }
+            else
+            {
+                key(M_KEY_SPACE, "Space", 4, 0, 8);
+                key(M_KEY_DEL, "Delete", 4, 8, 6);
+                key(M_KEY_DONE, done, 4, 14, 6);
+            }
         };
         auto section = [&](const char* label, int icon) {
             add(M_NOTHING, label, "", true);
@@ -5224,8 +5298,7 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_HUB_SAVE || menuPage == PAGE_HUB_LOAD)
         {
-            // SAVE and LOAD: a settings page as a grid (Menu::slotGrid): QUICK SAVE (or QUICK LOAD and
-            // UNDO LAST LOAD), SAVE BACKUPS and THUMBNAILS as pills, then the ten slots as cards,
+            // SAVE and LOAD: a settings page as a grid (Menu::slotGrid): (LOAD: UNDO LAST LOAD,) SAVE BACKUPS and THUMBNAILS as pills, then the ten slots as cards,
             // each with the game's top screen as it was saved and when.
             const bool saving = menuPage == PAGE_HUB_SAVE;
             settingsPage(saving ? Glass::I_SAVE : Glass::I_LOAD);
@@ -5235,12 +5308,8 @@ int main(int argc, char** argv)
                 menu.items.back().kind = Menu::K_LINK;
                 menu.items.back().icon = icon;
             };
-            if (saving) pill(M_SAVESTATE, "QUICK SAVE", Glass::I_SAVE);
-            else
-            {
-                pill(M_LOADSTATE, "QUICK LOAD", Glass::I_LOAD);
-                if (StateSlots::Exists(undoLoadState)) pill(M_UNDO_LOAD, "UNDO LAST LOAD", Glass::I_REWIND);
-            }
+            // (The quick slot is the SAVE STATE / LOAD STATE shortcuts' alone: not shown here.)
+            if (!saving && StateSlots::Exists(undoLoadState)) pill(M_UNDO_LOAD, "UNDO LAST LOAD", Glass::I_REWIND);
             if (!opt.noSave) pill(M_BACKUPS, "SAVE BACKUPS", Glass::I_LOAD);
             add(M_EXTRA0 + 2, "THUMBNAILS", "");
             menu.items.back().kind = Menu::K_TOGGLE;
@@ -5507,20 +5576,37 @@ int main(int argc, char** argv)
         }
         else if(menuPage==PAGE_NUZLOCKE)
         {
-            add(M_RUN_ENABLED,"TRACKING",onOff(nuzlocke.Enabled()));
-            add(M_NOTHING,"OBSERVED FAINTS",std::to_string(nuzlocke.Deaths().size()),true);
-            for(auto entry:nuzlocke.Deaths())add(M_NOTHING,Cheats::Fit(companionMetadata.Species(entry.second),30).c_str(),"OUT",true);
-            add(M_NOTHING,"FIRST WILD ENCOUNTERS",std::to_string(nuzlocke.Encounters().size()),true);
-            for(auto entry:nuzlocke.Encounters())add(M_NOTHING,("MAP "+std::to_string(entry.first)).c_str(),Cheats::Fit(companionMetadata.Species(entry.second),22),true);
-            add(M_NOTHING,"TRACKER ONLY - RULES ARE NOT ENFORCED","",true);
-            add(M_NOTHING,"HISTORY IS NOT REWOUND BY SAVE STATES","",true);
-            if(nuzlockeWriteFailed)add(M_NOTHING,"HISTORY COULD NOT BE SAVED","",true);
-            add(M_RUN_RESET,"RESET RUN","");add(M_BACK,"BACK","");
+            // NUZLOCKE TRACKER, a settings page: tracking on or off, reset, then what it has noted:
+            // the Pokemon that fainted and the first wild one met in each area.
+            settingsPage(Glass::I_POWER);
+            auto noted=[&](const std::string& label,const std::string& value){
+                add(M_NOTHING,label.c_str(),value,true);
+                menu.items.back().kind=Menu::K_PLAIN;
+            };
+            section("RUN",Glass::I_POWER);
+            toggle(M_RUN_ENABLED,"TRACKING",Glass::I_POWER,Menu::P_NONE,nuzlocke.Enabled(),
+                   "Notes a Nuzlocke run as you play: the first wild Pok\xC3\xA9mon met in each area, and each one that faints.",
+                   "A record only: the rules are not enforced, and loading a state does not undo it.");
+            if(nuzlockeWriteFailed)noted("HISTORY COULD NOT BE SAVED","");
+            add(M_RUN_RESET,"RESET RUN","");
+            menu.items.back().kind=Menu::K_LINK;
+            menu.items.back().icon=Glass::I_REWIND;
+            menu.items.back().desc="Clear what the tracker has noted, to start a new run.";
+            menu.items.back().tip="Your game and its save are not changed.";
+            section(("FAINTED  ("+std::to_string(nuzlocke.Deaths().size())+")").c_str(),Glass::I_PEOPLE);
+            for(auto entry:nuzlocke.Deaths())noted(Cheats::Fit(companionMetadata.Species(entry.second),30),"OUT");
+            if(nuzlocke.Deaths().empty())noted("NONE YET","");
+            section(("FIRST ENCOUNTERS  ("+std::to_string(nuzlocke.Encounters().size())+")").c_str(),Glass::I_POKEBALL);
+            for(auto entry:nuzlocke.Encounters())noted("MAP "+std::to_string(entry.first),Cheats::Fit(companionMetadata.Species(entry.second),22));
+            if(nuzlocke.Encounters().empty())noted("NONE YET","");
         }
         else if(menuPage==PAGE_RUN_CONFIRM)
         {
-            add(M_NOTHING,"RESET ONLY THE TRACKER HISTORY?","",true);
-            add(M_BACK,"CANCEL","");add(M_RUN_RESET_CONFIRM,"RESET TRACKER","");
+            // (A card with two buttons, as QUIT GAME?: Menu::DrawDialog.)
+            add(M_RUN_RESET_CONFIRM,"RESET","");
+            add(M_BACK,"CANCEL","");
+            menu.style = 2;
+            menu.dialogIcon = Glass::I_REWIND;
         }
         else if (menuPage == PAGE_PLAYBACK)
         {
@@ -5582,7 +5668,10 @@ int main(int argc, char** argv)
         }
         else if ((menuPage >= PAGE_COMPANION && menuPage <= PAGE_CLOCATION) || menuPage==PAGE_CBATTLE || menuPage==PAGE_CGUIDE || menuPage==PAGE_CGUIDEENTRY || menuPage==PAGE_CITEM || menuPage==PAGE_REFERENCE || menuPage==PAGE_RDETAIL || menuPage==PAGE_CMAP || menuPage==PAGE_CENCOUNTERS)
         {
-            auto info = [&](const std::string& text) {
+            auto info = [&](const std::string& text, const char* shortLabel = nullptr) {
+                // (On a settings page one row (shortLabel, else the words), the words in the preview;
+                // on an old list, lines.)
+                if (menu.style == 1) { add(M_NOTHING,shortLabel?shortLabel:text.c_str(),"",true); menu.items.back().kind = Menu::K_PLAIN; menu.items.back().desc = text; return; }
                 for (const auto& line : Cheats::Lines(text,38)) add(M_NOTHING,line.c_str(),"",true);
             };
             auto species = [&](int id) { return companionMetadata.Species(id); };
@@ -5705,58 +5794,85 @@ int main(int argc, char** argv)
             }
             else if(menuPage==PAGE_REFERENCE)
             {
-                static const char* kinds[]={"POKEMON","ITEMS","MOVES","PLACES","TRAINER TEAMS"};
-                add(M_REFERENCE_KIND,"LOOK IN",kinds[companionReferenceKind]);
-                add(M_REFERENCE_QUERY,"SEARCH",companionQuery.empty()?"ALL":Cheats::Fit(companionQuery,18),true);
+                // SEARCH REFERENCE, a settings page: what to look in and the search, then the results,
+                // each opening its entry.
+                settingsPage(Glass::I_GLOBE);
+                section("FIND",Glass::I_GLOBE);
+                picker(M_REFERENCE_KIND,"LOOK IN",Glass::I_GRID,Menu::P_NONE,{"POKEMON","ITEMS","MOVES","PLACES","TRAINER TEAMS"},companionReferenceKind,
+                       "What to look through: everything in your game, including what you have not seen yet.","");
+                add(M_REFERENCE_QUERY,"SEARCH",companionQuery.empty()?"EVERYTHING":Cheats::Fit(companionQuery,18),true);
+                menu.items.back().kind=Menu::K_LINK;
+                menu.items.back().icon=Glass::I_GLOBE;
+                menu.items.back().desc="Type part of a name to narrow the list.";
                 auto entries=companionMetadata.ReferenceEntries(companionReferenceKind,companionQuery);
-                info(std::to_string(entries.size())+" RESULTS. GAME REFERENCE, INCLUDING UNSEEN ENTRIES.");
-                for(const auto& entry:entries)add(M_RRESULT0+entry.first,Cheats::Fit(entry.second,32).c_str(),std::to_string(entry.first),true);
-                if(entries.empty())info("NO MATCHES. CHANGE OR CLEAR THE SEARCH.");
+                section(("RESULTS  ("+std::to_string(entries.size())+")").c_str(),Glass::I_INFO);
+                for(const auto& entry:entries)
+                {
+                    add(M_RRESULT0+entry.first,Cheats::Fit(entry.second,32).c_str(),companionReferenceKind==0?std::to_string(entry.first):std::string(),true);
+                    menu.items.back().kind=Menu::K_LINK;
+                    menu.items.back().desc="Open its full entry.";
+                }
+                if(entries.empty())info("NO MATCHES. CHANGE OR CLEAR THE SEARCH.","NO MATCHES");
             }
             else if(menuPage==PAGE_RDETAIL)
             {
+                // A reference entry (a move, a trainer's team or a place), a settings page of rows.
+                settingsPage(Glass::I_GLOBE);
+                const char* refTip="Reference values from your game: what happens in play can change them.";
+                auto row=[&](const std::string& label,const std::string& value,const std::string& desc=""){
+                    add(M_NOTHING,label.c_str(),value,true);
+                    MenuItem& it=menu.items.back();
+                    it.kind=Menu::K_PLAIN;
+                    it.desc=desc;
+                    it.tip=refTip;
+                };
                 if(companionReferenceKind==2)
                 {
-                    info(companionMetadata.Move(companionReferenceId));
+                    const std::string name=companionMetadata.Move(companionReferenceId);
+                    section("MOVE",Glass::I_PLAY);
                     auto move=companionMetadata.MoveData(companionReferenceId);
                     if(move.ready)
                     {
-                        info(CompanionTypes::Name(move.type));
-                        info(move.category==0?"PHYSICAL":move.category==1?"SPECIAL":"STATUS");
-                        info("BASE POWER: "+std::to_string(move.power)+"  BASE PP: "+std::to_string(move.pp));
-                        info(move.accuracy?"ACCURACY: "+std::to_string(move.accuracy)+"%":"ACCURACY: SPECIAL / NO NORMAL CHECK");
-                        info("REFERENCE VALUES. BATTLE EFFECTS CAN CHANGE THEM.");
+                        row(name,CompanionTypes::Name(move.type));
+                        row("CATEGORY",move.category==0?"PHYSICAL":move.category==1?"SPECIAL":"STATUS");
+                        row("POWER",move.power>0?std::to_string(move.power):std::string("-"));
+                        row("ACCURACY",move.accuracy?std::to_string(move.accuracy)+"%":std::string("NEVER MISSES"));
+                        row("PP",std::to_string(move.pp));
                     }
-                    else info("NO VERIFIED MOVE RECORD AVAILABLE.");
+                    else row(name,"","No checked record of this move in your game.");
                 }
                 else if(companionReferenceKind==4)
                 {
-                    info(Companion::Metadata::Name(companionMetadata.trainerNames,companionReferenceId,"TRAINER"));
-                    info("FULL REFERENCE TEAM. NOT LIVE BATTLE / STORY PROGRESS.");
+                    const std::string trainer=Companion::Metadata::Name(companionMetadata.trainerNames,companionReferenceId,"TRAINER");
+                    menu.headerNote=trainer;
                     auto team=companionMetadata.TrainerTeam(companionReferenceId);
-                    if(team.empty())info("NO VERIFIED TEAM RECORD AVAILABLE.");
+                    if(team.empty()){section("TEAM",Glass::I_PEOPLE);row("NO CHECKED TEAM RECORD","","Your game's data has no checked team for this trainer.");}
+                    int n=0;
                     for(const auto& mon:team)
                     {
-                        info(companionMetadata.Species(mon.species)+" L"+std::to_string(mon.level));
-                        if(mon.form)info("FORM: "+std::to_string(mon.form));
-                        if(mon.item)info("ITEM: "+companionMetadata.ItemName(mon.item));
-                        info(mon.customMoves?"CUSTOM MOVE SET":"LEVEL-UP MOVE SET (REFERENCE)");
-                        for(int move:mon.moves)if(move)info(companionMetadata.Move(move));
+                        section((std::to_string(++n)+".  "+companionMetadata.Species(mon.species)).c_str(),Glass::I_POKEBALL);
+                        std::string moves;
+                        for(int move:mon.moves)if(move)moves+=(moves.empty()?"":", ")+CleanFont::Title(companionMetadata.Move(move));
+                        const std::string about=(mon.customMoves?"Its own moves: ":"Moves by level: ")+moves+".";
+                        row("LEVEL",std::to_string(mon.level),about);
+                        if(mon.item)row("HOLDING",companionMetadata.ItemName(mon.item),about);
+                        if(mon.form)row("FORM",std::to_string(mon.form),about);
+                        for(int move:mon.moves)if(move)row(companionMetadata.Move(move),"",about);
                     }
                 }
                 else
                 {
-                    info(Companion::Metadata::Name(companionMetadata.places,companionReferenceId,"PLACE"));
-                    for(size_t map=0;map<companionMetadata.mapPlaces.size();map++)if(companionMetadata.mapPlaces[map]==companionReferenceId)info("MAP "+std::to_string(map));
+                    const std::string place=Companion::Metadata::Name(companionMetadata.places,companionReferenceId,"PLACE");
+                    section("PLACE",Glass::I_GLOBE);
+                    row(place,"","Open LOCATION for where you are now.");
                     std::set<int> shownSets;
                     for(size_t map=0;map<companionMetadata.mapRecords.size();map++)
                     {
                         const auto& record=companionMetadata.mapRecords[map];
                         if(record.place!=companionReferenceId||record.encounter<0||!shownSets.insert(record.encounter).second)continue;
-                        info("ENCOUNTER REFERENCE - MAP "+std::to_string(map));
-                        for(const auto& entry:companionMetadata.EncounterLines(map))info(entry);
+                        section(("WILD POKEMON  (MAP "+std::to_string(map)+")").c_str(),Glass::I_POKEBALL);
+                        for(const auto& entry:companionMetadata.EncounterLines(map))row(entry,"");
                     }
-                    info("REFERENCE PLACE. OPEN LOCATION FOR YOUR CURRENT POSITION.");
                 }
             }
             else if (menuPage == PAGE_CPARTY)
@@ -5785,24 +5901,63 @@ int main(int argc, char** argv)
             }
             else if (menuPage == PAGE_CMON && companionMon>=0 && companionMon<(int)companionSnapshot.party.size())
             {
+                // One Pokemon of the party, a settings page: its stats (with IVs and EVs), moves, what it
+                // learns next and how types hit it, as rows; its summary card (P_CMON, as PARTY's
+                // preview) beside every row but a move's, which says what the move is.
+                settingsPage(Glass::I_PEOPLE);
+                fillCompanionView(menu.companion);
                 const auto& mon=companionSnapshot.party[companionMon];
-                info(species(mon.species)+(mon.egg?" - EGG":""));
-                if(!mon.nickname.empty())info("NICKNAME: "+mon.nickname);
-                info("LEVEL "+std::to_string(mon.level)+"   HP "+std::to_string(mon.hp)+"/"+std::to_string(mon.maxHp)+"   "+Companion::Status(mon.status));
-                info("ITEM: "+companionMetadata.ItemName(mon.item));
-                const int t1=companionMetadata.Type(mon.species,0),t2=companionMetadata.Type(mon.species,1);
-                if(CompanionTypes::Valid(t1))info(std::string("TYPE: ")+CompanionTypes::Name(t1)+(t2!=t1?std::string(" / ")+CompanionTypes::Name(t2):""));
-                static const char* statNames[]={"HP","ATTACK","DEFENCE","SPEED","SP ATTACK","SP DEFENCE"};
-                info("STAT / IV / EV");
-                for(int i=0;i<6;i++)add(M_NOTHING,statNames[i],std::to_string(mon.stats[i])+" / "+std::to_string(mon.iv[i])+" / "+std::to_string(mon.ev[i]),true);
-                for(int i=0;i<4;i++)if(mon.moves[i])info(companionMetadata.Move(mon.moves[i])+" - PP "+std::to_string(mon.pp[i]));
-                info("UPCOMING LEVEL-UP MOVES");
-                for(const auto& entry:companionMetadata.Upcoming(mon))info("L"+std::to_string(entry.level)+" "+companionMetadata.Move(entry.move));
-                if(CompanionTypes::Valid(t1))for(int atk=0;atk<18;atk++)if(CompanionTypes::Valid(atk))
+                auto row=[&](const std::string& label,const std::string& value,const std::string& desc="",bool card=true){
+                    add(M_NOTHING,label.c_str(),value,true);
+                    MenuItem& it=menu.items.back();
+                    it.kind=Menu::K_PLAIN;
+                    it.desc=desc;
+                    if(card){it.preview=Menu::P_CMON;it.choice=companionMon;}
+                };
+                const std::string name=mon.nickname.empty()?species(mon.species):mon.nickname;
+                section("SUMMARY",Glass::I_PEOPLE);
+                row(mon.egg?std::string("EGG"):species(mon.species),"LV "+std::to_string(mon.level));
+                if(!mon.egg)
                 {
-                    int pct=CompanionTypes::Multiplier(atk,t1,t2);
-                    if(pct!=100)info(std::string(CompanionTypes::Name(atk))+": "+CompanionTypes::Label(pct));
+                    row("HP",std::to_string(mon.hp)+" / "+std::to_string(mon.maxHp)+(mon.status?"  "+std::string(Companion::Status(mon.status)):std::string()));
+                    row("HOLDING",mon.item?companionMetadata.ItemName(mon.item):std::string("NOTHING"));
+                    section("STATS",Glass::I_GAUGE);
+                    static const char* statNames[]={"HP","ATTACK","DEFENCE","SPEED","SP. ATK","SP. DEF"};
+                    for(int i=0;i<6;i++)
+                        row(statNames[i],std::to_string(mon.stats[i])+"   IV "+std::to_string(mon.iv[i])+"   EV "+std::to_string(mon.ev[i]));
+                    section("MOVES",Glass::I_PLAY);
+                    for(int i=0;i<4;i++)
+                    {
+                        if(!mon.moves[i])continue;
+                        std::string desc;
+                        auto move=companionMetadata.MoveData(mon.moves[i]);
+                        if(move.ready)
+                        {
+                            desc=std::string(CompanionTypes::Name(move.type))+" move, "+(move.category==0?"physical":move.category==1?"special":"status")+".";
+                            if(move.power>0)desc+=" Power "+std::to_string(move.power)+".";
+                            desc+=move.accuracy?" Accuracy "+std::to_string(move.accuracy)+"%.":std::string(" Never misses.");
+                            desc+=" "+std::to_string(move.pp)+" PP at most before PP Ups.";
+                        }
+                        row(companionMetadata.Move(mon.moves[i]),"PP "+std::to_string(mon.pp[i]),desc,false);
+                    }
+                    const auto upcoming=companionMetadata.Upcoming(mon);
+                    if(!upcoming.empty())
+                    {
+                        section("LEARNS NEXT",Glass::I_SPARKLE);
+                        for(const auto& entry:upcoming)row(companionMetadata.Move(entry.move),"LV "+std::to_string(entry.level));
+                    }
+                    const int t1=companionMetadata.Type(mon.species,0),t2=companionMetadata.Type(mon.species,1);
+                    if(CompanionTypes::Valid(t1))
+                    {
+                        section("TAKES FROM TYPES",Glass::I_INFO);
+                        for(int atk=0;atk<18;atk++)if(CompanionTypes::Valid(atk))
+                        {
+                            const int pct=CompanionTypes::Multiplier(atk,t1,t2);
+                            if(pct!=100)row(CompanionTypes::Name(atk),CompanionTypes::Label(pct));
+                        }
+                    }
                 }
+                menu.headerNote=name;
             }
             else if(menuPage == PAGE_CBAG)
             {
@@ -5846,12 +6001,38 @@ int main(int argc, char** argv)
             }
             else if(menuPage == PAGE_CITEM)
             {
-                info(companionMetadata.ItemName(companionItem));
-                info(companionMetadata.ItemDescription(companionItem));
-                int quantity=0;for(const auto& item:companionSnapshot.items)if(item.id==companionItem)quantity+=item.quantity;
-                info("IN BAG: "+std::to_string(quantity));
-                for(const auto& mon:companionSnapshot.party)if(mon.item==companionItem)info("HELD BY: "+companionMetadata.Species(mon.species));
-                info("VIEW ONLY. USE ITEMS THROUGH THE GAME.");
+                // One item, a settings page: how many and who holds one, beside BAG's card for it (P_CITEM).
+                settingsPage(Glass::I_LOAD);
+                fillCompanionView(menu.companion);
+                Menu::CompanionView& cv=menu.companion;
+                Menu::CompanionView::BagItem b;
+                b.name=CleanFont::Title(companionMetadata.ItemName(companionItem));
+                b.desc=companionMetadata.ItemDescription(companionItem);
+                for(char& ch:b.desc)if(ch=='\n'||ch=='\r')ch=' ';
+                for(const auto& item:companionSnapshot.items)if(item.id==companionItem)
+                {
+                    b.quantity+=item.quantity;
+                    if(item.pocket>=0&&item.pocket<(int)cv.pockets.size())b.pocket=cv.pockets[item.pocket].name;
+                }
+                for(size_t i=0;i<companionSnapshot.party.size();i++)if(companionSnapshot.party[i].item==companionItem)b.heldBy.push_back((int)i);
+                companionMetadata.ItemIcon(companionItem,b.icon);
+                cv.bag.push_back(b);
+                auto row=[&](const std::string& label,const std::string& value){
+                    add(M_NOTHING,label.c_str(),value,true);
+                    MenuItem& it=menu.items.back();
+                    it.kind=Menu::K_PLAIN;
+                    it.preview=Menu::P_CITEM;
+                    it.choice=0;
+                    it.noArt=menu.items.size()>3; // (its icon on the first row only)
+                };
+                section("ITEM",Glass::I_LOAD);
+                row(b.name,"");
+                row("IN YOUR BAG",std::to_string(b.quantity));
+                for(int h:b.heldBy)
+                {
+                    const auto& mon=companionSnapshot.party[h];
+                    row("HELD BY",mon.nickname.empty()?companionMetadata.Species(mon.species):mon.nickname);
+                }
             }
             else if(menuPage == PAGE_CDEX)
             {
@@ -5889,21 +6070,39 @@ int main(int argc, char** argv)
             }
             else if(menuPage == PAGE_CDEXDETAIL)
             {
+                // One Pokemon's entry (opened from the reference, so shown even if not seen yet), a
+                // settings page: its stats, abilities, evolutions and the moves it learns as rows,
+                // the entry card (P_CDEXMON, as POKEDEX's preview) beside them.
+                settingsPage(Glass::I_INFO);
+                fillCompanionView(menu.companion);
+                Menu::CompanionView& cv = menu.companion;
+                cv.dexMoves = companionDexMoves;
                 const int id=companionSpecies;
-                info(species(id));
-                const int t1=companionMetadata.Type(id,0),t2=companionMetadata.Type(id,1);
-                if(CompanionTypes::Valid(t1))info(std::string(CompanionTypes::Name(t1))+(t2!=t1?std::string(" / ")+CompanionTypes::Name(t2):""));
-                if(id<(int)companionMetadata.descriptions.size())info(companionMetadata.descriptions[id]);
-                if(id<(int)companionMetadata.personal.size()&&companionMetadata.personal[id].size()>=24)
-                {
-                    const auto& p=companionMetadata.personal[id];
-                    info("BASE HP / ATK / DEF / SPEED / SPA / SPD");
-                    std::string values;for(int i=0;i<6;i++){if(i)values+=" / ";values+=std::to_string(p[i]);}info(values);
-                }
-                for(const auto& detail:companionMetadata.AbilityDetails(id))info(detail);
-                for(const auto& detail:companionMetadata.EvolutionDetails(id))info(detail);
-                info("LEVEL-UP MOVES");
-                for(auto move:companionMetadata.LearnedMoves(id))info("L"+std::to_string(move.level)+" "+companionMetadata.Move(move.move));
+                const bool wasShown=companionRevealed.count(id)>0;
+                companionRevealed.insert(id);
+                cv.dex.push_back(dexEntry(id));
+                if(!wasShown)companionRevealed.erase(id);
+                const auto& e=cv.dex.back();
+                auto row=[&](const std::string& label,const std::string& value){
+                    add(M_NOTHING,label.c_str(),value,true);
+                    MenuItem& it=menu.items.back();
+                    it.kind=Menu::K_PLAIN;
+                    it.preview=Menu::P_CDEXMON;
+                    it.choice=(int)cv.dex.size()-1;
+                    it.noArt=menu.items.size()>3; // (its icon on the first row only)
+                };
+                char number[16];snprintf(number,sizeof number,"#%03d",id);
+                menu.headerNote=number;
+                section("ENTRY",Glass::I_INFO);
+                row(e.name,e.caught?"CAUGHT":e.seen?"SEEN":"NOT SEEN");
+                menuIds.back()=M_CDEX0+id; // (A on it: the card between the entry and its moves, as POKEDEX's)
+                if(CompanionTypes::Valid(e.type1))row("TYPE",std::string(CompanionTypes::Name(e.type1))+(e.type2!=e.type1&&CompanionTypes::Valid(e.type2)?std::string(" / ")+CompanionTypes::Name(e.type2):""));
+                section("BASE STATS",Glass::I_GAUGE);
+                static const char* statNames[]={"HP","ATTACK","DEFENCE","SPEED","SP. ATK","SP. DEF"};
+                for(int i=0;i<6;i++)row(statNames[i],std::to_string(e.base[i]));
+                if(!e.abilities.empty()){section("ABILITIES",Glass::I_SPARKLE);for(const auto& a:e.abilities)row(a,"");}
+                if(!e.evolutions.empty()){section("EVOLUTION",Glass::I_PEOPLE);for(const auto& ev:e.evolutions)row(ev,"");}
+                if(!e.learns.empty()){section("LEARNS BY LEVEL",Glass::I_PLAY);for(const auto& l:e.learns)row(l.move,"LV "+std::to_string(l.level));}
             }
             else if(menuPage == PAGE_CBATTLE)
             {
@@ -5922,7 +6121,7 @@ int main(int argc, char** argv)
                 if (snap.battlers.size() < 2 || !snap.battlers[1].species)
                 {
                     section("NO BATTLE", Glass::I_GAUGE);
-                    info("A BATTLE SHOWS HERE AS IT HAPPENS: THE FOE, YOUR MOVES AGAINST IT AND YOUR PARTY.");
+                    info("A BATTLE SHOWS HERE AS IT HAPPENS: THE FOE, YOUR MOVES AGAINST IT AND YOUR PARTY.", "SHOWS WHEN A BATTLE STARTS");
                 }
                 else
                 {
@@ -6046,12 +6245,13 @@ int main(int argc, char** argv)
             }
             else if(menuPage==PAGE_CENCOUNTERS)
             {
-                info(companionMetadata.PlaceName(companionSnapshot.map));
-                info("REFERENCE TABLES: ALL TIMES / SEASONS. NO SLOT ODDS.");
+                settingsPage(Glass::I_POKEBALL);
+                menu.headerNote=companionMetadata.PlaceName(companionSnapshot.map);
+                section("WILD POKEMON",Glass::I_POKEBALL);
                 auto entries=companionMetadata.EncounterLines(companionSnapshot.map);
-                if(entries.empty())info("NO VERIFIED REGULAR ENCOUNTER TABLE FOR THIS MAP.");
-                for(const auto& entry:entries)info(entry);
-                info("SCRIPTED / SPECIAL EVENT ENCOUNTERS ARE NOT INCLUDED.");
+                const char* about="From your game's encounter tables, for every time of day and season. Special and scripted encounters are not included.";
+                if(entries.empty())info("YOUR GAME LISTS NO WILD POKEMON FOR THIS MAP.","NONE LISTED HERE");
+                for(const auto& entry:entries){add(M_NOTHING,entry.c_str(),"",true);menu.items.back().kind=Menu::K_PLAIN;menu.items.back().desc=about;}
             }
             else if(menuPage == PAGE_CLOCATION)
             {
@@ -6074,7 +6274,7 @@ int main(int argc, char** argv)
                     it.icon = Glass::I_GLOBE;
                     it.preview = Menu::P_CPLACE;
                     it.desc = where;
-                    it.tip = companionMetadata.regionMap.Ready() ? "Enter: the full map." : "";
+                    it.tip = companionMetadata.regionMap.Ready() ? "A or tap: the full map." : "";
                 }
                 std::string method;
                 const auto found = companionMetadata.Encounters(snap.map);
@@ -6099,10 +6299,10 @@ int main(int argc, char** argv)
                 if (found.empty())
                 {
                     section("FOUND HERE", Glass::I_POKEBALL);
-                    info("NO WILD POKEMON HERE, OR NONE THE ROM LISTS FOR THIS PLACE.");
+                    info("NO WILD POKEMON LISTED HERE");
                 }
             }
-            if (menuPage != PAGE_COMPANION) add(M_BACK,"BACK",""); // (COMPANION, a settings page, has its own)
+            if (menu.style == 0) add(M_BACK,"BACK",""); // (a settings page has its own, in the header)
         }
         else if (menuPage == PAGE_MATCHUPS)
         {
@@ -6148,7 +6348,7 @@ int main(int argc, char** argv)
             menu.items.back().kind = Menu::K_LINK;
             menu.items.back().icon = Glass::I_GLOBE;
             menu.items.back().desc = "Find a code by name, in every folder.";
-            menu.items.back().tip = "Type, or choose letters with the controller.";
+            menu.items.back().tip = "Type it on the keyboard on screen.";
             if (cheats.On() > 0)
             {
                 add(M_CHEAT_ON, "ON NOW", std::to_string(cheats.On()));
@@ -6214,12 +6414,11 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_CSEARCH || menuPage == PAGE_RSEARCH)
         {
-            add(M_SEARCH_DONE, "SHOW RESULTS", "");
-            add(M_SEARCH_LETTER, "LETTER: LEFT / RIGHT", std::string(1, searchLetters[searchLetter]));
-            add(M_SEARCH_SPACE, "ADD SPACE", "");
-            add(M_SEARCH_DELETE, "DELETE LAST LETTER", "");
-            add(M_SEARCH_CLEAR, "CLEAR SEARCH", "");
-            add(M_BACK, "BACK", "");
+            // SEARCH: a keyboard (the Switch's own keyboard is not opened: it brought the console
+            // down on some, with other homebrew running); a real keyboard types into it too.
+            settingsPage(Glass::I_GLOBE);
+            keyboard(menuPage == PAGE_RSEARCH ? companionQuery : cheatQuery, false,
+                     menuPage == PAGE_RSEARCH ? "A Pokemon, move, item or place" : "Part of a code's name", false, "Search");
         }
         else if (menuPage == PAGE_CDETAIL && cheatDetail >= 0 && cheatDetail < (int)cheats.items.size())
         {
@@ -6249,14 +6448,33 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_BACKUPS)
         {
-            for(size_t i=0;i<saveBackups.size();i++)add(M_BACKUP0+(int)i,saveBackups[i].label.c_str(),"",true);
-            if(saveBackups.empty())add(M_NOTHING,"NO BACKUPS FOR THIS GAME","",true);
-            add(M_BACK,"BACK","");
+            // SAVE BACKUPS, a settings page: the backups of this game's save, newest first, each
+            // asking before it is restored.
+            settingsPage(Glass::I_LOAD);
+            section(("BACKUPS  ("+std::to_string(saveBackups.size())+")").c_str(),Glass::I_LOAD);
+            for(size_t i=0;i<saveBackups.size();i++)
+            {
+                add(M_BACKUP0+(int)i,saveBackups[i].label.c_str(),i==0?"NEWEST":"",true);
+                MenuItem& it=menu.items.back();
+                it.kind=Menu::K_LINK;
+                it.icon=Glass::I_SAVE;
+                it.desc="Your game's save as it was then. Choose it to restore it: you are asked first.";
+                it.tip="Your save now is kept as before-restore.sav.";
+            }
+            if(saveBackups.empty())
+            {
+                add(M_NOTHING,"NO BACKUPS YET","",true);
+                menu.items.back().kind=Menu::K_PLAIN;
+                menu.items.back().desc="A backup of the game's save is made as you play.";
+            }
         }
         else if (menuPage == PAGE_RESTORE_CONFIRM)
         {
+            // (A card with two buttons, as QUIT GAME?: Menu::DrawDialog.)
+            add(M_RESTORE_CONFIRM,"RESTORE","");
             add(M_BACK,"CANCEL","");
-            add(M_RESTORE_CONFIRM,"RESTORE AND RESTART","");
+            menu.style = 2;
+            menu.dialogIcon = Glass::I_LOAD;
         }
         else if (menuPage == PAGE_LOAD_CONFIRM)
         {
@@ -6268,18 +6486,46 @@ int main(int argc, char** argv)
         }
         else if (menuPage == PAGE_RA_LIST)
         {
-            // Each one's title, its points or DONE; what it asks for in the strip under the box.
-            if (achList.empty()) add(M_NOTHING, "NONE LOADED", "", true);
-            for (size_t i = 0; i < achList.size(); i++)
-                add(M_ACH0 + (int)i, Cheats::Shown(achList[i].title, 22).c_str(),
-                    achList[i].unlocked ? "DONE" : std::to_string(achList[i].points) + " PTS", true);
-            add(M_BACK, "BACK", "");
+            // ACHIEVEMENTS, a settings page: those still to earn, then those earned, each with its
+            // points; what it asks for in the preview, its details a press away.
+            settingsPage(Glass::I_TROPHY);
+            int earned = 0;
+            for (const auto& a : achList) if (a.unlocked) earned++;
+            menu.headerNote = std::to_string(earned) + " OF " + std::to_string(achList.size()) + " EARNED";
+            if (achList.empty())
+            {
+                add(M_NOTHING, "NONE LOADED", "", true);
+                menu.items.back().kind = Menu::K_PLAIN;
+                menu.items.back().desc = "This game's achievements have not loaded: check RetroAchievements is on and you are logged in.";
+            }
+            for (int pass = 0; pass < 2; pass++)
+            {
+                const int count = pass == 0 ? (int)achList.size() - earned : earned;
+                if (count > 0) section((std::string(pass == 0 ? "TO EARN" : "EARNED") + "  (" + std::to_string(count) + ")").c_str(), Glass::I_TROPHY);
+                for (size_t i = 0; i < achList.size(); i++)
+                {
+                    if (achList[i].unlocked != (pass == 1)) continue;
+                    add(M_ACH0 + (int)i, raTitle(achList[i].title).c_str(), std::to_string(achList[i].points) + " PTS", true);
+                    MenuItem& it = menu.items.back();
+                    it.kind = Menu::K_LINK;
+                    it.icon = Glass::I_TROPHY;
+                    it.desc = achList[i].description + (achList[i].progress.empty() ? "" : " So far: " + achList[i].progress + ".");
+                    it.tip = "Choose it for its details.";
+                    if (Achievements::Badge(achList[i].badge, !achList[i].unlocked, it.thumb, it.thumbW, it.thumbH)) it.icon = -1; // (its badge, grey until earned)
+                }
+            }
         }
         else if (menuPage == PAGE_RA_DETAIL && achDetail >= 0 && achDetail < (int)achList.size())
         {
             // One achievement's details: the title is the box's, the description under it.
             const Achievements::Row& r = achList[achDetail];
-            add(M_ACH_POINTS, "POINTS", std::to_string(r.points), true);
+            settingsPage(Glass::I_TROPHY);
+            section("DETAILS", Glass::I_TROPHY); // (its name in the header, and over the preview)
+            std::vector<uint32_t> badge; int badgeW = 0, badgeH = 0;
+            const bool hasBadge = Achievements::Badge(r.badge, !r.unlocked, badge, badgeW, badgeH);
+            auto withBadge = [&]() { if (hasBadge) { MenuItem& it = menu.items.back(); it.thumb = badge; it.thumbW = badgeW; it.thumbH = badgeH; it.noArt = true; } }; // (the badge large in the preview, beside every row)
+            add(M_ACH_POINTS, raTitle(r.title).c_str(), std::to_string(r.points) + " PTS", true);
+            menu.items.back().desc = r.description; menu.items.back().kind = Menu::K_PLAIN; withBadge();
             std::string status = r.unlocked ? "UNLOCKED" : r.progress.empty() ? "NOT YET" : "SO FAR " + r.progress;
             if (r.unlocked && r.unlockTime > 0)
             {
@@ -6291,31 +6537,61 @@ int main(int argc, char** argv)
                 }
             }
             add(M_ACH_STATUS, "STATUS", status, true);
+            menu.items.back().desc = r.description; menu.items.back().kind = Menu::K_PLAIN; withBadge();
             if (r.rarity > 0)
             {
                 char rare[32];
                 snprintf(rare, sizeof rare, "%.1f%% OF PLAYERS", r.rarity);
                 add(M_ACH_RARITY, "HAVE IT", rare, true);
+                menu.items.back().kind = Menu::K_PLAIN;
+                menu.items.back().desc = r.description;
+                withBadge();
             }
-            add(M_BACK, "BACK", "");
         }
         else if (menuPage == PAGE_RA)
         {
             if (raTyping)
             {
-                // (The password as a count: the menus' font has no small letters, and it is not shown.)
-                add(M_RA_TYPED, raTyping == 1 ? "USER NAME" : "PASSWORD",
-                    raTyping == 1 ? (raTyped.empty() ? std::string("...") : Cheats::Shown(raTyped, 18)) : std::to_string(raTyped.size()) + " CHARACTERS", true);
-                add(M_RA_CANCEL, "CANCEL", "");
+                // LOG IN: a keyboard, the user name and then the password (shown as stars).
+                settingsPage(Glass::I_TROPHY);
+                keyboard(raTyped, raTyping == 2, raTyping == 1 ? "RetroAchievements user name" : "RetroAchievements password", true,
+                         raTyping == 1 ? "Next" : "Log In");
             }
             else
             {
-                add(M_RA_ON, "RETROACHIEVEMENTS", onOff(cfg.ra.on));
-                add(M_RA_ACCOUNT, "ACCOUNT", Achievements::AccountLine(), true);
-                add(M_RA_GAME, "THIS GAME", cfg.ra.on ? Achievements::GameLine() : "-", true);
-                if (cfg.ra.on && Achievements::Active()) add(M_RA_LIST, "ACHIEVEMENTS", "");
+                // RETROACHIEVEMENTS, a settings page: on or off, the account (log in or out), this
+                // game's achievements.
+                settingsPage(Glass::I_TROPHY);
+                section("STATUS", Glass::I_TROPHY);
+                toggle(M_RA_ON, "RETROACHIEVEMENTS", Glass::I_TROPHY, Menu::P_NONE, cfg.ra.on,
+                       "Earn achievements from retroachievements.org as you play.", "Needs an internet connection and a free account there.");
+                section("ACCOUNT", Glass::I_PEOPLE);
+                add(M_RA_ACCOUNT, "USER", Achievements::AccountLine(), true);
+                menu.items.back().kind = Menu::K_PLAIN;
+                menu.items.back().icon = Glass::I_PEOPLE;
+                {
+                    // (Why a login failed, as a sentence, in the preview: "Could not check the server: ...")
+                    std::string why = Achievements::LoggedIn() ? std::string() : Achievements::Detail();
+                    for (size_t i = 1; i < why.size(); i++) why[i] = (char)std::tolower((unsigned char)why[i]);
+                    menu.items.back().desc = !why.empty() ? why : "The RetroAchievements account achievements are earned for.";
+                }
                 add(M_RA_LOGIN, Achievements::LoggedIn() ? "LOG OUT" : "LOG IN", "");
-                add(M_BACK, "BACK", "");
+                menu.items.back().kind = Menu::K_LINK;
+                menu.items.back().icon = Glass::I_POWER;
+                menu.items.back().desc = Achievements::LoggedIn() ? "Log this console out of your account." : "Type your user name and password on the keyboard on screen.";
+                menu.items.back().tip = "Your password is used to log in once and is not kept.";
+                section("THIS GAME", Glass::I_TROPHY);
+                add(M_RA_GAME, "GAME", cfg.ra.on ? Achievements::GameLine() : "-", true);
+                menu.items.back().kind = Menu::K_PLAIN;
+                menu.items.back().icon = Glass::I_PLAY;
+                menu.items.back().desc = cfg.ra.on ? "Whether RetroAchievements knows this game, and its achievements." : "Turn RetroAchievements on to see this game's achievements.";
+                if (cfg.ra.on && Achievements::Active())
+                {
+                    add(M_RA_LIST, "ACHIEVEMENTS", "");
+                    menu.items.back().kind = Menu::K_LINK;
+                    menu.items.back().icon = Glass::I_TROPHY;
+                    menu.items.back().desc = "Every achievement for this game: those to earn and those earned.";
+                }
             }
         }
         else if (menuPage == PAGE_CONTROLS)
@@ -6384,6 +6660,62 @@ int main(int argc, char** argv)
                    "Use a controller's stick as a cursor on the touch screen.", "Handy when playing with a controller away from the mouse."); // (the Switch and phones have touch screens)
 #endif
         }
+        // Every page in the glass settings style (Menu::style 1): one still built as the old list
+        // (rows of words) is made into one here: BACK in the header, a row for each thing to choose
+        // or read a value from, and its lines of text in the preview of each row.
+        if (menu.style == 0 && menu.columns == 0 && menuPage != PAGE_CMAP && !menu.items.empty())
+        {
+            int icon = Glass::I_INFO;
+            switch (menuPage)
+            {
+            case PAGE_BACKUPS: icon = Glass::I_LOAD; break;
+            case PAGE_RA_LIST: case PAGE_RA_DETAIL: icon = Glass::I_TROPHY; break;
+            case PAGE_CSEARCH: case PAGE_RSEARCH: case PAGE_REFERENCE: icon = Glass::I_GLOBE; break;
+            case PAGE_CDETAIL: icon = Glass::I_CHEATS; break;
+            case PAGE_CMON: icon = Glass::I_PEOPLE; break;
+            case PAGE_STATES: case PAGE_SLOT: icon = Glass::I_SAVE; break;
+            default: break;
+            }
+            const std::vector<MenuItem> oldItems = menu.items;
+            const std::vector<int> oldIds = menuIds;
+            const int oldSelectedId = menu.selected >= 0 && menu.selected < (int)oldIds.size() ? oldIds[menu.selected] : -1;
+            // (Its lines of text, together: what the preview says of every row with nothing of its own.)
+            std::string about;
+            for (size_t i = 0; i < oldItems.size(); i++)
+                if (oldIds[i] == M_NOTHING && oldItems[i].value.empty())
+                    about += (about.empty() ? "" : " ") + oldItems[i].label;
+            menu.items.clear();
+            menuIds.clear();
+            menu.style = 1;
+            menu.pageIcon = icon;
+            add(M_BACK, "BACK", "");
+            menu.items.back().kind = Menu::K_BACK;
+            for (size_t i = 0; i < oldItems.size(); i++)
+            {
+                const MenuItem& o = oldItems[i];
+                if (oldIds[i] == M_BACK) continue;
+                if (oldIds[i] == M_NOTHING && o.value.empty()) continue; // (its words: in the preview)
+                MenuItem it = o;
+                it.kind = o.info || oldIds[i] == M_NOTHING ? Menu::K_PLAIN : o.value.empty() ? Menu::K_LINK : Menu::K_PICKER;
+                if (it.kind == Menu::K_PICKER) { it.choices = { o.value }; it.choice = 0; }
+                if (it.desc.empty()) it.desc = about;
+                menu.items.push_back(it);
+                menuIds.push_back(oldIds[i]);
+            }
+            // (Only words: one row to show them.)
+            if (menu.items.size() == 1 && !about.empty())
+            {
+                add(M_NOTHING, "DETAILS", "", true);
+                menu.items.back().desc = about;
+            }
+            for (size_t i = 0; i < menuIds.size(); i++) if (menuIds[i] == oldSelectedId) menu.selected = (int)i;
+            // (SEARCH: what is being looked for, in the header.)
+            if (menuPage == PAGE_CSEARCH || menuPage == PAGE_RSEARCH)
+            {
+                const std::string& q = menuPage == PAGE_RSEARCH ? companionQuery : cheatQuery;
+                menu.headerNote = "Find: " + (q.empty() ? std::string("everything") : q);
+            }
+        }
     };
     // To another page of the pause menu, on the row of item `select` (its first row: -1).
     int hubPage = -1; // the hub page last opened from a tile (SAVE and LOAD share their items)
@@ -6405,13 +6737,16 @@ int main(int argc, char** argv)
             if (hubFor(select) >= 0) page = hubFor(select);
         }
         if (page >= PAGE_HUB_SAVE && page <= PAGE_HUB_QUIT) hubPage = page;
+        if (page != menuPage) menu.scrollPx = 0; // (a new page opens at its top, its chosen row then kept in view)
         menuPage = page;
         buildMenu();
         menu.selected = 0;
+        bool found = false;
         for (size_t i = 0; i < menuIds.size(); i++)
-            if (menuIds[i] == select) menu.selected = (int)i;
-        // (A settings page opens on its first row, not its back button or a heading.)
-        if (menu.style == 1 && (select < 0 || menu.items[menu.selected].kind == Menu::K_SECTION)) menu.selected = menu.FirstRow();
+            if (menuIds[i] == select) { menu.selected = (int)i; found = true; }
+        // (A settings page opens on its first row, not its back button or a heading; so too when the
+        // row asked for is not on it. M_BACK: an old list's last row, now in the header.)
+        if (menu.style == 1 && (!found || select == M_BACK || menu.items[menu.selected].kind == Menu::K_SECTION)) menu.selected = menu.FirstRow();
     };
     buildMenu();
     // RETROACHIEVEMENTS' LOG IN: on from the user name to the password, and the login; or not.
@@ -6424,7 +6759,7 @@ int main(int argc, char** argv)
     auto raNext = [&]() {
         if (raTyped.empty())
         {
-            SDL_StartTextInput(); // (a phone's keyboard closed before anything was typed: again)
+            StartTyping(raTyping == 2 ? "RetroAchievements password" : "RetroAchievements user name", raTyping == 2); // (a phone's keyboard closed before anything was typed: again)
             return;
         }
         if (raTyping == 1)
@@ -6444,6 +6779,39 @@ int main(int argc, char** argv)
             return;
         }
         buildMenu();
+    };
+    // The keyboard's keys (Menu::keyGrid): a letter or sign typed, SPACE, DELETE, the letters
+    // changed, or done (SEARCH's results; the log in's next step). False: not a key.
+    auto keyPress = [&](int hit) -> bool {
+        if (hit < 0 || hit >= (int)menuIds.size() || hit >= (int)menu.items.size()) return false;
+        const int id = menuIds[hit];
+        if (id < M_KEY0 || id > M_KEY_SYMBOLS) return false;
+        const bool ra = menuPage == PAGE_RA && raTyping;
+        std::string& t = ra ? raTyped : menuPage == PAGE_RSEARCH ? companionQuery : cheatQuery;
+        const size_t cap = ra ? 128 : 48;
+        if (id == M_KEY_DONE)
+        {
+            if (ra) raNext();
+            else
+            {
+                SDL_StopTextInput();
+                if (menuPage == PAGE_RSEARCH) goPage(PAGE_REFERENCE, M_REFERENCE_QUERY);
+                else { cheatWhere = -4; goPage(PAGE_CHEATS, M_CSEARCH); }
+            }
+            return true;
+        }
+        if (id == M_KEY_LAYER) keyLayer = keyLayer == 0 ? 1 : 0; // (SHIFT: capitals or small letters)
+        else if (id == M_KEY_SYMBOLS) keyLayer = keyLayer == 2 ? 1 : 2; // (signs, or back to the letters)
+        else if (id == M_KEY_DEL)
+        {
+            // (One letter back, a whole one in UTF-8: a real keyboard may have typed it.)
+            if (!t.empty()) t.pop_back();
+            while (!t.empty() && ((unsigned char)t.back() & 0xC0) == 0x80) t.pop_back();
+            if (!t.empty() && ((unsigned char)t.back() & 0xC0) == 0xC0) t.pop_back();
+        }
+        else if (t.size() < cap) t += id == M_KEY_SPACE ? std::string(" ") : menu.items[hit].label;
+        buildMenu();
+        return true;
     };
 
     std::string toast;
@@ -7038,6 +7406,7 @@ int main(int argc, char** argv)
             {
                 if (overlayTex) SDL_DestroyTexture(overlayTex);
                 overlayTex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, j.outW, j.outH);
+                canvasStale = true;
                 SDL_SetTextureBlendMode(overlayTex, SDL_BLENDMODE_BLEND);
                 overlayTexW = j.outW;
                 overlayTexH = j.outH;
@@ -7045,7 +7414,8 @@ int main(int argc, char** argv)
             if (canvas.Dirty())
             {
                 const SDL_Rect dr = { canvas.x0d, canvas.y0d, canvas.x1d - canvas.x0d, canvas.y1d - canvas.y0d };
-                SDL_UpdateTexture(overlayTex, &dr, canvas.px.data() + (size_t)dr.y * j.outW + dr.x, j.outW * 4);
+                if (canvasStale) SDL_UpdateTexture(overlayTex, &dr, canvas.px.data() + (size_t)dr.y * j.outW + dr.x, j.outW * 4);
+                canvasStale = false;
                 SDL_RenderCopy(renderer, overlayTex, &dr, &dr);
             }
         }
@@ -7359,11 +7729,16 @@ int main(int argc, char** argv)
         bool touching = false;
         int touchX = 0, touchY = 0;
         MenuInput nav;              // edge-triggered menu input for this tick
+        static unsigned menuEvents = 0; // (input events seen: the pause menu is drawn again after any)
         bool toggleMenu = false;
         bool kbFast = false;
         float curDX = 0, curDY = 0;
         bool curPress = false;
         PadState ps;
+        // (Buttons pressed since the last tick, from SDL's events, in PAD_* order: a tap shorter
+        // than a tick, which reading the buttons alone misses while a slow menu page is drawn,
+        // still counts as pressed for this one.)
+        uint32_t padTaps = 0;
 
         int outW = opt.composeW > 0 ? opt.composeW : 1280, outH = opt.composeH > 0 ? opt.composeH : 720;
 
@@ -7382,6 +7757,17 @@ int main(int argc, char** argv)
             };
             while (SDL_PollEvent(&ev))
             {
+                menuEvents++; // (the pause menu is drawn again after any input: see menuKeep)
+                if (ev.type == SDL_CONTROLLERBUTTONDOWN && ev.cbutton.button < PAD_COUNT)
+                {
+                    int b = ev.cbutton.button;
+#ifdef __SWITCH__
+                    // (As ReadPad: SDL's Xbox positions back to the Switch's labels.)
+                    static const int labelled[] = { PAD_B, PAD_A, PAD_Y, PAD_X };
+                    if (b <= PAD_Y) b = labelled[b];
+#endif
+                    padTaps |= 1u << b;
+                }
                 if ((ev.type == SDL_FINGERDOWN || ev.type == SDL_FINGERUP) && !menu.open)
                 {
                     const float x = ev.tfinger.x, y = ev.tfinger.y;
@@ -7637,6 +8023,7 @@ int main(int argc, char** argv)
             }
 #endif
             ps = ReadPad(pads);
+            for (int i = 0; i < PAD_COUNT; i++) if (padTaps & (1u << i)) ps.btn[i] = true;
             physPad = ps;
             ps = RemapPad(ps, cfg.controls, cfg.byLabel); // (CONTROLS)
             ctrlStart = ps.btn[PAD_START]; // (a controller's, before the on-screen buttons join in)
@@ -8014,8 +8401,9 @@ int main(int argc, char** argv)
             int dir = 0;
             const int hit = nav.back ? -2 : menu.Update(nav, dir);
             const int id = hit >= 0 && hit < (int)menuIds.size() ? menuIds[hit] : -1;
-            if (hit == -2 || id == M_RA_CANCEL) raCancel();
+            if (hit == -2 || id == M_RA_CANCEL || (id == M_BACK && dir == 0)) raCancel();
             else if (id == M_RA_TYPED && dir == 0) raNext();
+            else if (dir == 0) keyPress(hit);
         }
         else if (menu.open && menuPage == PAGE_KEYS)
         {
@@ -8095,7 +8483,8 @@ int main(int argc, char** argv)
                 // (POKEDEX: an entry not yet seen shown when chosen; the rest is all in the preview.
                 // Opened from elsewhere, as the reference, the entry's own page.)
                 companionSpecies=id-M_CDEX0;
-                if(menuPage==PAGE_CDEX||menuPage==PAGE_CLOCATION)
+                if(menuPage==PAGE_CDEXDETAIL){companionDexMoves=!companionDexMoves;goPage(menuPage,id);} // (its own page: the card between the entry and its moves)
+                else if(menuPage==PAGE_CDEX||menuPage==PAGE_CLOCATION)
                 {
                     // (Not seen and hidden: shown. Otherwise the preview between the entry and its moves.)
                     const bool seen=companionSnapshot.dexReady&&companionSpecies<(int)companionSnapshot.seen.size()&&companionSnapshot.seen[companionSpecies];
@@ -8160,14 +8549,15 @@ int main(int argc, char** argv)
             {
                 restoreChoice=id-M_BACKUP0;goPage(PAGE_RESTORE_CONFIRM,M_BACK);hit=-1;
             }
+            if (id >= M_KEY0 && id <= M_KEY_SYMBOLS && dir == 0) { keyPress(hit); hit = -1; }
             auto& activeQuery=menuPage==PAGE_RSEARCH?companionQuery:cheatQuery;
             switch (id)
             {
             case M_CSEARCH:
-                goPage(PAGE_CSEARCH,M_SEARCH_DONE);SDL_StartTextInput();hit=-1;break;
+                goPage(PAGE_CSEARCH,M_KEY0+16);SearchTyping("Search for a code");hit=-1;break;
             case M_REFERENCE:companionReferenceReturn=false;goPage(PAGE_REFERENCE,M_REFERENCE_QUERY);hit=-1;break;
             case M_REFERENCE_KIND:companionReferenceKind=(companionReferenceKind+(dir<0?4:1))%5;break;
-            case M_REFERENCE_QUERY:goPage(PAGE_RSEARCH,M_SEARCH_DONE);SDL_StartTextInput();hit=-1;break;
+            case M_REFERENCE_QUERY:goPage(PAGE_RSEARCH,M_KEY0+16);SearchTyping("Search");hit=-1;break;
             case M_SEARCH_LETTER:
                 if(dir)searchLetter=(searchLetter+(dir<0 ? (int)searchLetters.size()-1 : 1))%(int)searchLetters.size();
                 else if(activeQuery.size()<48)activeQuery+=searchLetters[searchLetter];
@@ -8253,8 +8643,8 @@ int main(int argc, char** argv)
                 }
                 break;
             }
-            case M_HUB_SAVE: goPage(PAGE_HUB_SAVE, M_SAVESTATE); hit = -1; break;
-            case M_HUB_LOAD: goPage(PAGE_HUB_LOAD, M_LOADSTATE); hit = -1; break;
+            case M_HUB_SAVE: goPage(PAGE_HUB_SAVE, M_SLOT0); hit = -1; break; // (on slot 1)
+            case M_HUB_LOAD: goPage(PAGE_HUB_LOAD, M_SLOT0); hit = -1; break;
             case M_HUB_CHEATS: goPage(PAGE_HUB_CHEATS, M_CHEATS); hit = -1; break;
             case M_HUB_FAST: goPage(PAGE_PLAYBACK, M_FAST); hit = -1; break;
             case M_HUB_SETTINGS: goPage(PAGE_HUB_SETTINGS, M_DISPLAY); hit = -1; break;
@@ -8324,8 +8714,9 @@ int main(int argc, char** argv)
                 {
                     raTyping = 1;
                     raTyped.clear();
-                    SDL_StartTextInput();
-                    goPage(PAGE_RA, M_RA_TYPED);
+                    keyLayer = 1; // (small letters first)
+                    StartTyping("RetroAchievements user name");
+                    goPage(PAGE_RA, M_KEY0 + 16);
                     hit = -1;
                 }
                 break;
@@ -8386,7 +8777,7 @@ int main(int argc, char** argv)
                 if(menuPage == PAGE_SLOT_REPLACE){goPage(PAGE_HUB_SAVE,M_SLOT0+stateSlot);hit=-1;break;}
                 if(menuPage == PAGE_LOAD_CONFIRM && loadFromSlot >= 0){const int slot=loadFromSlot;loadFromSlot=-1;goPage(PAGE_HUB_LOAD,M_SLOT0+slot);hit=-1;break;}
                 if(menuPage == PAGE_BACKUPS || menuPage == PAGE_LOAD_CONFIRM)
-                {goPage(PAGE_MAIN,menuPage == PAGE_BACKUPS ? M_BACKUPS : M_LOADSTATE);hit=-1;break;}
+                {goPage(PAGE_MAIN,menuPage == PAGE_BACKUPS ? M_BACKUPS : M_LOADSTATE);hit=-1;break;} // (M_LOADSTATE: LOAD's page)
                 if(menuPage == PAGE_CHEATS && cheatWhere == -4)
                 {cheatWhere=-2;goPage(PAGE_CHEATS,M_CSEARCH);hit=-1;break;}
                 // A folder's codes (or ON NOW) go back to the folders. The folder list goes back
@@ -8649,6 +9040,16 @@ int main(int argc, char** argv)
             if (text.str() != savedSettings) { cfg.Save(opt.config); savedSettings = text.str(); }
         }
         if (menu.open && menuPage == PAGE_RA && !raTyping && frame % 20 == 0) buildMenu();
+        {
+            // (ACHIEVEMENTS: a badge come from the server since the page was made: made again, with it.)
+            static unsigned badgesSeen = 0;
+            if (menu.open && (menuPage == PAGE_RA_LIST || menuPage == PAGE_RA_DETAIL) && Achievements::BadgeVersion() != badgesSeen && frame % 10 == 0)
+            {
+                badgesSeen = Achievements::BadgeVersion();
+                buildMenu();
+                menuEvents++;
+            }
+        }
 
         const uint64_t secondScreenState = secondDisplay.State();
         const bool panelDown=DsDisplayState::Mode(secondScreenState)==4 && (secondScreenState&DsDisplayState::Ready) && (secondScreenState&(1ULL<<24));
@@ -10022,8 +10423,31 @@ int main(int argc, char** argv)
         // Overlay: touch cursor, status message, pause menu.
         bool overlayUsed = false;
         bool liveUsed = false;
+        // The pause menu, nothing in it moving, drawn again only when something may have changed:
+        // any input, its page or row, the frosted picture behind it, and twice a second for what
+        // changes by itself (the music playing, achievements arriving). Drawn every frame, the
+        // Switch spent most of each frame on it and the menu answered slowly.
+        static unsigned menuDrawnEvents = ~0u;
+        static uint32_t menuDrawnTicks = 0;
+        static std::string menuDrawnKey;
+        bool menuKeep = false;
+        if (menu.open)
+        {
+            char mk[160];
+            snprintf(mk, sizeof(mk), "%d %d %d%d%d%d%d%d %dx%d %llx %zu %d %zu", menuPage, menu.selected, nav.up, nav.down, nav.left, nav.right, nav.accept,
+                nav.back, outW, outH, (unsigned long long)canvas.BackdropSig(), canvas.dsTop.size(), capturing, menu.items.size());
+            menuKeep = menuDrawnKey == mk && menuDrawnEvents == menuEvents && SDL_GetTicks() - menuDrawnTicks < 500 && canvas.w == outW && canvas.h == outH &&
+                canvas.Dirty() && frame >= toastUntil;
+            if (!menuKeep) { menuDrawnKey = mk; menuDrawnEvents = menuEvents; menuDrawnTicks = SDL_GetTicks(); }
+        }
+        else menuDrawnKey.clear();
+        const double menuT0 = perfNow();
+        if (menuKeep) overlayUsed = true; // (the canvas as it is, and its texture as it was filled)
+        else
+        {
+        canvasStale = true;
         canvas.Resize(outW, outH);
-        canvas.Clear();
+        if (!menu.open) canvas.Clear(); // (an open menu covers the whole canvas: its backdrop first)
         const SDL_Rect cursorRect = merged
             ? SDL_Rect { (int)view.originX, (int)view.originY, (int)(256 * view.unit), (int)(192 * view.unit) }
             : rects[1];
@@ -10522,12 +10946,15 @@ int main(int argc, char** argv)
             {
                 const auto& query=menuPage==PAGE_RSEARCH?companionQuery:cheatQuery;
                 note="FIND: "+(query.empty() ? std::string("ALL ENTRIES") : query);
-                hint="TYPE OR SELECT LETTERS TO ADD";
+                hint="A: TYPE THE KEY   B: BACK";
             }
             if(menuPage == PAGE_CDETAIL || menuPage == PAGE_CINFO)note.clear();
             if(menuPage == PAGE_BACKUPS)note="NEWEST FIRST. CHOOSE A BACKUP TO REVIEW BEFORE RESTORING.";
             if(menuPage == PAGE_RESTORE_CONFIRM && restoreChoice>=0 && restoreChoice<(int)saveBackups.size())
-                note=saveBackups[restoreChoice].label+". RESTORES THIS GAME'S SAVE AND RESTARTS IT. CURRENT SAVE KEPT AS BEFORE-RESTORE.SAV.";
+            {
+                title="RESTORE THIS BACKUP?";
+                note="Your game's save goes back to the backup from "+saveBackups[restoreChoice].label+", and the game restarts. Your save now is kept as before-restore.sav.";
+            }
             if(menuPage == PAGE_LOAD_CONFIRM)
             {
                 title = loadFromSlot >= 0 ? "LOAD SLOT " + std::to_string(loadFromSlot + 1) + "?" : pendingState == undoLoadState ? "UNDO LAST LOAD?" : "LOAD STATE?";
@@ -10540,6 +10967,11 @@ int main(int argc, char** argv)
             }
             if(menuPage == PAGE_MATCHUPS)
                 note.clear();
+            if(menuPage == PAGE_RUN_CONFIRM)
+            {
+                title = "RESET TRACKER?";
+                note = "Everything the Nuzlocke tracker has noted is cleared. Your game and its save are not changed.";
+            }
             if(menuPage == PAGE_QUIT_CONFIRM)
             {
                 title = confirmReset ? "RESET GAME?" : "QUIT GAME?";
@@ -10558,19 +10990,67 @@ int main(int argc, char** argv)
                 menu.padLive = 0;
             }
             menu.Draw(canvas, title, hint, note, wideMenu ? 260 : 0);
+            menuDrawCount++;
             if(menuPage==PAGE_CMAP)
             {
-                mapPanel.ShowMap();mapPanel.Draw(companionSnapshot,companionMetadata,companionProfile,companionGuide);
-                mapPanel.canvas.Fill(0,440,640,40,0xFF263346);
-                mapPanel.canvas.Text(174,454,"TAP / BACK: RETURN",1,0xFFFFFFFF);
-                canvas.Fill(0,0,canvas.w,canvas.h,0xD9101722);
-                const auto view=CompanionPanel::Overlay(canvas.w,canvas.h);
-                if(view.w>0&&view.h>0)for(int y=0;y<view.h;y++)for(int x=0;x<view.w;x++)
-                    canvas.px[(view.y+y)*canvas.w+view.x+x]=mapPanel.canvas.px[(y*480/view.h)*640+x*640/view.w];
+                // The region map, large, on glass over the game: where you are on it.
+                static Menu::CompanionView mapView;
+                fillCompanionView(mapView);
+                const bool solid = Glass::Backdrop(canvas);
+                const float k = std::max(0.42f, std::min(canvas.w / 1400.0f, canvas.h / 788.0f));
+                auto K = [&](float v) { return (int)std::lround(v * k); };
+                const int headH = K(70), pad = K(24);
+                int mw = mapView.mapW, mh = mapView.mapH;
+                const int maxW = canvas.w - 2 * K(60) - 2 * pad, maxH = canvas.h - 2 * K(40) - 2 * pad - headH - K(40);
+                float sc = mw > 0 && mh > 0 ? std::min((float)maxW / mw, (float)maxH / mh) : 0;
+                if (sc >= 1) sc = std::floor(sc); // (whole pixels when it is enlarged: the map stays crisp)
+                const int dw = (int)(mw * sc), dh = (int)(mh * sc);
+                const int pw = std::max(dw, K(420)) + 2 * pad, ph = headH + dh + 2 * pad;
+                const int px = (canvas.w - pw) / 2, py = (canvas.h - ph - K(40)) / 2;
+                Menu::FrostBox(canvas, solid, px, py, pw, ph, 26 * k);
+                Glass::Round(canvas, px, py, pw, ph, 26 * k, SettingsArt::Panel);
+                SettingsArt::T(canvas, px + pad, py + K(46), mapView.place.empty() ? std::string("Map") : mapView.place, K(26), Menu::GlassText, true);
+                if (dw > 0 && dh > 0)
+                {
+                    const int mx = px + (pw - dw) / 2, my = py + headH + pad;
+                    for (int y = 0; y < dh; y++)
+                        for (int x = 0; x < dw; x++)
+                            canvas.px[(size_t)(my + y) * canvas.w + mx + x] = mapView.map[(size_t)std::min(mh - 1, (int)(y / sc)) * mw + std::min(mw - 1, (int)(x / sc))] | 0xFF000000u;
+                    Glass::Mark(canvas, mx, my, mx + dw, my + dh);
+                    if (mapView.markerX >= 0)
+                    {
+                        const float cx = mx + mapView.markerX * dw, cy = my + mapView.markerY * dh, r = std::max(5.0f, 7 * k);
+                        Glass::Round(canvas, (int)(cx - r - 2), (int)(cy - r - 2), (int)(2 * r + 4), (int)(2 * r + 4), r + 2, 0xFFFFFFFF);
+                        Glass::Round(canvas, (int)(cx - r), (int)(cy - r), (int)(2 * r), (int)(2 * r), r, 0xFFE5534B);
+                    }
+                }
+                else SettingsArt::T(canvas, px + pad, py + headH + K(30), "No map for this game here yet.", K(18), SettingsArt::Desc, false, false);
+                const std::string back = touchPadUsed && touchPad.visible ? "Tap: back" : btn(Controls::B) + ": Back";
+                SettingsArt::TCentred(canvas, canvas.w / 2, py + ph + K(34), back, K(15), Menu::GlassHint);
+                if (solid) Glass::Opaque(canvas);
             }
 
             }
             overlayUsed = true;
+        }
+        } // (!menuKeep)
+        // (How often the pause menu was drawn while open, and how long each took: in the log
+        // every 300 frames it is open.)
+        if (menu.open)
+        {
+            static double menuMs = 0;
+            if (!menuKeep) menuMs += perfNow() - menuT0;
+            if (++menuOpenFrames == 300)
+            {
+                double* mp = MenuProf();
+                const double sn = std::max(1.0, mp[6]);
+                fprintf(stderr, "[menu] drawn %d times in 300 frames, %.1f ms each; settings pages %d of them: panel %.1f, header %.1f, rows %.1f, "
+                    "preview %.1f, choices %.1f, rest %.1f ms\n", menuDrawCount, menuMs / std::max(1, menuDrawCount), (int)mp[6],
+                    mp[0] / sn, mp[1] / sn, mp[2] / sn, mp[3] / sn, mp[4] / sn, mp[5] / sn);
+                for (int i = 0; i < 8; i++) mp[i] = 0;
+                menuOpenFrames = menuDrawCount = 0;
+                menuMs = 0;
+            }
         }
 
         bool wantShot = !opt.shotDir.empty() &&

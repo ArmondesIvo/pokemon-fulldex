@@ -172,43 +172,56 @@ inline bool Backdrop(Canvas& c)
 // Frosted glass: the blurred game under a panel made lighter and more colourful, with a fine grain
 // and a soft sheen at the top, rather than a grey tint laid over it. Works on the opaque backdrop
 // (Backdrop true), inside a rounded rectangle; elsewhere it does nothing.
-inline void Frost(Canvas& c, int x, int y, int w, int h, float r)
+inline void Frost(Canvas& c, int x, int y, int w, int h, float r, const std::vector<uint32_t>* from = nullptr)
 {
+    // from: the picture to frost (the canvas's backdrop), rather than what the canvas holds now: a
+    // tile lit again over the page as drawn (Menu::DrawChosenTile) is frosted from the game, not
+    // from the frost already there.
     if (w <= 0 || h <= 0) return;
+    if (from && from->size() != c.px.size()) from = nullptr;
     Mark(c, x, y, x + w, y + h);
     const float hx = w * 0.5f, hy = h * 0.5f, cx = x + hx, cy = y + hy;
     r = std::min(r, std::min(hx, hy));
+    // (In whole numbers, in 256ths, as FrostDraw: to within one step of colour of the floating point.)
     for (int py = std::max(0, y); py < std::min(c.h, y + h); py++)
     {
         uint32_t* row = &c.px[(size_t)py * c.w];
+        const uint32_t* src = from ? &(*from)[(size_t)py * c.w] : row;
         const float qy = std::fabs(py + 0.5f - cy) - (hy - r);
         const float t = (py - y) / (float)h;
-        const float sheen = t < 0.45f ? (0.45f - t) / 0.45f * 8.0f : 0.0f; // (lighter towards the top)
+        const int sheen = (int)((t < 0.45f ? (0.45f - t) / 0.45f * 8.0f : 0.0f) * 256); // (lighter towards the top)
         for (int px = std::max(0, x); px < std::min(c.w, x + w); px++)
         {
-            const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
-            float cover = 1.0f;
-            if (qx > 0 && qy > 0) cover = std::clamp(r - Hyp(qx, qy) + 0.5f, 0.0f, 1.0f); // (the round corners)
-            if (cover <= 0) continue;
-            uint32_t& p = row[px];
-            const float rr = (float)(p >> 16 & 255), gg = (float)(p >> 8 & 255), bb = (float)(p & 255);
-            const float l = 0.3f * rr + 0.59f * gg + 0.11f * bb;
+            int cover = 255;
+            if (qy > 0)
+            {
+                const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
+                if (qx > 0)
+                {
+                    const float f = std::clamp(r - Hyp(qx, qy) + 0.5f, 0.0f, 1.0f); // (the round corners)
+                    if (f <= 0) continue;
+                    cover = (int)(f * 255);
+                }
+            }
+            const uint32_t b = src[px];
+            const int rr = b >> 16 & 255, gg = b >> 8 & 255, bb = b & 255;
+            const int l = (77 * rr + 151 * gg + 28 * bb) >> 8;
             // (A fixed grain from the pixel's place, so it does not shimmer from frame to frame.)
             uint32_t hsh = (uint32_t)px * 374761393u + (uint32_t)py * 668265263u;
             hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
-            const float grain = (float)((hsh >> 24) & 7) - 3.5f;
+            const int add = sheen + (int)((hsh >> 24) & 7) * 256 - 896;
+            const int ch[3] = { rr, gg, bb };
             uint32_t out = 0xFF000000u;
-            const float ch[3] = { rr, gg, bb };
             for (int k = 0; k < 3; k++)
             {
                 // (More colour than the backdrop, the darks lifted a little and the brights held down,
                 // so white text reads over any part of the game.)
-                float v = (l + (ch[k] - l) * 1.35f) * 0.9f + 16.0f;
-                if (v > 112.0f) v = 112.0f + (v - 112.0f) * 0.3f;
-                v += sheen + grain;
-                out |= (uint32_t)std::clamp((int)v, 0, 255) << (16 - 8 * k);
+                int v = 311 * ch[k] - 81 * l + 16 * 256;
+                if (v > 112 * 256) v = 112 * 256 + (((v - 112 * 256) * 77) >> 8);
+                v = (v + add) >> 8;
+                out |= (uint32_t)(v < 0 ? 0 : v > 255 ? 255 : v) << (16 - 8 * k);
             }
-            p = cover >= 1.0f ? out : Over(p, out, (int)(cover * 255));
+            row[px] = cover >= 255 ? out : Over(row[px], out, cover);
         }
     }
 }

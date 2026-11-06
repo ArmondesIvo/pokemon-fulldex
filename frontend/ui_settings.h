@@ -976,6 +976,37 @@ inline int Menu::UpdateSettings(const MenuInput& in, int& dir)
         else if (in.down) selected = !pills.empty() ? pills[0] : !cards.empty() ? cards[0] : selected;
         return -1;
     }
+    if (keyGrid && (in.up || in.down || in.left || in.right))
+    {
+        // (The keyboard: left and right along a row, round from one end to the other; up and down
+        // to the key over or under the middle of this one; Back above the top row.)
+        int back = -1, first = -1;
+        for (int i = 0; i < n; i++)
+            if (items[i].kind == K_BACK) back = i;
+            else if (items[i].kind == K_KEY && first < 0) first = i;
+        const MenuItem& s = items[selected];
+        if (s.kind != K_KEY) { if (in.down && first >= 0) selected = first; return -1; }
+        if (in.left || in.right)
+        {
+            std::vector<int> row;
+            for (int i = 0; i < n; i++) if (items[i].kind == K_KEY && items[i].keyRow == s.keyRow) row.push_back(i);
+            const int at = (int)(std::find(row.begin(), row.end(), selected) - row.begin()), m = (int)row.size();
+            if (m > 0) selected = row[(at + (in.left ? m - 1 : 1)) % m];
+            return -1;
+        }
+        const int r = s.keyRow + (in.down ? 1 : -1), mid = s.keyCol * 2 + s.keySpan;
+        if (r < 0) { if (back >= 0) selected = back; return -1; }
+        int best = -1, bestD = 1 << 30;
+        for (int i = 0; i < n; i++)
+            if (items[i].kind == K_KEY && items[i].keyRow == r)
+            {
+                const int a = items[i].keyCol * 2, b = a + items[i].keySpan * 2;
+                const int d = mid >= a && mid < b ? -1 : std::min(std::abs(mid - a), std::abs(mid - b)); // (one right under it first)
+                if (d < bestD) { bestD = d; best = i; }
+            }
+        if (best >= 0) selected = best;
+        return -1;
+    }
     if (in.up) step(-1);
     if (in.down) step(1);
     const MenuItem& it = items[selected];
@@ -999,6 +1030,12 @@ inline int Menu::SettingsItemAt(int x, int y) const
     if (x >= backX && x < backX + backS && y >= backY && y < backY + backS)
         for (size_t i = 0; i < items.size(); i++)
             if (items[i].kind == K_BACK) return (int)i;
+    if (keyGrid)
+    {
+        for (const auto& r : keyRects)
+            if (x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]) return r[4];
+        return -1;
+    }
     if (slotGrid)
     {
         for (const auto& r : slotRects)
@@ -1027,7 +1064,7 @@ inline void Menu::SettingsTap(int item, int x, MenuInput& input)
     const MenuItem& it = items[item];
     // (A pill tapped: that one. A picker: its left half back, its right half on. The slot grid:
     // whatever is tapped is chosen, a toggle turned over.)
-    if (slotGrid) { input.accept = true; return; }
+    if (slotGrid || keyGrid) { input.accept = true; return; }
     if (it.kind == K_TOGGLE || it.kind == K_PICKER)
     {
         if (x >= ctlX) { if (x < ctlX + ctlW / 2) input.left = true; else input.right = true; }
@@ -1249,7 +1286,7 @@ inline void DexSummary(Canvas& c, const Menu::CompanionView::DexEntry& e, int x0
         if (fit < e.learns.size())
             T(c, x0, y + rows * rowH + K(18), "+" + std::to_string(e.learns.size() - fit) + " more", K(14), GlassHint, true, false);
         if (e.learns.empty()) T(c, x0, y + K(16), "None", K(16), Desc, false, false);
-        T(c, x0, bottom - K(6), "Enter or tap: back to the entry", K(15), GlassHint, false, false);
+        T(c, x0, bottom - K(6), "A or tap: back to the entry", K(15), GlassHint, false, false);
         return;
     }
     for (const auto& line : Wrap(e.desc, K(17), w0, 3)) { T(c, x0, y + K(16), line, K(17), Desc, false, false); y += K(25); }
@@ -1297,7 +1334,7 @@ inline void DexSummary(Canvas& c, const Menu::CompanionView::DexEntry& e, int x0
         y += K(25);
     }
     if (bottom - y > K(30))
-        T(c, x0, bottom - K(6), "Enter or tap: the moves it learns", K(15), GlassHint, false, false);
+        T(c, x0, bottom - K(6), "A or tap: the moves it learns", K(15), GlassHint, false, false);
 }
 
 // BATTLE INFO: how strong a hit is (CompanionTypes' percent) as "2x", and its colour: green for
@@ -1646,8 +1683,16 @@ inline bool CompanionPicture(Canvas& c, const Menu::CompanionView& cv, int kind,
 
 inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::string& hint) const
 {
+    double profT = MenuProfNow();
     using namespace SettingsArt;
-    const bool solid = Glass::Backdrop(c);
+    // (The frosted panel over the game is the same on every settings page of a screen: drawn once
+    // while the menu is open and copied after, as drawing it each time cost the Switch most of a
+    // press.)
+    static std::vector<uint32_t> frame;
+    static std::string frameKey;
+    const std::string fk = std::to_string(c.w) + "x" + std::to_string(c.h) + " " + std::to_string(c.BackdropSig());
+    const bool haveFrame = fk == frameKey && frame.size() == c.px.size();
+    const bool solid = haveFrame ? c.backdrop.size() == c.px.size() : Glass::Backdrop(c);
     const int n = (int)items.size();
     pickRects.clear();
     if (selected < 0 || selected >= n) return;
@@ -1671,12 +1716,23 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     drawnX = px0; drawnY = py0; drawnW = W0; drawnH = H0; drawnLineH = 0; drawnFirstY = 0;
 
     // The panel.
-    Glass::Shadow(c, px0, py0, W0, H0, 28 * k, 26 * k, 0x80);
-    if (solid) Glass::Frost(c, px0, py0, W0, H0, 28 * k);
-    else Glass::Round(c, px0, py0, W0, H0, 28 * k, GlassShade); // (no blurred game to frost: the old shade)
-    Glass::Round(c, px0, py0, W0, H0, 28 * k, Panel);
-    Glass::Rim(c, px0, py0, W0, H0, 28 * k, std::max(1.2f, 1.8f * k));
+    if (haveFrame)
+    {
+        std::copy(frame.begin(), frame.end(), c.px.begin());
+        Glass::Mark(c, 0, 0, c.w, c.h);
+    }
+    else
+    {
+        Glass::Shadow(c, px0, py0, W0, H0, 28 * k, 26 * k, 0x80);
+        if (solid) Glass::Frost(c, px0, py0, W0, H0, 28 * k);
+        else Glass::Round(c, px0, py0, W0, H0, 28 * k, GlassShade); // (no blurred game to frost: the old shade)
+        Glass::Round(c, px0, py0, W0, H0, 28 * k, Panel);
+        Glass::Rim(c, px0, py0, W0, H0, 28 * k, std::max(1.2f, 1.8f * k));
+        frame = c.px;
+        frameKey = fk;
+    }
 
+    { const double t = MenuProfNow(); MenuProf()[0] += t - profT; profT = t; }
     // Header: back button, the page's icon, its title, a line under them.
     backS = K(54); backX = px0 + K(28); backY = py0 + K(18);
     const bool backChosen = items[selected].kind == K_BACK;
@@ -1693,6 +1749,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     // Where the rows and the preview go.
     const int top = py0 + K(108), bottom = py0 + H0 - K(24);
     if (slotGrid) { DrawSlotGrid(c, px0 + K(30), W0 - K(60), top, bottom, k); return; }
+    if (keyGrid) { DrawKeyGrid(c, px0 + K(30), W0 - K(60), top, bottom, k); return; }
     int listX, listW, listBottom, pvX, pvY, pvW, pvH;
     if (wide)
     {
@@ -1716,6 +1773,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         pvH = bottom - pvY;
     }
 
+    { const double t = MenuProfNow(); MenuProf()[1] += t - profT; profT = t; }
     // The rows: their places down the list, a section's heading (and a line before every one but
     // the first) taking a little more room than a row.
     // (Closer together, down to nine tenths, before the list has to scroll.)
@@ -1792,124 +1850,164 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             T(c, listX + KR(50), y + headH * 2 / 3 + KR(1), it.label, KR(22), GlassText, true);
             continue;
         }
-        const bool sel = i == selected, off = it.disabled;
-        if (sel) GlowRound(c, listX, y, listW, rowH, 10 * kr, kr);
-        Glass::Round(c, listX, y, listW, rowH, 10 * kr, sel ? RowChosen : Row, sel ? ChosenEdge : 0, sel ? 2.2f * kr : std::max(1.0f, k));
-        if (!sel) Glass::Rim(c, listX, y, listW, rowH, 10 * kr, std::max(1.0f, k), 0x50, 0x14);
-        const uint32_t ink = off ? GlassOff : GlassText;
-        if (tallRows)
+        // (Each row is drawn once and copied after, while it stays the same: its words, its place, and
+        // whether it or the row above is the chosen one (that one's glow shows through it).
+        // Drawing every row each press cost the Switch about 60 ms.)
+        const bool selHere = i == selected;
+        const bool nearSel = i > 0 && i - 1 == selected; // (the row above's glow, drawn before this one)
+        std::string rk = it.label + "|" + it.sub + "|" + it.value + "|" + std::to_string(it.choice) + "|" + std::to_string(it.kind) + "|" +
+            std::to_string(it.preview) + "|" + std::to_string(it.icon) + "|" + std::to_string(it.indent) + "|" + std::to_string(it.disabled) + "|" +
+            std::to_string(it.slider) + "|" + std::to_string(listX) + "," + std::to_string(y) + "," + std::to_string(listW) + "," + std::to_string(rowH) + "|" +
+            std::to_string(nearSel) + std::to_string(tallRows) + std::to_string(rowTall) + std::to_string(kr) + "|" + std::to_string(c.BackdropSig()) + "|" +
+            std::to_string(companion.party.size()) + std::to_string(companion.bag.size()) + std::to_string(companion.dex.size()) + std::to_string(companion.moves.size()) +
+            "|" + std::to_string(it.thumb.size()) + "," + std::to_string(it.thumb.empty() ? 0u : it.thumb[it.thumb.size() / 2]); // (a badge come since)
+        for (const auto& ch : it.choices) rk += "|" + ch;
+        struct RowPixels { std::string key; int x = 0, y = 0, w = 0, h = 0; std::vector<uint32_t> px; };
+        static std::vector<RowPixels> rowCache;
+        if (rowCache.size() < (size_t)n) rowCache.resize(n);
+        RowPixels& rc = rowCache[i];
+        const int cx0 = std::max(0, listX), cy0 = std::max(0, y), cx1 = std::min(c.w, listX + listW), cy1 = std::min(c.h, y + rowH);
+        if (!selHere && rc.key == rk && rc.w == cx1 - cx0 && rc.h == cy1 - cy0 && rc.w > 0 && rc.h > 0)
         {
-            // (A tall row: its icon in a glass circle, the name large, a line under it, what it is
-            // set to now on the right before the arrow.)
-            const int d = std::min((int)(rowH * 0.62f), KR(64)), cxI = listX + KR(22) + d / 2, cyI = y + rowH / 2;
-            Glass::Round(c, cxI - d / 2, cyI - d / 2, d, d, d * 0.5f, 0x400A111C);
-            Glass::Rim(c, cxI - d / 2, cyI - d / 2, d, d, d * 0.5f, std::max(1.0f, kr), 0x60, 0x14);
-            if (it.preview == P_CMON && it.choice >= 0 && it.choice < (int)companion.party.size() && !companion.party[it.choice].icon.empty())
-            {
-                const auto& pm = companion.party[it.choice];
-                MonIcon(c, pm.icon, pm.iconW, pm.iconH, cxI - d / 2, cyI - d / 2, d, pm.hp == 0 && !pm.egg ? 0x70 : 255);
-            }
-            else if (it.icon >= 0) Glass::DrawIcon(c, it.icon, (float)cxI, (float)cyI, d * 0.27f, ink);
-            const int tx = cxI + d / 2 + KR(22);
-            const int vpx2 = std::min(KR(18), (int)(rowH * 0.2f));
-            const int vw = it.value.empty() ? 0 : W(it.value, vpx2) + KR(20);
-            const int maxW = listX + listW - KR(50) - vw - tx;
-            const bool twoLines = !it.sub.empty() && rowH >= KR(54);
-            // (Sizes from the row's height, so they sit the same on a PC and a phone.)
-            const int lpx = std::min(KR(26), (int)(rowH * 0.28f)), spx = std::min(KR(17), (int)(rowH * 0.18f));
-            T(c, tx, twoLines ? y + (int)(rowH * 0.47f) : y + rowH / 2 + lpx * 7 / 20, it.label, lpx, ink, true);
-            if (twoLines)
-            {
-                std::string sub = UiLang::Tr(it.sub);
-                if (W(sub, spx, false, false) > maxW)
-                {
-                    while (sub.size() > 1 && W(sub + "...", spx, false, false) > maxW) { sub.pop_back(); while (!sub.empty() && (sub.back() & 0xC0) == 0x80) sub.pop_back(); }
-                    sub += "...";
-                }
-                T(c, tx, y + (int)(rowH * 0.77f), sub, spx, Desc, false, false);
-            }
-            Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - KR(28), y + rowH * 0.5f, 10 * kr, ink);
-            if (!it.value.empty()) T(c, listX + listW - KR(48) - W(it.value, vpx2), y + rowH / 2 + vpx2 * 7 / 20, it.value, vpx2, GlassHint);
+            for (int yy = 0; yy < rc.h; yy++) std::copy(&rc.px[(size_t)yy * rc.w], &rc.px[(size_t)yy * rc.w] + rc.w, &c.px[(size_t)(cy0 + yy) * c.w + cx0]);
+            Glass::Mark(c, cx0, cy0, cx1, cy1);
             continue;
         }
-        const int in = it.indent * KR(26); // (a row inside an open folder)
-        if (it.kind == K_FOLDER) Glass::DrawIcon(c, it.choice == 1 ? Glass::I_CHEVRON_D : Glass::I_CHEVRON_R, listX + KR(36), y + rowH * 0.5f, 9 * kr, ink);
-        else if (it.preview == P_CITEM && it.choice >= 0 && it.choice < (int)companion.bag.size() && !companion.bag[it.choice].icon.empty())
-        {
-            const int d = std::min(rowH - KR(4), KR(36 * rowTall)); // (BAG: the item's own icon from the ROM)
-            MonIcon(c, companion.bag[it.choice].icon, 32, 32, listX + KR(36) + in - d / 2, y + (rowH - d) / 2, d);
-        }
-        else if (it.preview == P_CDEXMON && it.choice >= 0 && it.choice < (int)companion.dex.size() && !companion.dex[it.choice].icon.empty())
-        {
-            const auto& e = companion.dex[it.choice]; // (POKEDEX: its icon, faint until seen)
-            const int d = std::min(rowH, KR(40 * rowTall));
-            MonIcon(c, e.icon, 32, 32, listX + KR(36) + in - d / 2, y + (rowH - d) / 2, d, e.hidden ? 0xC0 : e.seen ? 255 : 0x50, e.hidden ? 0xFF05080Du : 0);
-        }
-        else if ((it.preview == P_CBFOE || it.preview == P_CBCOVER) && it.choice >= -1)
-        {
-            // (BATTLE INFO: the foe's icon, or that of one of your party)
-            const Menu::CompanionView::Mon* pm = it.preview == P_CBFOE ? &companion.foe
-                : it.choice >= 0 && it.choice < (int)companion.coverage.size() && companion.coverage[it.choice].party >= 0 &&
-                  companion.coverage[it.choice].party < (int)companion.party.size() ? &companion.party[companion.coverage[it.choice].party] : nullptr;
-            const int d = std::min(rowH, KR(40 * rowTall));
-            if (pm && !pm->icon.empty()) MonIcon(c, pm->icon, pm->iconW, pm->iconH, listX + KR(36) + in - d / 2, y + (rowH - d) / 2, d, pm->hp == 0 ? 0x70 : 255);
-        }
-        else if (it.preview == P_CBMOVE && it.choice >= 0 && it.choice < (int)companion.moves.size())
-        {
-            const int bw = KR(8), bh = (int)(rowH * 0.5f); // (BATTLE INFO: the move's type as a bar of its colour)
-            Glass::Round(c, listX + KR(36) + in - bw / 2, y + (rowH - bh) / 2, bw, bh, bw * 0.5f, TypeColour(companion.moves[it.choice].type));
-        }
-        else if (it.icon >= 0) Glass::DrawIcon(c, it.icon, listX + KR(36) + in, y + rowH * 0.5f, 11 * kr, ink);
-        const int lpx = KR(rowTall > 1 ? 22 : 20); // (the name's size)
-        const int base = y + rowH / 2 + lpx * 7 / 20; // (the baseline of the row's text)
-        {
-            // (A long name cut to fit before the controls on the right.)
-            const int maxW = (it.kind == K_TOGGLE || it.kind == K_PICKER ? ctlX : listX + listW - KR(90)) - (listX + KR(76) + in) - KR(12);
-            std::string label = it.label;
-            const bool bold = it.kind == K_FOLDER;
-            if (W(label, lpx, bold) > maxW)
+        auto drawRow = [&]() {
+            const bool sel = i == selected, off = it.disabled;
+            if (sel) GlowRound(c, listX, y, listW, rowH, 10 * kr, kr);
+            Glass::Round(c, listX, y, listW, rowH, 10 * kr, sel ? RowChosen : Row, sel ? ChosenEdge : 0, sel ? 2.2f * kr : std::max(1.0f, k));
+            if (!sel) Glass::Rim(c, listX, y, listW, rowH, 10 * kr, std::max(1.0f, k), 0x50, 0x14);
+            const uint32_t ink = off ? GlassOff : GlassText;
+            if (tallRows)
             {
-                while (label.size() > 1 && W(label + "...", lpx, bold) > maxW) label.pop_back();
-                label += "...";
+                // (A tall row: its icon in a glass circle, the name large, a line under it, what it is
+                // set to now on the right before the arrow.)
+                const int d = std::min((int)(rowH * 0.62f), KR(64)), cxI = listX + KR(22) + d / 2, cyI = y + rowH / 2;
+                Glass::Round(c, cxI - d / 2, cyI - d / 2, d, d, d * 0.5f, 0x400A111C);
+                Glass::Rim(c, cxI - d / 2, cyI - d / 2, d, d, d * 0.5f, std::max(1.0f, kr), 0x60, 0x14);
+                if (it.preview == P_CMON && it.choice >= 0 && it.choice < (int)companion.party.size() && !companion.party[it.choice].icon.empty())
+                {
+                    const auto& pm = companion.party[it.choice];
+                    MonIcon(c, pm.icon, pm.iconW, pm.iconH, cxI - d / 2, cyI - d / 2, d, pm.hp == 0 && !pm.egg ? 0x70 : 255);
+                }
+                else if (it.icon >= 0) Glass::DrawIcon(c, it.icon, (float)cxI, (float)cyI, d * 0.27f, ink);
+                const int tx = cxI + d / 2 + KR(22);
+                const int vpx2 = std::min(KR(18), (int)(rowH * 0.2f));
+                const int vw = it.value.empty() ? 0 : W(it.value, vpx2) + KR(20);
+                const int maxW = listX + listW - KR(50) - vw - tx;
+                const bool twoLines = !it.sub.empty() && rowH >= KR(54);
+                // (Sizes from the row's height, so they sit the same on a PC and a phone.)
+                const int lpx = std::min(KR(26), (int)(rowH * 0.28f)), spx = std::min(KR(17), (int)(rowH * 0.18f));
+                T(c, tx, twoLines ? y + (int)(rowH * 0.47f) : y + rowH / 2 + lpx * 7 / 20, it.label, lpx, ink, true);
+                if (twoLines)
+                {
+                    std::string sub = UiLang::Tr(it.sub);
+                    if (W(sub, spx, false, false) > maxW)
+                    {
+                        while (sub.size() > 1 && W(sub + "...", spx, false, false) > maxW) { sub.pop_back(); while (!sub.empty() && (sub.back() & 0xC0) == 0x80) sub.pop_back(); }
+                        sub += "...";
+                    }
+                    T(c, tx, y + (int)(rowH * 0.77f), sub, spx, Desc, false, false);
+                }
+                Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - KR(28), y + rowH * 0.5f, 10 * kr, ink);
+                if (!it.value.empty()) T(c, listX + listW - KR(48) - W(it.value, vpx2), y + rowH / 2 + vpx2 * 7 / 20, it.value, vpx2, GlassHint);
+                return;
             }
-            T(c, listX + KR(76) + in, base, label, lpx, ink, bold);
-        }
-        if (it.kind == K_FOLDER && !it.value.empty())
-            T(c, listX + listW - KR(20) - W(it.value, KR(17)), base, it.value, KR(17), GlassHint);
-        if (it.kind == K_TOGGLE)
-        {
-            const int hw = (ctlW - KR(6)) / 2, ph2 = std::min(rowH - KR(6), KR(32)), py = y + (rowH - ph2) / 2;
-            for (int s = 0; s < 2; s++)
+            const int in = it.indent * KR(26); // (a row inside an open folder)
+            if (it.kind == K_FOLDER) Glass::DrawIcon(c, it.choice == 1 ? Glass::I_CHEVRON_D : Glass::I_CHEVRON_R, listX + KR(36), y + rowH * 0.5f, 9 * kr, ink);
+            else if (!it.noArt && it.preview == P_CITEM && it.choice >= 0 && it.choice < (int)companion.bag.size() && !companion.bag[it.choice].icon.empty())
             {
-                const bool on = s == it.choice;
-                const int x = ctlX + s * (hw + KR(6));
-                Glass::Round(c, x, py, hw, ph2, ph2 * 0.5f, on ? (off ? 0x50FFFFFF : Pill) : PillOff, on ? (off ? 0x40FFFFFF : PillEdge) : PillOffEdge, std::max(1.0f, k));
-                const std::string& name = s < (int)it.choices.size() ? it.choices[s] : (s ? std::string("ON") : std::string("OFF"));
-                TCentred(c, x + hw / 2, py + ph2 / 2 + KR(6), name, KR(18), off ? GlassOff : on ? PillInk : 0xFFDCE2EA, on);
+                const int d = std::min(rowH - KR(4), KR(36 * rowTall)); // (BAG: the item's own icon from the ROM)
+                MonIcon(c, companion.bag[it.choice].icon, 32, 32, listX + KR(36) + in - d / 2, y + (rowH - d) / 2, d);
             }
-        }
-        else if (it.kind == K_PICKER || (it.kind == K_PLAIN && !it.value.empty()))
-        {
-            const bool arrows = it.kind == K_PICKER && !off;
-            if (arrows)
+            else if (!it.noArt && it.preview == P_CDEXMON && it.choice >= 0 && it.choice < (int)companion.dex.size() && !companion.dex[it.choice].icon.empty())
             {
-                Glass::DrawIcon(c, Glass::I_CHEVRON_L, ctlX + KR(14), y + rowH * 0.5f, 9 * kr, GlassText);
-                Glass::DrawIcon(c, Glass::I_CHEVRON_R, ctlX + ctlW - KR(14), y + rowH * 0.5f, 9 * kr, GlassText);
+                const auto& e = companion.dex[it.choice]; // (POKEDEX: its icon, faint until seen)
+                const int d = std::min(rowH, KR(40 * rowTall));
+                MonIcon(c, e.icon, 32, 32, listX + KR(36) + in - d / 2, y + (rowH - d) / 2, d, e.hidden ? 0xC0 : e.seen ? 255 : 0x50, e.hidden ? 0xFF05080Du : 0);
             }
-            int vpx = KR(19);
-            while (vpx > 8 && W(it.value, vpx, true) > ctlW - KR(56)) vpx--;
-            if (it.kind == K_PICKER) TCentred(c, ctlX + ctlW / 2, base, it.value, vpx, ink, true);
-            else T(c, ctlX + ctlW - W(it.value, vpx), base, it.value, vpx, off ? GlassOff : GlassHint);
-        }
-        else if (it.kind == K_LINK)
+            else if ((it.preview == P_CBFOE || it.preview == P_CBCOVER) && it.choice >= -1)
+            {
+                // (BATTLE INFO: the foe's icon, or that of one of your party)
+                const Menu::CompanionView::Mon* pm = it.preview == P_CBFOE ? &companion.foe
+                    : it.choice >= 0 && it.choice < (int)companion.coverage.size() && companion.coverage[it.choice].party >= 0 &&
+                      companion.coverage[it.choice].party < (int)companion.party.size() ? &companion.party[companion.coverage[it.choice].party] : nullptr;
+                const int d = std::min(rowH, KR(40 * rowTall));
+                if (pm && !pm->icon.empty()) MonIcon(c, pm->icon, pm->iconW, pm->iconH, listX + KR(36) + in - d / 2, y + (rowH - d) / 2, d, pm->hp == 0 ? 0x70 : 255);
+            }
+            else if (it.preview == P_CBMOVE && it.choice >= 0 && it.choice < (int)companion.moves.size())
+            {
+                const int bw = KR(8), bh = (int)(rowH * 0.5f); // (BATTLE INFO: the move's type as a bar of its colour)
+                Glass::Round(c, listX + KR(36) + in - bw / 2, y + (rowH - bh) / 2, bw, bh, bw * 0.5f, TypeColour(companion.moves[it.choice].type));
+            }
+            else if (!it.noArt && !it.thumb.empty() && it.thumbW > 0 && it.thumbH > 0)
+            {
+                // (A picture of its own, as an achievement's badge: in place of the icon, rounded.)
+                const int d = std::min(rowH - KR(8), KR(34 * rowTall));
+                const int bx = listX + KR(36) + in - d / 2, by = y + (rowH - d) / 2;
+                MonIcon(c, it.thumb, it.thumbW, it.thumbH, bx, by, d);
+                Glass::Rim(c, bx, by, d, d, KR(6), std::max(1.0f, kr), 0x50, 0x14);
+            }
+            else if (it.icon >= 0) Glass::DrawIcon(c, it.icon, listX + KR(36) + in, y + rowH * 0.5f, 11 * kr, ink);
+            const int lpx = KR(rowTall > 1 ? 22 : 20); // (the name's size)
+            const int base = y + rowH / 2 + lpx * 7 / 20; // (the baseline of the row's text)
+            {
+                // (A long name cut to fit before the controls on the right.)
+                const int maxW = (it.kind == K_TOGGLE || it.kind == K_PICKER ? ctlX : listX + listW - KR(90)) - (listX + KR(76) + in) - KR(12);
+                std::string label = it.label;
+                const bool bold = it.kind == K_FOLDER;
+                if (W(label, lpx, bold) > maxW)
+                {
+                    while (label.size() > 1 && W(label + "...", lpx, bold) > maxW) label.pop_back();
+                    label += "...";
+                }
+                T(c, listX + KR(76) + in, base, label, lpx, ink, bold);
+            }
+            if (it.kind == K_FOLDER && !it.value.empty())
+                T(c, listX + listW - KR(20) - W(it.value, KR(17)), base, it.value, KR(17), GlassHint);
+            if (it.kind == K_TOGGLE)
+            {
+                const int hw = (ctlW - KR(6)) / 2, ph2 = std::min(rowH - KR(6), KR(32)), py = y + (rowH - ph2) / 2;
+                for (int s = 0; s < 2; s++)
+                {
+                    const bool on = s == it.choice;
+                    const int x = ctlX + s * (hw + KR(6));
+                    Glass::Round(c, x, py, hw, ph2, ph2 * 0.5f, on ? (off ? 0x50FFFFFF : Pill) : PillOff, on ? (off ? 0x40FFFFFF : PillEdge) : PillOffEdge, std::max(1.0f, k));
+                    const std::string& name = s < (int)it.choices.size() ? it.choices[s] : (s ? std::string("ON") : std::string("OFF"));
+                    TCentred(c, x + hw / 2, py + ph2 / 2 + KR(6), name, KR(18), off ? GlassOff : on ? PillInk : 0xFFDCE2EA, on);
+                }
+            }
+            else if (it.kind == K_PICKER || (it.kind == K_PLAIN && !it.value.empty()))
+            {
+                const bool arrows = it.kind == K_PICKER && !off;
+                if (arrows)
+                {
+                    Glass::DrawIcon(c, Glass::I_CHEVRON_L, ctlX + KR(14), y + rowH * 0.5f, 9 * kr, GlassText);
+                    Glass::DrawIcon(c, Glass::I_CHEVRON_R, ctlX + ctlW - KR(14), y + rowH * 0.5f, 9 * kr, GlassText);
+                }
+                int vpx = KR(19);
+                while (vpx > 8 && W(it.value, vpx, true) > ctlW - KR(56)) vpx--;
+                if (it.kind == K_PICKER) TCentred(c, ctlX + ctlW / 2, base, it.value, vpx, ink, true);
+                else T(c, ctlX + ctlW - W(it.value, vpx), base, it.value, vpx, off ? GlassOff : GlassHint);
+            }
+            else if (it.kind == K_LINK)
+            {
+                const bool opens = it.preview != P_CITEM && it.preview != P_CDEXMON && it.preview != P_CGUIDE &&
+                                   it.preview != P_CBFOE && it.preview != P_CBMOVE && it.preview != P_CBCOVER; // (BAG's items, POKEDEX's entries: all in the preview)
+                if (opens) Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - KR(26), y + rowH * 0.5f, 9 * kr, ink);
+                const int vpx = KR(rowTall > 1 ? 20 : 17); // (BAG: how many, as large as the name)
+                if (!it.value.empty()) T(c, listX + listW - KR(opens ? 44 : 24) - W(it.value, vpx, rowTall > 1), base, it.value, vpx,
+                                         it.preview == P_CBMOVE && it.choice >= 0 && it.choice < (int)companion.moves.size() && companion.moves[it.choice].category != 2
+                                             ? MatchColour(companion.moves[it.choice].percent) : rowTall > 1 ? GlassText : GlassHint, rowTall > 1);
+            }
+        };
+        drawRow();
+        if (!selHere && cx1 > cx0 && cy1 > cy0)
         {
-            const bool opens = it.preview != P_CITEM && it.preview != P_CDEXMON && it.preview != P_CGUIDE &&
-                               it.preview != P_CBFOE && it.preview != P_CBMOVE && it.preview != P_CBCOVER; // (BAG's items, POKEDEX's entries: all in the preview)
-            if (opens) Glass::DrawIcon(c, Glass::I_CHEVRON_R, listX + listW - KR(26), y + rowH * 0.5f, 9 * kr, ink);
-            const int vpx = KR(rowTall > 1 ? 20 : 17); // (BAG: how many, as large as the name)
-            if (!it.value.empty()) T(c, listX + listW - KR(opens ? 44 : 24) - W(it.value, vpx, rowTall > 1), base, it.value, vpx,
-                                     it.preview == P_CBMOVE && it.choice >= 0 && it.choice < (int)companion.moves.size() && companion.moves[it.choice].category != 2
-                                         ? MatchColour(companion.moves[it.choice].percent) : rowTall > 1 ? GlassText : GlassHint, rowTall > 1);
+            rc.key = rk; rc.x = cx0; rc.y = cy0; rc.w = cx1 - cx0; rc.h = cy1 - cy0;
+            rc.px.resize((size_t)rc.w * rc.h);
+            for (int yy = 0; yy < rc.h; yy++) std::copy(&c.px[(size_t)(cy0 + yy) * c.w + cx0], &c.px[(size_t)(cy0 + yy) * c.w + cx0] + rc.w, &rc.px[(size_t)yy * rc.w]);
         }
     }
     if (total > avail) // (a thin bar: where the rows in view are among them all)
@@ -1920,6 +2018,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         Glass::Round(c, bx, ty, bw, th, bw * 0.5f, 0x70FFFFFF);
     }
 
+    { const double t = MenuProfNow(); MenuProf()[2] += t - profT; profT = t; }
     // The preview of the chosen row.
     const MenuItem& it = items[selected];
     PadStyleNow() = padStyle;
@@ -1928,11 +2027,33 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     PadLiveNow() = padLive;
     std::copy(padAxes, padAxes + 6, PadAxesNow());
     KeyNow() = it.value;
-    Glass::Round(c, pvX, pvY, pvW, pvH, 18 * k, Row);
-    Glass::Rim(c, pvX, pvY, pvW, pvH, 18 * k, std::max(1.0f, 1.2f * k), 0x70, 0x18);
+    {
+        // (The preview's panel, the same for every row: drawn once and copied after.)
+        static std::vector<uint32_t> pvPixels;
+        static std::string pvKey;
+        const std::string key = std::to_string(pvX) + "," + std::to_string(pvY) + "," + std::to_string(pvW) + "," + std::to_string(pvH) + " " +
+            std::to_string(k) + " " + std::to_string(c.w) + "x" + std::to_string(c.h) + " " + std::to_string(c.BackdropSig());
+        const int x0 = std::max(0, pvX), y0 = std::max(0, pvY), x1 = std::min(c.w, pvX + pvW), y1 = std::min(c.h, pvY + pvH);
+        if (pvKey == key && pvPixels.size() == (size_t)std::max(0, x1 - x0) * std::max(0, y1 - y0) && x1 > x0)
+        {
+            for (int yy = y0; yy < y1; yy++) std::copy(&pvPixels[(size_t)(yy - y0) * (x1 - x0)], &pvPixels[(size_t)(yy - y0) * (x1 - x0)] + (x1 - x0), &c.px[(size_t)yy * c.w + x0]);
+            Glass::Mark(c, x0, y0, x1, y1);
+        }
+        else
+        {
+            Glass::Round(c, pvX, pvY, pvW, pvH, 18 * k, Row);
+            Glass::Rim(c, pvX, pvY, pvW, pvH, 18 * k, std::max(1.0f, 1.2f * k), 0x70, 0x18);
+            if (x1 > x0 && y1 > y0)
+            {
+                pvPixels.resize((size_t)(x1 - x0) * (y1 - y0));
+                for (int yy = y0; yy < y1; yy++) std::copy(&c.px[(size_t)yy * c.w + x0], &c.px[(size_t)yy * c.w + x0] + (x1 - x0), &pvPixels[(size_t)(yy - y0) * (x1 - x0)]);
+                pvKey = key;
+            }
+        }
+    }
     const int pad = K(20), innerW = pvW - 2 * pad;
     const std::string name = it.kind == K_BACK ? std::string("BACK") : it.label;
-    const std::string desc = it.kind == K_BACK ? std::string("Back to Settings.") : Sentence(it.desc);
+    const std::string desc = it.kind == K_BACK ? std::string("Back to the page before.") : Sentence(it.desc);
     // (A long name, as GUIDE's questions: on two lines, the rest moved down.)
     int y = pvY + K(80);
     if (W(name, K(25), true) > innerW)
@@ -1958,6 +2079,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         for (size_t i = 0; i < lines.size(); i++) T(c, pvX + pad + K(34), tipTop + K(12) + (int)i * tipLine, lines[i], tipPx, Desc, false, false);
         regionBottom = tipTop - K(34);
     }
+    { const double t = MenuProfNow(); MenuProf()[3] += t - profT; profT = t; }
     // The choices: a picture of each, the one on now edged and its name in a violet pill.
     // (More than six choices, as 3D RESOLUTION's eight: only the first, the DS's own, beside the one
     // on now.)
@@ -2019,7 +2141,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
             Glass::Round(c, x0, gy, innerW, ch, 14 * k, 0x400A111C);
             Glass::Rim(c, x0, gy, innerW, ch, 14 * k, std::max(1.0f, k), 0x60, 0x14);
             TCentred(c, x0 + innerW / 2, gy + ch / 2 - K(4), "Answer hidden", K(18), GlassText, true);
-            TCentred(c, x0 + innerW / 2, gy + ch / 2 + K(22), "Enter or tap to show it", K(15), GlassHint, false);
+            TCentred(c, x0 + innerW / 2, gy + ch / 2 + K(22), "A or tap to show it", K(15), GlassHint, false);
         }
     }
     else if (it.preview == P_CITEM && it.choice >= 0 && it.choice < (int)companion.bag.size() && regionBottom - regionTop > K(120))
@@ -2115,6 +2237,16 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         }
         TCentred(c, pvX + pvW / 2, by + bh + K(32), it.value, K(22), GlassText, true);
     }
+    else if (it.kind != K_SLOT && !it.thumb.empty() && it.thumbW > 0 && it.thumbH > 0 && regionBottom - regionTop > K(140))
+    {
+        // (A picture of its own, as an achievement's badge: large, in a glass frame, its value under it.)
+        const int d = std::min(K(150), regionBottom - regionTop - K(60)), cx = pvX + pvW / 2;
+        const int cy = regionTop + (regionBottom - regionTop - d - K(50)) / 2;
+        Glass::Round(c, cx - d / 2 - K(8), cy - K(8), d + K(16), d + K(16), 20 * k, 0x400A111C);
+        MonIcon(c, it.thumb, it.thumbW, it.thumbH, cx - d / 2, cy, d);
+        Glass::Rim(c, cx - d / 2 - K(8), cy - K(8), d + K(16), d + K(16), 20 * k, std::max(1.0f, 1.4f * k), 0x80, 0x18);
+        if (!it.value.empty()) TCentred(c, cx, cy + d + K(44), it.value, K(20), GlassText, true);
+    }
     else if (it.kind == K_LINK && it.icon >= 0 && it.preview <= P_NONE && regionBottom - regionTop > K(120))
     {
         // (A page of its own, as on the SETTINGS page: its icon large in a glass circle, and what it
@@ -2134,10 +2266,12 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         TCentred(c, cx, cy + lh / 2 + vpx * 7 / 20, it.value, vpx, PillInk, true);
     }
 
+    { const double t = MenuProfNow(); MenuProf()[4] += t - profT; profT = t; }
     // The buttons' hint under the panel, if there is room.
     if (!hint.empty() && c.h - (py0 + H0) > K(30))
         TCentred(c, c.w / 2, py0 + H0 + K(30), hint, K(15), GlassHint);
-    if (solid) Glass::Opaque(c);
+    if (solid && !haveFrame) Glass::Opaque(c); // (the copied panel is solid already, and so is all drawn over it)
+    { const double t = MenuProfNow(); MenuProf()[5] += t - profT; MenuProf()[6] += 1; }
 }
 
 // style 2: a question in a raised glass card ("Quit Game?"), the paused game frosted behind it.
@@ -2199,6 +2333,25 @@ inline void Menu::DrawSlotGrid(Canvas& c, int x0, int w0, int top, int bottom, f
         const int cx = x0 + (int)(q % cols) * (cw + gap), cy = gy + (int)(q / cols) * (ch + gap);
         if (cy + ch > bottom + K(4)) break;
         const bool empty = it.value.empty();
+        // (Each card is drawn once and copied after while it stays the same, as the rows of other
+        // pages: the chosen one, and one beside or under it (its glow), drawn each time.)
+        const int sq = (int)(std::find(cards.begin(), cards.end(), selected) - cards.begin());
+        const bool nearSel = sq < (int)cards.size() && (sq == (int)q - 1 || sq == (int)q - cols || sq == (int)q + 1 || sq == (int)q + cols);
+        struct CardPixels { std::string key; std::vector<uint32_t> px; };
+        static std::vector<CardPixels> cardCache;
+        if (cardCache.size() < cards.size()) cardCache.resize(cards.size());
+        CardPixels& cc = cardCache[q];
+        const std::string ck = it.label + "|" + it.value + "|" + std::to_string((uintptr_t)it.thumb.data()) + "," + std::to_string(it.thumb.size()) + "|" +
+            std::to_string(cx) + "," + std::to_string(cy) + "," + std::to_string(cw) + "," + std::to_string(ch) + "|" + std::to_string(c.BackdropSig()) + "|" +
+            std::to_string(c.w) + "x" + std::to_string(c.h);
+        const int kx0 = std::max(0, cx), ky0 = std::max(0, cy), kx1 = std::min(c.w, cx + cw), ky1 = std::min(c.h, cy + ch);
+        if (!sel && !nearSel && cc.key == ck && cc.px.size() == (size_t)std::max(0, kx1 - kx0) * std::max(0, ky1 - ky0) && kx1 > kx0)
+        {
+            for (int yy = ky0; yy < ky1; yy++) std::copy(&cc.px[(size_t)(yy - ky0) * (kx1 - kx0)], &cc.px[(size_t)(yy - ky0) * (kx1 - kx0)] + (kx1 - kx0), &c.px[(size_t)yy * c.w + kx0]);
+            Glass::Mark(c, kx0, ky0, kx1, ky1);
+            slotRects.push_back({ cx, cy, cw, ch, i });
+            continue;
+        }
         if (sel) GlowRound(c, cx, cy, cw, ch, 14 * k, k);
         Glass::Round(c, cx, cy, cw, ch, 14 * k, sel ? RowChosen : empty ? 0x0CFFFFFF : Row, sel ? ChosenEdge : 0, sel ? 2.2f * k : std::max(1.0f, k));
         if (!sel) Glass::Rim(c, cx, cy, cw, ch, 14 * k, std::max(1.0f, k), empty ? 0x30 : 0x50, 0x10);
@@ -2234,15 +2387,138 @@ inline void Menu::DrawSlotGrid(Canvas& c, int x0, int w0, int top, int bottom, f
         T(c, cx + K(14), cy + imgH + K(26), it.label, K(17), empty && !sel ? GlassHint : GlassText, true);
         T(c, cx + K(14), cy + imgH + K(48), empty ? std::string("Empty") : it.value, K(14), GlassHint);
         slotRects.push_back({ cx, cy, cw, ch, i });
+        if (!sel && !nearSel && kx1 > kx0 && ky1 > ky0)
+        {
+            cc.key = ck;
+            cc.px.resize((size_t)(kx1 - kx0) * (ky1 - ky0));
+            for (int yy = ky0; yy < ky1; yy++) std::copy(&c.px[(size_t)yy * c.w + kx0], &c.px[(size_t)yy * c.w + kx0] + (kx1 - kx0), &cc.px[(size_t)(yy - ky0) * (kx1 - kx0)]);
+        }
+    }
+}
+
+// The keyboard (Menu::keyGrid): what is typed in a box across the top, the caret after it, then the
+// keys in rows. The keys are drawn once and copied after while they stay the same (the menus are
+// slow to draw on the Switch); the chosen one, glowing, and those its glow reaches drawn each time.
+inline void Menu::DrawKeyGrid(Canvas& c, int x0, int w0, int top, int bottom, float k) const
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
+    keyRects.clear();
+    // (What is typed: its end shown when it is longer than the box.)
+    const int fh = K(68), fy = top + K(4), tpx = K(26);
+    Glass::Round(c, x0, fy, w0, fh, 18 * k, 0x38000000, PanelEdge, std::max(1.0f, k));
+    std::string shown = keySecret ? std::string(keyText.size(), '*') : keyText;
+    const int room = w0 - K(56);
+    while (!shown.empty() && W(shown, tpx, false, false) > room) shown.erase(0, 1);
+    const int tx = x0 + K(26), base = fy + fh / 2 + K(9);
+    if (shown.empty()) T(c, tx + K(8), base, keyPrompt, K(20), GlassHint);
+    else T(c, tx, base, shown, tpx, GlassText, false, false);
+    const int caretX = shown.empty() ? tx : tx + W(shown, tpx, false, false) + K(3);
+    Glass::Round(c, caretX, fy + K(17), std::max(2, K(3)), fh - K(34), 1.0f, 0xE0FFFFFF);
+
+    // (The keys: ten to a row, as large as fit under the box.)
+    int rows = 0;
+    for (const MenuItem& it : items) if (it.kind == K_KEY) rows = std::max(rows, it.keyRow + 1);
+    if (rows == 0) return;
+    const int gy = fy + fh + K(22), gap = K(10);
+    const int keyH = std::min(K(72), (bottom - gy - (rows - 1) * gap) / rows);
+    const float half = (w0 + gap) / 20.0f;
+    auto rectOf = [&](const MenuItem& it, int& x, int& y, int& w, int& h) {
+        x = x0 + (int)std::lround(it.keyCol * half);
+        w = (int)std::lround(it.keySpan * half) - gap;
+        y = gy + it.keyRow * (keyH + gap);
+        h = keyH;
+    };
+    auto drawKey = [&](int i, bool sel) {
+        const MenuItem& it = items[i];
+        int x, y, w, h;
+        rectOf(it, x, y, w, h);
+        if (sel) GlowRound(c, x, y, w, h, 14 * k, k);
+        Glass::Round(c, x, y, w, h, 14 * k, sel ? RowChosen : Row, sel ? ChosenEdge : 0, sel ? 2.2f * k : std::max(1.0f, k));
+        if (!sel) Glass::Rim(c, x, y, w, h, 14 * k, std::max(1.0f, k), 0x50, 0x14);
+        const bool word = it.label.size() > 1;
+        const int px = word ? K(20) : K(27);
+        T(c, x + (w - W(it.label, px, true, false)) / 2, y + h / 2 + px * 7 / 20, it.label, px, GlassText, true, false);
+    };
+    const int n = (int)items.size();
+    const int bx0 = std::max(0, x0 - K(2)), by0 = std::max(0, gy - K(2));
+    const int bx1 = std::min(c.w, x0 + w0 + K(2)), by1 = std::min(c.h, gy + rows * (keyH + gap));
+    static std::vector<uint32_t> baseKeys;
+    static std::string baseKey;
+    std::string bk = std::to_string(c.w) + "x" + std::to_string(c.h) + " " + std::to_string(c.BackdropSig()) + " " +
+        std::to_string(x0) + "," + std::to_string(w0) + "," + std::to_string(gy) + "," + std::to_string(keyH) + "|";
+    for (const MenuItem& it : items) if (it.kind == K_KEY) bk += it.label + "\x1f";
+    if (bx1 <= bx0 || by1 <= by0) return;
+    const size_t bw = (size_t)(bx1 - bx0);
+    if (bk == baseKey && baseKeys.size() == bw * (by1 - by0))
+    {
+        for (int yy = by0; yy < by1; yy++) std::copy(&baseKeys[(size_t)(yy - by0) * bw], &baseKeys[(size_t)(yy - by0) * bw] + bw, &c.px[(size_t)yy * c.w + bx0]);
+        Glass::Mark(c, bx0, by0, bx1, by1);
+    }
+    else
+    {
+        for (int i = 0; i < n; i++) if (items[i].kind == K_KEY) drawKey(i, false);
+        baseKey = bk;
+        baseKeys.resize(bw * (by1 - by0));
+        for (int yy = by0; yy < by1; yy++) std::copy(&c.px[(size_t)yy * c.w + bx0], &c.px[(size_t)yy * c.w + bx0] + bw, &baseKeys[(size_t)(yy - by0) * bw]);
+    }
+    for (int i = 0; i < n; i++)
+        if (items[i].kind == K_KEY)
+        {
+            int x, y, w, h;
+            rectOf(items[i], x, y, w, h);
+            keyRects.push_back({ x, y, w, h, i });
+        }
+    if (selected >= 0 && selected < n && items[selected].kind == K_KEY)
+    {
+        // (The chosen key's glow, then the keys it spreads over again on top of it, then the key.)
+        int sx, sy, sw, sh;
+        rectOf(items[selected], sx, sy, sw, sh);
+        const int reach = K(26);
+        GlowRound(c, sx, sy, sw, sh, 14 * k, k);
+        for (int i = 0; i < n; i++)
+        {
+            if (i == selected || items[i].kind != K_KEY) continue;
+            int x, y, w, h;
+            rectOf(items[i], x, y, w, h);
+            if (x < sx + sw + reach && x + w > sx - reach && y < sy + sh + reach && y + h > sy - reach)
+            {
+                // (Its own place first put back as the copy has it, so its glass is not laid twice.)
+                for (int yy = std::max(by0, y - 1); yy < std::min(by1, y + h + 1); yy++)
+                {
+                    const int a = std::max(bx0, x - 1), b = std::min(bx1, x + w + 1);
+                    if (b > a) std::copy(&baseKeys[(size_t)(yy - by0) * bw + (a - bx0)], &baseKeys[(size_t)(yy - by0) * bw + (b - bx0)], &c.px[(size_t)yy * c.w + a]);
+                }
+            }
+        }
+        Glass::Round(c, sx, sy, sw, sh, 14 * k, RowChosen, ChosenEdge, 2.2f * k);
+        const MenuItem& it = items[selected];
+        const int px = it.label.size() > 1 ? K(20) : K(27);
+        T(c, sx + (sw - W(it.label, px, true, false)) / 2, sy + sh / 2 + px * 7 / 20, it.label, px, GlassText, true, false);
     }
 }
 
 inline void Menu::DrawDialog(Canvas& c, const std::string& title, const std::string& text, const std::string& hint) const
 {
     using namespace SettingsArt;
-    const bool solid = Glass::Backdrop(c);
+    // (Everything but the two buttons is the same while the dialog is up: drawn once and copied
+    // after, as frosting the whole screen each press took the Switch a few hundred ms.)
+    static std::vector<uint32_t> base;
+    static std::string baseKey;
+    static bool baseSolid = false;
+    static int basePy = 0, basePh = 0;
+    const std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + " " + std::to_string(c.BackdropSig()) + " " + std::to_string(dialogIcon) + "|" +
+        title + "|" + text + "|" + hint + "|" + std::to_string(UiLang::lang);
     const float k = std::max(0.42f, std::min(c.w / 1400.0f, c.h / 788.0f));
     auto K = [&](float v) { return (int)std::lround(v * k); };
+    if (key == baseKey && base.size() == c.px.size())
+    {
+        std::copy(base.begin(), base.end(), c.px.begin());
+        Glass::Mark(c, 0, 0, c.w, c.h);
+        DrawDialogButtons(c, basePy, basePh, k, baseSolid);
+        return;
+    }
+    const bool solid = Glass::Backdrop(c);
     if (solid) Glass::Frost(c, 0, 0, c.w, c.h, 0);
     else Glass::Round(c, 0, 0, c.w, c.h, 0, GlassShade);
     Glass::Round(c, 0, 0, c.w, c.h, 0, 0x1C000000); // (the game a touch darker behind the card)
@@ -2267,6 +2543,17 @@ inline void Menu::DrawDialog(Canvas& c, const std::string& title, const std::str
         T(c, c.w / 2 - W(l, K(17), false, false) / 2, y, l, K(17), Desc, false, false);
         y += K(25);
     }
+    if (!hint.empty()) TCentred(c, c.w / 2, py + ph + K(34), hint, K(15), GlassHint);
+    if (solid) Glass::Opaque(c);
+    base = c.px; baseKey = key; baseSolid = solid; basePy = py; basePh = ph;
+    DrawDialogButtons(c, py, ph, k, solid);
+}
+
+// The dialog's two buttons, the chosen one lit, over the rest of it (DrawDialog).
+inline void Menu::DrawDialogButtons(Canvas& c, int py, int ph, float k, bool solid) const
+{
+    using namespace SettingsArt;
+    auto K = [&](float v) { return (int)std::lround(v * k); };
     const int bw = K(190), bh = K(48), gap = K(16), bx = c.w / 2 - bw - gap / 2, by = py + ph - bh - K(28);
     const int n = (int)items.size();
     for (int b = 0; b < 2; b++)
@@ -2281,8 +2568,10 @@ inline void Menu::DrawDialog(Canvas& c, const std::string& title, const std::str
         dialogX[b] = x;
     }
     dialogY = by; dialogW = bw; dialogH = bh;
-    if (!hint.empty()) TCentred(c, c.w / 2, py + ph + K(34), hint, K(15), GlassHint);
-    if (solid) Glass::Opaque(c);
+    // (Solid round the buttons, as Glass::Opaque would make them.)
+    if (solid)
+        for (int yy = std::max(0, by - bh); yy < std::min(c.h, by + 2 * bh); yy++)
+            for (int xx = std::max(0, bx - bh); xx < std::min(c.w, bx + 2 * bw + gap + bh); xx++) c.px[(size_t)yy * c.w + xx] |= 0xFF000000u;
 }
 
 // The phone's on-screen controls (x0, y0, x1, y1 each, output pixels; set by main.cpp while they
