@@ -3,6 +3,10 @@
 
 ## Unreleased
 
+- **RetroAchievements: a wrong clock is named when logging in fails.** A device whose date is
+  wrong (a Switch set years ahead, often) cannot check the server's certificate, and the settings
+  only said LOGIN FAILED. They now say CHECK THE CLOCK, and the message asks whether the date and
+  time are right.
 - **Launcher: a save named after the ROM is found.** A save brought from another emulator or a flashcart
   (`Pokemon - Edicion Negra 2.sav` beside `Pokemon - Edicion Negra 2.nds`) is used when the game's own save
   (`black2-es.sav`) is not there. Another game's save name is never borrowed.
