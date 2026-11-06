@@ -50,6 +50,8 @@ bool rc_portable_knows(const char code[4]); // (runtime/recomp_api.h)
 
 namespace SwitchPlatform
 {
+void ExitTrace(const char* step);
+void ExitTraceIn(const std::string& dir);
 namespace
 {
 std::vector<std::string> g_args;
@@ -215,6 +217,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
     // pictures and Home (favourites), those taken off the list left out; kept beside the settings.
     // The chosen game is handed back as its place in gamesIn.
     const std::string home = cfgPath.substr(0, cfgPath.find_last_of('/'));
+    ExitTraceIn(home);
     std::vector<Launcher::Game> games;
     LibraryHistory library;
     auto refresh = [&](int& sel) {
@@ -643,7 +646,32 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     }
                     else if (F.dialog == 4)
                     {
-                        if (F.drow == 0) note = "IMPORTING A PICTURE IS COMING TO THE SWITCH SOON";
+                        if (F.drow == 0)
+                        {
+                            // Import: the pictures in the artwork folder beside the settings (PNG or JPG,
+                            // put there from a PC or phone), in name order; up to 7 shown.
+                            std::vector<std::string> pics;
+                            std::error_code ec;
+                            for (const auto& e : std::filesystem::directory_iterator(std::filesystem::u8path(home + "/artwork"), ec))
+                            {
+                                std::string n = e.path().filename().string(), low = n;
+                                for (char& ch : low) ch = (char)tolower((unsigned char)ch);
+                                if (e.is_regular_file(ec) && low.size() > 4 && (low.compare(low.size() - 4, 4, ".png") == 0 || low.compare(low.size() - 4, 4, ".jpg") == 0 || low.compare(low.size() - 5, 5, ".jpeg") == 0)) pics.push_back(n);
+                            }
+                            std::sort(pics.begin(), pics.end());
+                            if (pics.size() > 7) pics.resize(7);
+                            std::string where = home + "/artwork";
+                            if (where.rfind("sdmc:", 0) == 0) where = where.substr(5);
+                            F.dTitle = "Import A Picture";
+                            F.dMsg = pics.empty() ? "No pictures yet. Put PNG or JPG files in " + where + " on the SD card, then come back here."
+                                                  : "Pictures in " + where + " on the SD card.";
+                            F.dItems = pics;
+                            F.dPaths = pics;
+                            F.dItems.push_back("Cancel");
+                            F.dPaths.push_back("#close");
+                            F.dialog = 7;
+                            F.drow = 0;
+                        }
                         else if (F.drow == 1) note = "FIND ARTWORK ON YOUR PHONE OR PC";
                         else if (F.drow == 2 || F.drow == 3)
                         {
@@ -659,6 +687,21 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         const std::string pick = F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
                         const std::string save = games[selected].folder + "/" + games[selected].saveName;
                         if (pick == "#close" || pick.empty()) closeDialog();
+                        else if (F.dialog == 7)
+                        {
+                            // (Checked before it is kept: one that does not read is not chosen.)
+                            std::vector<unsigned char> data;
+                            std::vector<uint32_t> test;
+                            closeDialog();
+                            if (!Launcher::ReadFile(home + "/artwork/" + pick, data) || !Launcher::LoadSquareArt(data.data(), data.size(), test))
+                                note = "THAT PICTURE COULD NOT BE READ: PNG OR JPG ONLY";
+                            else
+                            {
+                                const bool ok = Launcher::SetPair(home + "/fulldex-art.txt", rom, pick);
+                                refresh(selected);
+                                note = ok ? "PICTURE CHANGED" : "COULD NOT SAVE THE PICTURE";
+                            }
+                        }
                         else if (F.dialog == 5)
                         {
                             F.dTitle = "Go Back To This Backup?";
@@ -976,6 +1019,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             framebufferEnd(&fb);
         }
     }
+    ExitTrace("the list's screen closed");
     framebufferClose(&fb);
     // (The chosen game handed back as its place in gamesIn: the list shown may be in another order.)
     if (result >= 0 && result < (int)games.size())
@@ -1064,8 +1108,28 @@ bool g_canChange = false, g_changeGame = false;
 // seconds (see JitStarted).
 static std::string g_jitMarker, g_fastMemMarker;
 
+// (A trace of the closing down, in exit-trace.txt beside the program: each step written and
+// closed at once, so the last line says where it stopped.)
+static char g_exitTrace[512];
+void ExitTrace(const char* step)
+{
+    if (!g_exitTrace[0]) return;
+    if (FILE* f = fopen(g_exitTrace, "a")) { fprintf(f, "%llu %s\n", (unsigned long long)(armTicksToNs(armGetSystemTick()) / 1000000), step); fclose(f); }
+}
+static void ExitTraceAtExit() { ExitTrace("atexit: the last handler"); }
+static void ExitTraceStart() { atexit(ExitTraceAtExit); }
+// (Begun once the list knows its folder: exit-trace.txt beside the settings.)
+void ExitTraceIn(const std::string& dir)
+{
+    snprintf(g_exitTrace, sizeof g_exitTrace, "%s/exit-trace.txt", dir.c_str());
+    if (FILE* f = fopen(g_exitTrace, "w")) fclose(f);
+    ExitTrace("started");
+}
+extern "C" void userAppExit(void) { ExitTrace("libnx: closing the services"); }
+
 bool Start(int& argc, char**& argv)
 {
+    ExitTraceStart();
     // The folder the .nro was started from (the Homebrew Menu passes its path), or the usual one.
     std::string dir = "sdmc:/switch/ssrecomp";
     if (argc > 0 && argv[0] && strncmp(argv[0], "sdmc:/", 6) == 0)
@@ -1252,7 +1316,7 @@ bool Start(int& argc, char**& argv)
                 // (Installed: the new .nro started as this one ends.)
                 if (chosen < 0 && Updater::RestartPending()) Updater::Restart();
 #endif
-                if (chosen < 0) return false;
+                if (chosen < 0) { ExitTrace("the list closed with no game"); return false; }
                 if (FILE* f = fopen(lastPath.c_str(), "w"))
                 {
                     fprintf(f, "%s\n", games[chosen].rom.c_str());

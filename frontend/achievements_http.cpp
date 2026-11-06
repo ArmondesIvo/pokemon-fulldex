@@ -24,6 +24,7 @@
 #include <curl/curl.h>
 #endif
 
+namespace SwitchPlatform { void ExitTrace(const char* step); }
 namespace Achievements
 {
 
@@ -343,7 +344,9 @@ int Progress(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
 void CloseNetwork()
 {
     g_stop = true;
+    ::SwitchPlatform::ExitTrace("network: closing");
     socketExit();
+    ::SwitchPlatform::ExitTrace("network: closed");
 }
 
 struct Sink
