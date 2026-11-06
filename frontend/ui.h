@@ -471,8 +471,9 @@ struct Menu
         if (!over) Glass::Shadow(c, x, y, w, h, r, std::max(6.0f, h * 0.06f), 0x70);
         if (solid) Glass::Frost(c, x, y, w, h, r, over ? &c.backdrop : nullptr);
         else Glass::Round(c, x, y, w, h, r, GlassShade);
-        Glass::Round(c, x, y, w, h, r, chosen ? FrostChosen : 0x30101826);
-        if (chosen) Glass::Round(c, x, y, w, h, r, 0, GlassChosenEdge, edge);
+        if (chosen) Glass::Round(c, x, y, w, h, r, FrostChosen);
+        else Glass::Surface(c, 0, x, y, w, h, r, Glass::PanelTint()); // (the launcher's Panels: a colour or a picture)
+        if (chosen) Glass::Round(c, x, y, w, h, r, 0, Glass::ChosenEdge(), edge); // (the accent: white unless chosen)
         else Glass::Rim(c, x, y, w, h, r, std::max(1.2f, edge * 1.4f));
     }
 

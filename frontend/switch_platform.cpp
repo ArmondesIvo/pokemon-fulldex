@@ -574,7 +574,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             const bool banner = Launcher::ContinueGame(games, selected) >= 0;
             bool play = false, quitList = false;
             auto setTab = [&](int by) {
-                tab = (tab + by + Launcher::TabCount()) % Launcher::TabCount();
+                tab = Launcher::TabStep(tab, by); // (in the order shown)
                 scroll = 0;
                 const Launcher::View v = view();
                 if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v);
@@ -606,6 +606,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         if (a >= 0) { F.side = -1; F.pact = a; aDown = true; }
                         else if (r >= 0) { if (F.page == Launcher::SIDE_HUB && Launcher::HubTop() && F.prow == r && F.side < 0) aDown = true; F.side = -1; F.pact = -1; F.prow = r; }
                     }
+                    else if (F.page == Launcher::SIDE_LAUNCHER && Launcher::LookTap(tapX, tapY)) {} // (the colour wheel)
                     else if (F.page >= 0 && Launcher::NotesAt(tapX, tapY)) { if (F.prow == 2 && F.side < 0) aDown = true; F.side = -1; F.prow = 2; }
                     else if (F.page >= 0)
                     {
@@ -613,12 +614,13 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         if (r >= 0) { if (F.prow == r && F.side < 0) aDown = true; F.side = -1; F.prow = r; }
                     }
                     else if (const int tl = Launcher::ToolAt(tapX, tapY)) { F.side = -1; F.banner = 0; onTabs = true; F.onSort = true; F.tool = tl; aDown = true; }
+                    else if (Launcher::GameOptionsAt(canvas, tapX, tapY)) { F.side = -1; onTabs = false; F.banner = 2; aDown = true; }
                     else if (Launcher::ContinueAt(canvas, tapX, tapY)) { F.side = -1; onTabs = false; F.banner = 1; aDown = true; }
                     else if (t >= 0)
                     {
                         F.side = -1; F.banner = 0; onTabs = false;
-                        if (t != tab) setTab(t - tab);
-                        else if (t >= Launcher::TABS) { onTabs = true; F.onSort = false; aDown = true; } // (a tab of your own: its menu)
+                        if (t != tab) setTab(Launcher::TabDistance(tab, t));
+                        else { onTabs = true; F.onSort = false; aDown = true; } // (the tab shown: its menu)
                     }
                     else if (tile >= 0)
                     {
@@ -755,13 +757,13 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         }
                         else closeDialog();
                     }
-                    else if (F.dialog >= 10) closeDialog(); // (the beer message: its code is scanned, not chosen)
+                    else if (F.dialog >= 10 && F.dialog <= 12) { const bool yes = F.dialog == 11 && F.drow == 0; closeDialog(); if (yes) quitList = true; } // (the beer message: its code is scanned; Quit Fulldex?: Quit)
                     else if (F.dialog >= 5)
                     {
                         const std::string pick = F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
                         const std::string save = games[selected].folder + "/" + games[selected].saveName;
                         if (pick == "#close" || pick.empty()) closeDialog();
-                        else if (F.dialog == 8 || F.dialog == 9)
+                        else if (F.dialog == 8 || F.dialog == 9 || F.dialog == 13 || F.dialog == 14)
                         {
                             // (Add To Tab, or a tab of your own's menu.)
                             const int r = Launcher::TabDialogPick(pick, tab, note);
@@ -887,6 +889,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                                 note = !ok ? "COULD NOT SAVE THE LIST" : was ? "BACK IN THE LIST" : "HIDDEN FROM THE LIST";
                             }
                         }
+                        else if (F.page == Launcher::SIDE_LAUNCHER) Launcher::LookDo(F.prow, 1);
                         else if (F.page == Launcher::SIDE_HUB)
                         {
                             // (The Hub: A on the list goes to the chosen row's actions; on those, does it.)
@@ -921,6 +924,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         if (dir == 1) { if (F.tool > 1) F.tool--; else F.onSort = false; }
                         else if (dir == 2) F.tool = std::min(3, F.tool + 1);
                         else if (dir == 4) { F.onSort = false; onTabs = false; if (banner) F.banner = 1; else intoGames(); }
+                        else if (aDown && F.tool == 1 && !Launcher::TabHidden().empty()) Launcher::OpenPlusMenu(); // (+: new, or one hidden shown)
                         else if (aDown && F.tool != 3)
                         {
                             // (+ and Search: the keyboard, for a new tab or the search.)
@@ -936,10 +940,10 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                             settle();
                         }
                     }
-                    else if (dir == 1 && tab == 0) { onTabs = false; F.side = Launcher::SIDE_HOME; }
-                    else if (dir == 2 && tab == Launcher::TabCount() - 1) { F.onSort = true; F.tool = 1; }
+                    else if (dir == 1 && tab == Launcher::FirstTab()) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                    else if (dir == 2 && tab == Launcher::LastTab()) { F.onSort = true; F.tool = 1; }
                     else if (dir == 1 || dir == 2) setTab(dir == 2 ? 1 : -1);
-                    else if (aDown && tab >= Launcher::TABS) Launcher::OpenTabMenu(tab - Launcher::TABS); // (a tab of your own: its menu)
+                    else if (aDown) Launcher::OpenTabMenu(tab); // (a tab: move, hide; one of your own also rename, delete)
                     else if (dir == 4 || aDown) { onTabs = false; if (banner) F.banner = 1; else intoGames(); }
                 }
                 else if (F.banner)
@@ -950,7 +954,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     else if (dir == 4 && Launcher::FirstIn(view()) >= 0) { F.banner = 0; intoGames(); }
                     else if (aDown)
                     {
-                        if (F.banner == 2) note = "GAME OPTIONS: COMING SOON";
+                        if (F.banner == 2) { const int cg = Launcher::ContinueGame(games, selected); if (cg >= 0) { selected = cg; F.banner = 0; F.popup = 0; } } // (Game Options: its menu)
                         else
                         {
                             const int cg = Launcher::ContinueGame(games, selected);
@@ -979,7 +983,8 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         else note = games[selected].comingSoon ? games[selected].name + ": COMING SOON" : "THIS GAME IS NOT ONE THAT THIS PLAYS";
                     }
                 }
-                if ((down & HidNpadButton_Plus) || (bDown && F.side < 0 && !F.banner && !onTabs)) quitList = true;
+                if (down & HidNpadButton_Plus) quitList = true;
+                else if (bDown && F.side < 0 && !F.banner && !onTabs) Launcher::OpenQuitAsk(); // (B: asked first)
                 if (bDown && (F.side >= 0 || F.banner || onTabs)) { F.side = -1; F.banner = 0; onTabs = false; intoGames(); }
                 }
             }
@@ -997,7 +1002,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             const u64 tl = ctl.PadCustom() ? action(Controls::L) : (u64)HidNpadButton_L;
             const u64 tr = ctl.PadCustom() ? action(Controls::R) : (u64)HidNpadButton_R;
             auto setTab = [&](int by) {
-                tab = (tab + by + Launcher::TabCount()) % Launcher::TabCount();
+                tab = Launcher::TabStep(tab, by); // (in the order shown)
                 scroll = 0;
                 const Launcher::View v = view();
                 if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v);

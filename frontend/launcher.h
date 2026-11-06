@@ -61,11 +61,107 @@ inline const char* PlatformName(int p) { return p == DS ? "DS" : p == GBA ? "GBA
 enum TabId { TAB_HOME, TAB_ALL, TAB_DS, TAB_GBA, TAB_3DS, TAB_HACKS, TABS };
 // Tabs of the player's own, after the built-in ones (tab TABS + k): a name and its games' ROM paths;
 // kept in fulldex-tabs.txt beside the saves, a line a tab (its name, then its ROMs), tab-separated.
-struct CustomTab { std::string name; std::vector<std::string> roms; };
+// A tab of the player's own: its games, and the built-in tab it comes after (Move Left / Right; Home stays first).
+struct CustomTab { std::string name; std::vector<std::string> roms; int after = -1; int tag = 0; };
 inline std::vector<CustomTab>& CustomTabs() { static std::vector<CustomTab> t; return t; }
 inline std::string& TabsFile() { static std::string f; return f; }
 inline int TabCount() { return TABS + (int)CustomTabs().size(); }
-inline std::string TabsSig() { std::string s; for (const CustomTab& t : CustomTabs()) s += t.name + "|" + std::to_string(t.roms.size()) + ";"; return s; }
+// Every tab in the order shown (the built-in ones 0 to TABS-1, the player's own TABS + their place) and
+// those hidden: fulldex-tabs-order.txt with the tabs. The built-in ones are moved and hidden, never deleted.
+inline std::vector<int>& TabOrderAll() { static std::vector<int> o; return o; }
+inline std::vector<int>& TabHidden() { static std::vector<int> h; return h; }
+inline bool TabIsHidden(int t) { const std::vector<int>& h = TabHidden(); return std::find(h.begin(), h.end(), t) != h.end(); }
+inline void TabOrderFix()
+{
+    std::vector<int>& o = TabOrderAll();
+    const int n = TabCount();
+    std::vector<int> out;
+    std::vector<bool> seen((size_t)n, false);
+    for (const int t : o) if (t >= 0 && t < n && !seen[(size_t)t]) { out.push_back(t); seen[(size_t)t] = true; }
+    for (int t = 0; t < n; t++) if (!seen[(size_t)t]) out.push_back(t); // (new ones at the end)
+    o = out;
+    std::vector<int>& h = TabHidden();
+    h.erase(std::remove_if(h.begin(), h.end(), [n](int t) { return t < 0 || t >= n; }), h.end());
+}
+inline std::vector<int> TabOrder()
+{
+    TabOrderFix();
+    std::vector<int> v;
+    for (const int t : TabOrderAll()) if (!TabIsHidden(t)) v.push_back(t);
+    if (v.empty()) v.push_back(TabOrderAll().empty() ? 0 : TabOrderAll()[0]);
+    return v;
+}
+inline int TabPos(int t) { const std::vector<int> o = TabOrder(); for (int i = 0; i < (int)o.size(); i++) if (o[i] == t) return i; return 0; }
+// The tab by places along from t (round the ends), and the first and last shown.
+inline int TabStep(int t, int by) { const std::vector<int> o = TabOrder(); const int n = (int)o.size(); return o[((TabPos(t) + by) % n + n) % n]; }
+inline int FirstTab() { return TabOrder().front(); }
+inline int LastTab() { return TabOrder().back(); }
+inline int TabDistance(int from, int to) { return TabPos(to) - TabPos(from); }
+inline std::string TabOrderPath() { const std::string& f = TabsFile(); return f.size() < 4 ? std::string() : f.substr(0, f.size() - 4) + "-order.txt"; }
+inline void LoadTabOrder()
+{
+    TabOrderAll().clear();
+    TabHidden().clear();
+    bool found = false;
+    if (FILE* f = fopen(TabOrderPath().c_str(), "rb"))
+    {
+        char line[4096];
+        while (fgets(line, sizeof line, f))
+        {
+            std::string l = line;
+            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+            const size_t tb = l.find('\t');
+            if (tb == std::string::npos) continue;
+            const std::string key = l.substr(0, tb);
+            if (key != "order" && key != "hidden") continue;
+            if (key == "order") found = true;
+            std::vector<int>& dst = key == "hidden" ? TabHidden() : TabOrderAll();
+            for (size_t at = tb + 1; at < l.size();)
+            {
+                size_t end = l.find(',', at);
+                if (end == std::string::npos) end = l.size();
+                if (end > at) dst.push_back(atoi(l.c_str() + at));
+                at = end + 1;
+            }
+        }
+        fclose(f);
+    }
+    if (!found)
+    {
+        // (As it was: the built-in tabs, the player's own after the one each was moved past.)
+        std::vector<int>& o = TabOrderAll();
+        const std::vector<CustomTab>& tabs = CustomTabs();
+        for (int b = 0; b < TABS; b++)
+        {
+            o.push_back(b);
+            for (int k = 0; k < (int)tabs.size(); k++)
+                if ((tabs[k].after < 0 || tabs[k].after >= TABS ? TABS - 1 : tabs[k].after) == b) o.push_back(TABS + k);
+        }
+    }
+    TabOrderFix();
+}
+inline bool SaveTabOrder()
+{
+    if (TabOrderPath().empty()) return false;
+    TabOrderFix();
+    FILE* f = fopen(TabOrderPath().c_str(), "wb");
+    if (!f) return false;
+    std::string o, h;
+    for (const int t : TabOrderAll()) o += (o.empty() ? "" : ",") + std::to_string(t);
+    for (const int t : TabHidden()) h += (h.empty() ? "" : ",") + std::to_string(t);
+    fprintf(f, "order\t%s\nhidden\t%s\n", o.c_str(), h.c_str());
+    return fclose(f) == 0;
+}
+inline std::string TabsSig()
+{
+    // (Their order and those hidden too: drawn again when one is moved or hidden.)
+    std::string s;
+    for (const CustomTab& t : CustomTabs()) s += t.name + "|" + std::to_string(t.roms.size()) + ";";
+    for (const int t : TabOrderAll()) s += std::to_string(t) + ",";
+    s += "/";
+    for (const int t : TabHidden()) s += std::to_string(t) + ",";
+    return s;
+}
 inline void LoadTabs(const std::string& dir)
 {
     TabsFile() = dir + "/fulldex-tabs.txt";
@@ -86,6 +182,7 @@ inline void LoadTabs(const std::string& dir)
                 if (end == std::string::npos) end = l.size();
                 const std::string part = l.substr(at, end - at);
                 if (t.name.empty() && at == 0) t.name = part;
+                else if (part.rfind("@after=", 0) == 0) t.after = atoi(part.c_str() + 7);
                 else if (!part.empty()) t.roms.push_back(part);
                 at = end + 1;
             }
@@ -93,10 +190,12 @@ inline void LoadTabs(const std::string& dir)
         }
         fclose(f);
     }
+    LoadTabOrder();
 }
 inline bool SaveTabs()
 {
     if (TabsFile().empty()) return false;
+    SaveTabOrder();
     const std::string tmp = TabsFile() + ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
@@ -104,6 +203,7 @@ inline bool SaveTabs()
     for (const CustomTab& t : CustomTabs())
     {
         std::string l = t.name;
+        if (t.after >= 0) l += "\t@after=" + std::to_string(t.after);
         for (const std::string& r : t.roms) l += "\t" + r;
         if (fprintf(f, "%s\n", l.c_str()) < 0) ok = false;
     }
@@ -182,7 +282,7 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     // (The tab bar's tools: which is chosen while onSort (1 +, 2 Search, 3 Sort), where they were drawn; the
                     // keyboard's use (0 a game's name, 1 a new tab (kbRom put in it), 2 the search, 3 tab kbTab's name).)
                     int tool = 3; int toolX[4] = {}, toolW[4] = {}, toolY = 0, toolH = 0;
-                    int kbFor = 0, kbTab = 0; std::string kbRom;
+                    int kbFor = 0, kbTab = 0, menuTab = 0; std::string kbRom;
                     // (The settings drawn as a page: its title; where its list and preview go, for the menu.)
                     std::string pageTitle; int sX = 0, sY = 0, sW = 0, sH = 0, sListW = 0, sPvX = 0; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
@@ -1087,15 +1187,15 @@ inline int FirstIn(const View& v) { return v.spots.empty() ? -1 : v.spots[0].gam
 // and the tab's games as cards below it, all drawn with the pause menu's own glass (glass.h,
 // Menu::FrostBox) and clean font over the chosen game's picture, blurred. Used on landscape
 // screens with the clean font (Glassy); otherwise the classic list (DrawClassic).
-enum Side { SIDE_HOME, SIDE_HUB, SIDE_ROMS, SIDE_UPDATES, SIDE_SETTINGS, SIDE_ABOUT, SIDES }; // (Library is Home: its tabs, Sort)
+enum Side { SIDE_HOME, SIDE_HUB, SIDE_ROMS, SIDE_UPDATES, SIDE_SETTINGS, SIDE_LAUNCHER, SIDE_ABOUT, SIDES }; // (Library is Home: its tabs, Sort)
 inline const char* SideName(int i)
 {
-    static const char* n[] = { "Home", "Hub", "ROMs", "Updates", "Settings", "About" };
+    static const char* n[] = { "Home", "Hub", "ROMs", "Updates", "Settings", "Launcher", "About" };
     return n[i];
 }
 inline int SideIcon(int i)
 {
-    static const int ic[] = { Glass::I_POKEBALL, Glass::I_PEOPLE, Glass::I_CHIP, Glass::I_LOAD, Glass::I_GEAR, Glass::I_INFO };
+    static const int ic[] = { Glass::I_POKEBALL, Glass::I_PEOPLE, Glass::I_CHIP, Glass::I_LOAD, Glass::I_GEAR, Glass::I_LAYOUT, Glass::I_INFO };
     return ic[i];
 }
 inline float GU(const Canvas& c) { return c.h / 720.0f; } // one design pixel (the designs are 1280 x 720)
@@ -1144,10 +1244,11 @@ inline GlassSpots Spots(const Canvas& c)
     auto total = [&]() { int w = 0; for (int t = 0; t < TabCount(); t++) w += GW(TabLabel(t), s.tabFont, true) + (int)pad + (int)(2 * u); return w; };
     while (total() > room && s.tabFont > 12 * u) { s.tabFont -= u; pad = std::max(20 * u, pad - 2 * u); }
     int x = s.tabsX + (int)(4 * u);
-    for (int t = 0; t < TabCount(); t++)
+    s.tabX.assign(TabCount(), 0); s.tabW.assign(TabCount(), 0);
+    for (const int t : TabOrder()) // (in the order shown; each kept at its own number)
     {
         const int w = GW(TabLabel(t), s.tabFont, true) + (int)pad;
-        s.tabX.push_back(x); s.tabW.push_back(w);
+        s.tabX[t] = x; s.tabW[t] = w;
         x += w + (int)(2 * u);
     }
     s.bannerX = s.tabsX; s.bannerY = (int)(90 * u); s.bannerW = c.w - s.bannerX - (int)(28 * u); s.bannerH = (int)(160 * u);
@@ -1168,11 +1269,21 @@ inline int SideAt(const Canvas& c, int x, int y)
     }
     return -1;
 }
+// The banner's Game Options button under a point.
+inline bool GameOptionsAt(const Canvas& c, int x, int y);
 inline bool ContinueAt(const Canvas& c, int x, int y)
 {
     if (!Glassy(c)) return false;
     const GlassSpots s = Spots(c);
     return x >= s.contX && x < s.contX + s.contW && y >= s.contY && y < s.contY + s.contH;
+}
+inline bool GameOptionsAt(const Canvas& c, int x, int y)
+{
+    if (!Glassy(c)) return false;
+    const GlassSpots s = Spots(c);
+    const float u = GU(c);
+    const int ox = s.contX + s.contW + (int)(10 * u), ow = GW("Game Options", 18 * u, true) + (int)(36 * u);
+    return x >= ox && x < ox + ow && y >= s.contY && y < s.contY + s.contH;
 }
 // The game the banner offers: the one played last, if it is still here, else the first that can be played
 // (not the chosen one: the banner would change, and be drawn again, with every press).
@@ -1233,28 +1344,221 @@ inline void DrawCover(Canvas& c, const Game& g, int x, int y, int w, int h, floa
                 if (g.icon[py * 32 + px] >> 24) c.Fill(ox + px * is, oy + py * is, is, is, g.icon[py * 32 + px]);
     }
 }
+// The Launcher page: the launcher's own look (fulldex-look.txt beside the saves): the accent, what is
+// behind it, the cloud on the cards.
+inline std::string& HubDir();
+struct LookPrefs
+{
+    // 0 accent, 1 panels, 2 sidebar, 3 top bar, 4 buttons, 5 the background's own: a colour (a name or
+    // #RRGGBB), a picture (a file in launcher-pictures; "" none), how solid in percent (-1: as the colour has it).
+    std::string col[6] = { "white", "clear", "clear", "clear", "white", "#1E3650" };
+    std::string pic[6];
+    int op[6] = { -1, -1, -1, -1, -1, -1 };
+    std::string backdrop = "game";               // game, custom (the background's own picture or colour), plain
+    int blur = 20, dim = 42, grain = 25;         // percent
+    bool badges = true;
+    bool loaded = false;
+    std::string from;
+    int edit = -1, field = 1;                    // (open: 0 to 5 a colour's wheel, 6 the blur and dim; its row)
+    float h = 0, s = 0, v = 1;
+    int wx = 0, wy = 0, wr = 0;                  // the wheel on screen (taps)
+    int fx[6] = {}, fy[6] = {}, fw = 0, fh = 0;  // its rows
+    int px[9] = {}, py = 0, pd = 0, pn = 0;      // its presets
+    int rowX = 0, rowW = 0;                      // its rows across
+};
+inline LookPrefs& Look() { static LookPrefs l; return l; }
+static const char* const kLookAccents[] = { "white", "red", "blue", "green", "purple", "gold", "pink", "teal" };
+static const char* const kLookPanels[] = { "clear", "dark", "red", "blue", "green", "purple", "gold", "pink", "teal" };
+inline uint32_t Hsv(float h, float s, float v)
+{
+    h = std::fmod(std::fmod(h, 360.0f) + 360.0f, 360.0f) / 60.0f;
+    const int i = (int)h;
+    const float f = h - i, p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f));
+    float r, g, b;
+    switch (i) { case 0: r = v; g = t; b = p; break; case 1: r = q; g = v; b = p; break; case 2: r = p; g = v; b = t; break;
+                 case 3: r = p; g = q; b = v; break; case 4: r = t; g = p; b = v; break; default: r = v; g = p; b = q; }
+    return 0xFF000000u | (uint32_t)(r * 255 + 0.5f) << 16 | (uint32_t)(g * 255 + 0.5f) << 8 | (uint32_t)(b * 255 + 0.5f);
+}
+inline void ToHsv(uint32_t c, float& h, float& s, float& v)
+{
+    const float r = (c >> 16 & 255) / 255.0f, g = (c >> 8 & 255) / 255.0f, b = (c & 255) / 255.0f;
+    const float mx = std::max(r, std::max(g, b)), mn = std::min(r, std::min(g, b)), d = mx - mn;
+    v = mx;
+    s = mx > 0 ? d / mx : 0;
+    if (d <= 0) h = 0;
+    else if (mx == r) h = 60 * std::fmod((g - b) / d + 6, 6.0f);
+    else if (mx == g) h = 60 * ((b - r) / d + 2);
+    else h = 60 * ((r - g) / d + 4);
+}
+// A colour as kept: a name, or #RRGGBB (from the wheel).
+inline uint32_t SpecRgb(const std::string& sp, uint32_t fallback)
+{
+    if (sp.size() == 7 && sp[0] == '#') return 0xFF000000u | (uint32_t)strtoul(sp.c_str() + 1, nullptr, 16);
+    if (sp == "white") return 0xFFFFFFFFu;
+    if (sp == "dark") return 0xFF080C12u;
+    if (sp == "clear") return 0xFF101826u;
+    for (const char* n : { "red", "blue", "green", "purple", "gold", "pink", "teal" }) if (sp == n) return AccentNamed(sp);
+    return fallback;
+}
+inline bool LookHasOp(int e) { return e >= 1 && e <= 4; }
+inline uint32_t LookRgb(int e) { return SpecRgb(Look().col[e], e == 5 ? 0xFF1E3650u : e >= 1 && e <= 3 ? 0xFF101826u : 0xFFFFFFFFu); }
+inline int LookOpacity(int e)
+{
+    const LookPrefs& l = Look();
+    if (l.op[e] >= 0) return l.op[e];
+    if (e == 4 || !l.pic[e].empty()) return e == 4 ? 100 : 90;
+    return l.col[e] == "clear" || l.col[e].empty() ? 19 : l.col[e] == "dark" ? 54 : 29;
+}
+inline uint32_t LookTint(int e) { return (uint32_t)(LookOpacity(e) * 255 / 100) << 24 | (LookRgb(e) & 0xFFFFFFu); }
+inline std::string LookPicPath(const std::string& name)
+{
+    if (name.empty()) return std::string();
+    if (name.find(':') != std::string::npos || name[0] == '/') return name; // (a whole path: the tests')
+    return HubDir() + "/launcher-pictures/" + name;
+}
+// A picture read for the launcher, at most 1920 on a side; its average colour too.
+inline bool LookLoadPicture(const std::string& path, Glass::Picture& b)
+{
+    b = Glass::Picture();
+    std::vector<unsigned char> data;
+    if (path.empty() || !ReadFile(path, data) || !ImageAllowed(data.data(), data.size())) return false;
+    int w = 0, h = 0, n = 0;
+    unsigned char* px = stbi_load_from_memory(data.data(), (int)data.size(), &w, &h, &n, 4);
+    if (!px) return false;
+#ifdef __SWITCH__
+    const int most = 1920; // (the Switch's memory)
+#else
+    const int most = 3840; // (4K)
+#endif
+    const int step = std::max(1, (std::max(w, h) + most - 1) / most);
+    b.w = std::max(1, w / step);
+    b.h = std::max(1, h / step);
+    b.px.resize((size_t)b.w * b.h);
+    uint64_t sr = 0, sg = 0, sb = 0;
+    for (int y = 0; y < b.h; y++)
+        for (int x = 0; x < b.w; x++)
+        {
+            const unsigned char* q = px + ((size_t)y * step * w + (size_t)x * step) * 4;
+            b.px[(size_t)y * b.w + x] = 0xFF000000u | q[0] << 16 | q[1] << 8 | q[2];
+            sr += q[0]; sg += q[1]; sb += q[2];
+        }
+    stbi_image_free(px);
+    const uint64_t cnt = std::max<uint64_t>(1, b.px.size());
+    b.avg = 0xFF000000u | (uint32_t)(sr / cnt) << 16 | (uint32_t)(sg / cnt) << 8 | (uint32_t)(sb / cnt);
+    return true;
+}
+inline void LookApply()
+{
+    LookPrefs& l = Look();
+    Glass::Accent() = LookRgb(0);
+    Glass::Grain() = l.grain;
+    for (int i = 0; i < 3; i++) Glass::Tint(i) = LookTint(i + 1);
+    // (The pictures read again only when changed.)
+    static std::string loaded[4];
+    for (int i = 0; i < 4; i++)
+    {
+        const std::string want = LookPicPath(l.pic[i + 1]);
+        if (want != loaded[i]) { loaded[i] = want; if (!LookLoadPicture(want, Glass::SurfacePic(i))) Glass::SurfacePic(i) = Glass::Picture(); }
+        Glass::SurfaceAlpha(i) = LookOpacity(i + 1) * 255 / 100;
+    }
+    const uint32_t btn = Glass::SurfacePic(3).px.empty() ? LookRgb(4) : Glass::SurfacePic(3).avg;
+    Glass::Button() = (uint32_t)(LookOpacity(4) * 255 / 100) << 24 | (btn & 0xFFFFFFu);
+}
+static const char* const kLookKeys[6] = { "accent", "panel", "sidebar", "topbar", "buttons", "bgcolour" };
+inline void LookFrom(const std::map<std::string, std::string>& p)
+{
+    LookPrefs& l = Look();
+    const LookPrefs d;
+    auto get = [&](const std::string& k, const std::string& def) { const auto it = p.find(k); return it == p.end() ? def : it->second; };
+    for (int i = 0; i < 6; i++)
+    {
+        l.col[i] = get(kLookKeys[i], d.col[i]);
+        l.pic[i] = i == 0 ? std::string() : get(std::string(kLookKeys[i]) + "_pic", "");
+        l.op[i] = LookHasOp(i) ? std::max(-1, std::min(100, atoi(get(std::string(kLookKeys[i]) + "_op", "-1").c_str()))) : -1;
+    }
+    l.backdrop = get("background", "game");
+    if (l.backdrop == "custom") l.backdrop = l.pic[5].empty() ? "colour" : "picture"; // (as it was for a while)
+    if (p.count("softness")) l.blur = std::max(0, std::min(100, atoi(p.at("softness").c_str())));
+    else { static const int was[5] = { 0, 10, 20, 40, 70 }; l.blur = was[std::max(0, std::min(4, atoi(get("blur", "2").c_str())))]; } // (the five steps before)
+    l.dim = std::max(0, std::min(100, atoi(get("dim", "42").c_str())));
+    l.grain = std::max(0, std::min(100, atoi(get("grain", "25").c_str())));
+    l.badges = get("badges", "on") != "off";
+    LookApply();
+}
+inline void LookLoad()
+{
+    LookPrefs& l = Look();
+    if (l.loaded && l.from == HubDir()) return;
+    l.loaded = true;
+    l.from = HubDir();
+    LookFrom(ReadPairs(HubDir() + "/fulldex-look.txt"));
+}
+inline void LookSave()
+{
+    const LookPrefs& l = Look();
+    if (FILE* f = fopen((HubDir() + "/fulldex-look.txt").c_str(), "wb"))
+    {
+        for (int i = 0; i < 6; i++)
+        {
+            fprintf(f, "%s\t%s\n", kLookKeys[i], l.col[i].c_str());
+            if (i > 0) fprintf(f, "%s_pic\t%s\n", kLookKeys[i], l.pic[i].c_str());
+            if (LookHasOp(i)) fprintf(f, "%s_op\t%d\n", kLookKeys[i], l.op[i]);
+        }
+        fprintf(f, "background\t%s\nsoftness\t%d\ndim\t%d\ngrain\t%d\nbadges\t%s\n", l.backdrop.c_str(), l.blur, l.dim, l.grain, l.badges ? "on" : "off");
+        fclose(f);
+    }
+}
 // The background: the chosen game's picture, blurred as the pause menu blurs the paused game
 // (made again only when the game or the window changes); a calm blue without one.
 inline void GlassBackdrop(Canvas& c, const Game* g)
 {
     static std::string key;
     static int kw = 0, kh = 0;
-    const std::string k = g && !g->art.empty() ? g->rom + "#" + std::to_string(g->art[(size_t)Art * Art / 2 + Art / 2]) : std::string();
-    if (k == key && kw == c.w && kh == c.h && c.backdrop.size() == (size_t)c.w * c.h) return;
-    key = k; kw = c.w; kh = c.h;
-    // (Made small, as MakeBackdrop blurs at a fraction of the size anyway, then drawn up by it.)
+    LookLoad();
+    const LookPrefs& lp = Look();
+    const bool custom = lp.backdrop == "colour", own = lp.backdrop == "picture" && !lp.pic[5].empty(), plain = lp.backdrop == "plain" || (lp.backdrop == "picture" && lp.pic[5].empty());
+    const std::string k = !custom && !plain && g && !g->art.empty() ? g->rom + "#" + std::to_string(g->art[(size_t)Art * Art / 2 + Art / 2]) : std::string();
+    const std::string kk = k + "|" + lp.backdrop + "|" + std::to_string(lp.blur) + "|" + std::to_string(lp.dim) + "|" + lp.col[5] + "|" + lp.pic[5] + "|" + HubDir();
+    if (kk == key && kw == c.w && kh == c.h && c.backdrop.size() == (size_t)c.w * c.h) return;
+    key = kk; kw = c.w; kh = c.h;
+    // (A colour of the player's own: just that, as chosen.)
+    if (custom && !own) { c.backdrop.assign((size_t)c.w * c.h, LookRgb(5)); return; }
     std::vector<uint32_t> src((size_t)c.w * c.h);
-    if (!k.empty())
+    // (Your picture: read once, again when it changes; then only blurred and dimmed as chosen.)
+    static Glass::Picture pic;
+    static std::string picName = "\x01";
+    const std::string want = own ? LookPicPath(lp.pic[5]) : std::string();
+    if (own && want != picName) { picName = want; LookLoadPicture(want, pic); }
+    if (own && !pic.px.empty()) Glass::FitCover(pic, c.w, c.h, src.data());
+    else if (!k.empty())
     {
         const float sc = std::max(c.w, c.h) / (float)Art;
+        // (Scaled up smoothly: the picture is small, and with Background Blur off it shows as it is.)
         for (int y = 0; y < c.h; y++)
         {
-            const int sy = std::max(0, std::min(Art - 1, (int)((y - c.h * 0.5f) / sc + Art * 0.5f)));
+            const float fy = std::max(0.0f, std::min((float)(Art - 1), (y - c.h * 0.5f) / sc + Art * 0.5f - 0.5f));
+            const int y0 = (int)fy, y1 = std::min(Art - 1, y0 + 1);
+            const float wy = fy - y0;
             for (int x = 0; x < c.w; x++)
             {
-                const int sx = std::max(0, std::min(Art - 1, (int)((x - c.w * 0.5f) / sc + Art * 0.5f)));
-                const uint32_t p = g->art[(size_t)sy * Art + sx];
-                src[(size_t)y * c.w + x] = Glass::Over(0xFF1C2A3Au, p | 0xFF000000u, (int)(p >> 24));
+                if (Look().blur > 0)
+                {
+                    // (Blurred anyway: the nearest pixel, quicker, as the Switch makes this on every move.)
+                    const int sx = std::max(0, std::min(Art - 1, (int)((x - c.w * 0.5f) / sc + Art * 0.5f)));
+                    const uint32_t p = g->art[(size_t)std::max(0, std::min(Art - 1, (int)((y - c.h * 0.5f) / sc + Art * 0.5f))) * Art + sx];
+                    src[(size_t)y * c.w + x] = Glass::Over(0xFF1C2A3Au, p | 0xFF000000u, (int)(p >> 24));
+                    continue;
+                }
+                const float fx = std::max(0.0f, std::min((float)(Art - 1), (x - c.w * 0.5f) / sc + Art * 0.5f - 0.5f));
+                const int x0 = (int)fx, x1 = std::min(Art - 1, x0 + 1);
+                const float wx = fx - x0;
+                const uint32_t q[4] = { g->art[(size_t)y0 * Art + x0], g->art[(size_t)y0 * Art + x1], g->art[(size_t)y1 * Art + x0], g->art[(size_t)y1 * Art + x1] };
+                const float k[4] = { (1 - wx) * (1 - wy), wx * (1 - wy), (1 - wx) * wy, wx * wy };
+                float ch[4] = {};
+                for (int i = 0; i < 4; i++)
+                    for (int j = 0; j < 4; j++) ch[j] += k[i] * (float)(q[i] >> (24 - 8 * j) & 255);
+                const uint32_t p = (uint32_t)ch[1] << 16 | (uint32_t)ch[2] << 8 | (uint32_t)ch[3];
+                src[(size_t)y * c.w + x] = Glass::Over(0xFF1C2A3Au, p | 0xFF000000u, (int)ch[0]);
             }
         }
     }
@@ -1266,7 +1570,7 @@ inline void GlassBackdrop(Canvas& c, const Game* g)
                 const int r = (int)(0x1E + t * 0x18), gg = (int)(0x36 + t * 0x30), b = (int)(0x5A + t * 0x10);
                 src[(size_t)y * c.w + x] = 0xFF000000u | (r << 16) | (gg << 8) | b;
             }
-    Glass::MakeBackdrop(c.backdrop, src.data(), c.w, c.h);
+    Glass::MakeBackdrop(c.backdrop, src.data(), c.w, c.h, Look().blur, Look().dim);
 }
 
 // The ROMs page's list: every ROM found, those taken off the list too (hidden), with the player's names
@@ -1377,18 +1681,52 @@ inline void OpenAddToTab(const std::string& rom)
     F.drow = 0;
     F.kbRom = rom;
 }
-// A tab of the player's own (A on it): Rename, Move Left, Move Right, Delete Tab, Close.
-inline void OpenTabMenu(int k)
+// A on a tab: Move Left, Move Right, Hide Tab; a tab of the player's own also Rename and Delete.
+inline void OpenTabMenu(int t)
 {
     GlassFocus& F = Focus();
-    if (k < 0 || k >= (int)CustomTabs().size()) return;
-    F.dTitle = CustomTabs()[k].name;
-    F.dMsg = "A tab of your own. Deleting it keeps its games.";
-    F.dItems = { "Rename Tab", "Move Left", "Move Right", "Delete Tab", "Close" };
-    F.dPaths = { "#rename", "#left", "#right", "#delete", "#close" };
+    if (t < 0 || t >= TabCount()) return;
+    F.dTitle = TabLabel(t);
+    F.menuTab = t;
+    F.kbTab = t >= TABS ? t - TABS : -1;
+    if (t >= TABS)
+    {
+        F.dMsg = "A tab of your own. Deleting it keeps its games.";
+        F.dItems = { "Rename Tab", "Move Left", "Move Right", "Hide Tab", "Delete Tab", "Close" };
+        F.dPaths = { "#rename", "#left", "#right", "#hide", "#delete", "#close" };
+    }
+    else
+    {
+        F.dMsg = "A built-in tab: it can be moved or hidden, never deleted. + shows a hidden one again.";
+        F.dItems = { "Move Left", "Move Right", "Hide Tab", "Close" };
+        F.dPaths = { "#left", "#right", "#hide", "#close" };
+    }
     F.dialog = 9;
     F.drow = 0;
-    F.kbTab = k;
+}
+// + on the tab bar with tabs hidden: a new one, or one shown again (and the list of those hidden).
+inline void OpenPlusMenu()
+{
+    GlassFocus& F = Focus();
+    F.dialog = 13;
+    F.drow = 0;
+    F.dTitle = "Tabs";
+    F.dMsg = "Make a new tab, or show one you hid.";
+    F.dItems = { "New Tab", "Show A Hidden Tab", "Cancel" };
+    F.dPaths = { "#newtab", "#unhidelist", "#close" };
+}
+inline void OpenUnhideTabs()
+{
+    GlassFocus& F = Focus();
+    F.dialog = 14;
+    F.drow = 0;
+    F.dTitle = "Show A Hidden Tab";
+    F.dMsg = "It goes back where it was.";
+    F.dItems.clear();
+    F.dPaths.clear();
+    for (const int t : TabHidden()) { F.dItems.push_back(TabLabel(t)); F.dPaths.push_back("#unhide:" + std::to_string(t)); }
+    F.dItems.push_back("Cancel");
+    F.dPaths.push_back("#close");
 }
 // A row of those two chosen (pick: its path). tab: the tab shown, moved with its tab. Returns 1 when
 // the dialog stays (made again), 2 when the keyboard opens (dialog 3, kbFor set), else 0 (closed).
@@ -1413,27 +1751,56 @@ inline int TabDialogPick(const std::string& pick, int& tab, std::string& note)
         return 1;
     }
     if (pick == "#new") { F.kbFor = 1; F.text.clear(); F.dialog = 3; F.drow = 0; return 2; }
-    const int k = F.kbTab;
-    if (k < 0 || k >= (int)tabs.size()) { F.dialog = 0; return 0; }
-    if (pick == "#rename") { F.kbFor = 3; F.text = tabs[k].name; F.dialog = 3; F.drow = 0; return 2; }
+    if (pick == "#newtab") { F.kbRom.clear(); F.kbFor = 1; F.text.clear(); F.dialog = 3; F.drow = 0; return 2; }
+    if (pick == "#unhidelist") { OpenUnhideTabs(); return 1; }
+    if (pick.rfind("#unhide:", 0) == 0)
+    {
+        const int t = atoi(pick.c_str() + 8);
+        std::vector<int>& h = TabHidden();
+        h.erase(std::remove(h.begin(), h.end(), t), h.end());
+        if (t >= 0 && t < TabCount()) tab = t;
+        note = SaveTabOrder() ? "TAB SHOWN AGAIN" : "COULD NOT SAVE THE TABS";
+        F.dialog = 0;
+        return 0;
+    }
+    const int t = F.menuTab, k = t - TABS;
+    if (t < 0 || t >= TabCount()) { F.dialog = 0; return 0; }
+    if (pick == "#rename" && k >= 0) { F.kbTab = k; F.kbFor = 3; F.text = tabs[k].name; F.dialog = 3; F.drow = 0; return 2; }
     if (pick == "#left" || pick == "#right")
     {
-        const int to = pick == "#left" ? k - 1 : k + 1;
-        if (to < 0 || to >= (int)tabs.size()) return 1;
-        std::swap(tabs[k], tabs[to]);
-        if (tab == TABS + k) tab = TABS + to;
-        else if (tab == TABS + to) tab = TABS + k;
-        if (!SaveTabs()) note = "COULD NOT SAVE THE TABS";
+        // (Past the next tab shown, any of them; the hidden ones keep their places.)
+        const bool left = pick == "#left";
+        const std::vector<int> ord = TabOrder();
+        const int np = TabPos(t) + (left ? -1 : 1);
+        if (np < 0 || np >= (int)ord.size()) { note = left ? "AS FAR LEFT AS IT GOES" : "AS FAR RIGHT AS IT GOES"; return 1; }
+        std::vector<int>& all = TabOrderAll();
+        const auto a = std::find(all.begin(), all.end(), t), b = std::find(all.begin(), all.end(), ord[(size_t)np]);
+        if (a != all.end() && b != all.end()) std::iter_swap(a, b);
+        if (!SaveTabOrder()) note = "COULD NOT SAVE THE TABS";
         const int keep = F.drow;
-        OpenTabMenu(to);
+        OpenTabMenu(t);
         F.drow = keep;
         return 1;
     }
-    if (pick == "#delete")
+    if (pick == "#hide")
     {
+        if (TabOrder().size() <= 1) { note = "ONE TAB MUST STAY SHOWN"; return 1; }
+        const int next = TabStep(t, 1);
+        TabHidden().push_back(t);
+        if (tab == t) tab = next;
+        note = SaveTabOrder() ? "TAB HIDDEN. + SHOWS IT AGAIN" : "COULD NOT SAVE THE TABS";
+        F.dialog = 0;
+        return 0;
+    }
+    if (pick == "#delete" && k >= 0 && k < (int)tabs.size())
+    {
+        // (Its place in the order gone; the player's own after it one number down.)
+        auto renum = [t](std::vector<int>& v) { std::vector<int> o; for (const int x : v) if (x != t) o.push_back(x > t ? x - 1 : x); v = o; };
+        renum(TabOrderAll());
+        renum(TabHidden());
         tabs.erase(tabs.begin() + k);
-        if (tab == TABS + k) tab = TAB_ALL;
-        else if (tab > TABS + k) tab--;
+        if (tab == t) tab = FirstTab();
+        else if (tab > t) tab--;
         note = SaveTabs() ? "TAB DELETED. ITS GAMES ARE KEPT" : "COULD NOT SAVE THE TABS";
         F.dialog = 0;
         return 0;
@@ -2183,6 +2550,237 @@ inline bool HubEnter(int row)
     return true;
 }
 inline bool HubTop() { return !Mover().open && HubMode() == 0; }
+// The Launcher page's rows changed (A: the next choice, or one's own page opened), and kept.
+inline std::string LookName(const std::string& v)
+{
+    if (v == "game") return "Game Art";
+    if (v == "picture") return "Your Picture";
+    if (!v.empty() && v[0] == '#') return "Custom";
+    std::string o = v;
+    if (!o.empty()) o[0] = (char)toupper((unsigned char)o[0]);
+    return o;
+}
+// What a row's page holds: a picture, presets, the wheel's three bars, how solid; or the blur and dim.
+enum { LF_PIC, LF_PRESET, LF_HUE, LF_SAT, LF_VAL, LF_OP, LF_BLUR, LF_DIM, LF_GRAIN, LF_SOURCE };
+inline std::vector<int> LookFieldList(int e)
+{
+    if (e == 6) return { LF_GRAIN };
+    if (e == 0) return { LF_PRESET, LF_HUE, LF_SAT, LF_VAL };
+    if (e == 5) return { LF_SOURCE, LF_PIC, LF_PRESET, LF_HUE, LF_SAT, LF_VAL, LF_BLUR, LF_DIM };
+    return { LF_PIC, LF_PRESET, LF_HUE, LF_SAT, LF_VAL, LF_OP };
+}
+inline const char* const* LookPresets(int e, int& n) { if (e >= 1 && e <= 3) { n = 9; return kLookPanels; } n = 8; return kLookAccents; }
+// The pictures to choose from: PNG and JPG files in launcher-pictures with the saves.
+inline std::vector<std::string> LookPictures()
+{
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(HubDir() + "/launcher-pictures", ec))
+    {
+        std::string n = e.path().filename().string(), low = n;
+        for (char& ch : low) ch = (char)tolower((unsigned char)ch);
+        const auto ends = [&](const char* x) { const size_t k = strlen(x); return low.size() > k && low.compare(low.size() - k, k, x) == 0; };
+        if (e.is_regular_file(ec) && (ends(".png") || ends(".jpg") || ends(".jpeg"))) out.push_back(n);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+inline void LookSetHsv()
+{
+    LookPrefs& l = Look();
+    char hex[8];
+    snprintf(hex, sizeof hex, "#%06X", (unsigned)(Hsv(l.h, l.s, l.v) & 0xFFFFFFu));
+    l.col[l.edit] = hex;
+    l.pic[l.edit].clear(); // (a colour chosen: the colour, not the picture)
+    if (l.edit == 5) l.backdrop = "colour";
+    LookApply();
+}
+inline void LookSyncHsv() { LookPrefs& l = Look(); if (l.edit >= 0 && l.edit < 6) ToHsv(LookRgb(l.edit), l.h, l.s, l.v); }
+inline int LookFieldIndex(int e, int id) { const auto f = LookFieldList(e); for (size_t i = 0; i < f.size(); i++) if (f[i] == id) return (int)i; return 0; }
+inline void LookOpen(int e) { LookPrefs& l = Look(); l.edit = e; l.field = e == 6 || e == 5 ? 0 : LookFieldIndex(e, LF_HUE); LookSyncHsv(); }
+inline void LookPicked(int e) // (a picture chosen: shown fairly solid; a background one hardly dimmed)
+{
+    LookPrefs& l = Look();
+    if (e == 5 && l.dim == 42) l.dim = 10;
+    LookApply();
+}
+inline void LookNextPicture(int d)
+{
+    LookPrefs& l = Look();
+    const std::vector<std::string> pics = LookPictures();
+    int i = -1;
+    for (size_t k = 0; k < pics.size(); k++) if (pics[k] == l.pic[l.edit]) i = (int)k;
+    const int n = (int)pics.size() + 1; // (and None)
+    i = ((i + 1) + d + n) % n;
+    l.pic[l.edit] = i == 0 ? std::string() : pics[i - 1];
+    if (l.edit == 5 && !l.pic[5].empty()) l.backdrop = "picture";
+    if (!l.pic[l.edit].empty()) LookPicked(l.edit); else LookApply();
+}
+// The background's Show: Game Art, Your Picture, Colour, Plain.
+inline void LookCycleSource(int d)
+{
+    static const char* const b[] = { "game", "picture", "colour", "plain" };
+    LookPrefs& l = Look();
+    int i = 0;
+    for (int k = 0; k < 4; k++) if (l.backdrop == b[k]) i = k;
+    l.backdrop = b[(i + d + 4) % 4];
+}
+// A on a row: 3 when a picture is wanted from the system's picker (the PC's).
+inline int LookDo(int row, int dir)
+{
+    LookLoad();
+    LookPrefs& l = Look();
+    int out = 0;
+    if (l.edit >= 0)
+    {
+        if (l.edit != 6 && LookFieldList(l.edit)[l.field] == LF_PIC)
+        {
+#ifdef __SWITCH__
+            LookNextPicture(1); LookSave(); Hub().version++; return 0;
+#else
+            return 3;
+#endif
+        }
+        l.edit = -1; LookSave(); Hub().version++; return 0;
+    }
+    if (row <= 6) { LookOpen(row); Hub().version++; return 0; } // (each opens its own page)
+    if (row == 7) l.badges = !l.badges;
+    (void)dir;
+    LookSave();
+    Hub().version++; // (drawn again)
+    return out;
+}
+// A picture from the system's picker, copied into launcher-pictures and used for the open row.
+inline bool LookAddPicture(const std::string& path)
+{
+    LookPrefs& l = Look();
+    if (l.edit < 1 || l.edit > 5) return false;
+    std::vector<unsigned char> data;
+    if (!ReadFile(path, data) || !ImageAllowed(data.data(), data.size())) return false;
+    std::error_code ec;
+    std::filesystem::create_directories(HubDir() + "/launcher-pictures", ec);
+    const std::string name = std::filesystem::path(path).filename().string();
+    FILE* f = fopen((HubDir() + "/launcher-pictures/" + name).c_str(), "wb");
+    if (!f) return false;
+    const bool ok = fwrite(data.data(), 1, data.size(), f) == data.size();
+    fclose(f);
+    if (!ok) return false;
+    l.pic[l.edit] = name;
+    if (l.edit == 5) l.backdrop = "picture";
+    LookPicked(l.edit);
+    LookSave();
+    Hub().version++;
+    return true;
+}
+// The arrows while a row's page is open: up and down its rows, left and right change that one.
+inline void LookMove(int dir)
+{
+    LookPrefs& l = Look();
+    const int e = l.edit;
+    const std::vector<int> fl = LookFieldList(e);
+    if (dir == 3) l.field = std::max(0, l.field - 1);
+    else if (dir == 4) l.field = std::min((int)fl.size() - 1, l.field + 1);
+    else
+    {
+        const int d = dir == 2 ? 1 : -1, id = fl[l.field];
+        if (id == LF_BLUR) l.blur = std::max(0, std::min(100, l.blur + d * (l.blur + (d > 0 ? 0 : -1) < 10 ? 1 : 5)));
+        else if (id == LF_DIM) l.dim = std::max(0, std::min(100, l.dim + d * 5));
+        else if (id == LF_GRAIN) { l.grain = std::max(0, std::min(100, l.grain + d * 5)); Glass::Grain() = l.grain; }
+        else if (id == LF_SOURCE) LookCycleSource(d);
+        else if (id == LF_PIC) LookNextPicture(d);
+        else if (id == LF_PRESET)
+        {
+            int n = 0;
+            const char* const* list = LookPresets(e, n);
+            int i = -1;
+            for (int k = 0; k < n; k++) if (l.col[e] == list[k]) i = k;
+            i = i < 0 ? (d > 0 ? 0 : n - 1) : (i + d + n) % n;
+            l.col[e] = list[i];
+            l.pic[e].clear();
+            if (e == 5) l.backdrop = "colour";
+            if (l.col[e] == "clear" || l.col[e] == "dark") l.op[e] = -1;
+            LookSyncHsv();
+            LookApply();
+        }
+        else if (id == LF_HUE) { l.h = std::fmod(l.h + d * 6.0f + 360.0f, 360.0f); if (l.s < 0.1f) l.s = 0.75f; if (l.v < 0.2f) l.v = 1; LookSetHsv(); } // (white or black: a colour shown as the hue moves)
+        else if (id == LF_SAT) { l.s = std::max(0.0f, std::min(1.0f, l.s + d * 0.05f)); LookSetHsv(); }
+        else if (id == LF_VAL) { l.v = std::max(0.0f, std::min(1.0f, l.v + d * 0.05f)); LookSetHsv(); }
+        else { l.op[e] = std::max(0, std::min(100, LookOpacity(e) + d * 5)); LookApply(); }
+    }
+    Hub().version++;
+}
+// A tap or click on an open row's page: 1 done, 3 a picture wanted from the system's picker, 0 not on it.
+inline int LookTap(int x, int y)
+{
+    LookPrefs& l = Look();
+    if (Focus().page != SIDE_LAUNCHER || l.edit < 0) return 0;
+    const int e = l.edit;
+    const std::vector<int> fl = LookFieldList(e);
+    bool hit = false;
+    const float dx = (float)(x - l.wx), dy = (float)(y - l.wy), d = std::sqrt(dx * dx + dy * dy);
+    if (e != 6 && l.wr > 0 && d <= l.wr + 4)
+    {
+        l.h = std::fmod(std::atan2(dy, dx) * 57.29578f + 360.0f, 360.0f);
+        l.s = std::max(0.0f, std::min(1.0f, d / l.wr));
+        if (l.v < 0.2f) l.v = 1;
+        l.field = LookFieldIndex(e, LF_HUE);
+        LookSetHsv();
+        hit = true;
+    }
+    for (int k = 0; k < (int)fl.size() && !hit; k++)
+    {
+        const int id = fl[k];
+        if (id == LF_PRESET) continue;
+        if (id == LF_SOURCE)
+        {
+            if (y >= l.fy[k] && y < l.fy[k] + l.fh && x >= l.rowX && x < l.rowX + l.rowW) { l.field = k; LookCycleSource(1); hit = true; }
+            continue;
+        }
+        if (id == LF_PIC)
+        {
+            if (y >= l.fy[k] && y < l.fy[k] + l.fh && x >= l.rowX && x < l.rowX + l.rowW)
+            {
+                l.field = k;
+#ifdef __SWITCH__
+                LookNextPicture(1);
+                hit = true;
+#else
+                Hub().version++;
+                return 3;
+#endif
+            }
+            continue;
+        }
+        if (l.fw > 0 && x >= l.fx[k] - 6 && x < l.fx[k] + l.fw + 6 && y >= l.fy[k] && y < l.fy[k] + l.fh)
+        {
+            const float t = std::max(0.0f, std::min(1.0f, (float)(x - l.fx[k]) / l.fw));
+            l.field = k;
+            if (id == LF_BLUR) l.blur = (int)(t * 100 + 0.5f);
+            else if (id == LF_DIM) l.dim = (int)(t * 100 + 0.5f);
+            else if (id == LF_GRAIN) { l.grain = (int)(t * 100 + 0.5f); Glass::Grain() = l.grain; }
+            else if (id == LF_HUE) { l.h = t * 359.0f; if (l.s < 0.1f) l.s = 0.75f; if (l.v < 0.2f) l.v = 1; LookSetHsv(); }
+            else if (id == LF_SAT) { l.s = t; LookSetHsv(); }
+            else if (id == LF_VAL) { l.v = t; LookSetHsv(); }
+            else { l.op[e] = (int)(t * 100 + 0.5f); LookApply(); }
+            hit = true;
+        }
+    }
+    for (int i = 0; i < l.pn && !hit; i++)
+        if (x >= l.px[i] - 3 && x < l.px[i] + l.pd + 3 && y >= l.py - 3 && y < l.py + l.pd + 3)
+        {
+            int n = 0;
+            l.col[e] = LookPresets(e, n)[i];
+            l.pic[e].clear();
+            if (e == 5) l.backdrop = "colour";
+            if (l.col[e] == "clear" || l.col[e] == "dark") l.op[e] = -1;
+            LookSyncHsv();
+            LookApply();
+            l.field = LookFieldIndex(e, LF_PRESET);
+            hit = true;
+        }
+    if (hit) { LookSave(); Hub().version++; }
+    return hit ? 1 : 0;
+}
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
 inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 4 : HubMode() == 2 ? TradeRows() : HUB_FIRST + (int)HubGames().size(); }
@@ -2395,7 +2993,29 @@ inline void OpenBeer()
     F.dPaths = { "#beer", "#close" };
 #endif
 }
-inline int PageRows(int page) { return page == SIDE_ABOUT ? 5 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
+// B on the launcher's games: asked first (Quit or Cancel), as the list is left from there.
+inline void OpenQuitAsk()
+{
+    GlassFocus& F = Focus();
+    F.dialog = 11;
+    F.drow = 1;
+    F.dTitle = "Quit Fulldex?";
+    F.dMsg = "Are you sure you want to quit?";
+    F.dItems = { "Quit", "Cancel" };
+    F.dPaths = { "#quit", "#close" };
+}
+// Support on the About page (a PC): which page to open.
+inline void OpenSupportAsk()
+{
+    GlassFocus& F = Focus();
+    F.dialog = 12;
+    F.drow = 0;
+    F.dTitle = "Support Fulldex";
+    F.dMsg = "Thank you! Which would you like to open in your browser?";
+    F.dItems = { "Buy Me A Coffee", "PayPal", "Close" };
+    F.dPaths = { "#open:https://buymeacoffee.com/mamesj", "#open:https://paypal.me/mamesj", "#close" };
+}
+inline int PageRows(int page) { return page == SIDE_LAUNCHER ? 8 : page == SIDE_ABOUT ? 5 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
 inline std::string AboutUrl(int row)
 {
     return row == 0 ? "https://buymeacoffee.com/mamesj" : row == 2 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 4 ? "https://github.com/mamesj/pokemon-fulldex" : "";
@@ -2434,6 +3054,7 @@ inline bool PageMove(int dir)
         else if (dir == 2) F.side = -1;
         return true;
     }
+    if (F.page == SIDE_LAUNCHER && Look().edit >= 0) { LookMove(dir); return true; } // (the colour wheel)
     if (F.page == SIDE_ROMS || F.page == SIDE_HUB)
     {
         // (The list, and right of it the chosen row's actions: a ROM's, or the Hub's.)
@@ -2488,6 +3109,7 @@ inline bool PageBack()
 {
     GlassFocus& F = Focus();
     if (F.page < 0) return false;
+    if (F.page == SIDE_LAUNCHER && Look().edit >= 0) { Look().edit = -1; LookSave(); Hub().version++; return true; } // (the colour wheel closed)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
@@ -2621,7 +3243,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? "Launcher" : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -2683,7 +3305,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (i == F.prow)
             {
                 if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
-                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             uint32_t col = 0;
             const std::string st = status(g, col);
@@ -2754,7 +3376,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 if (a == F.pact)
                 {
                     if (F.side < 0) Glass::Glow(c, ix, ry, iw, ah, 12 * u, u);
-                    Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                    Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
                 }
                 else Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
                 Glass::DrawIcon(c, icons[a], ix + 22 * u, ry + ah * 0.5f, 9 * u, text);
@@ -2823,7 +3445,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (i == F.prow)
             {
                 if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
-                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             std::string k, v, chip, spn;
             uint32_t chipCol = hint;
@@ -2966,13 +3588,209 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (a == F.pact)
             {
                 if (F.side < 0) Glass::Glow(c, ix, ry, iw, ah, 12 * u, u);
-                Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             else Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
             const int icon = F.prow == 1 ? Glass::I_GRID : F.prow == 2 ? (acts[a] == "Leave" || acts[a] == "Not Yet" || acts[a] == "Stop Looking" || acts[a] == "Close The Room" || acts[a] == "Take Back My Offer" ? Glass::I_BACK : Glass::I_GLOBE) : F.prow >= TRADE_FIRST ? Glass::I_PEOPLE : Glass::I_POKEBALL;
             Glass::DrawIcon(c, icon, ix + 22 * u, ry + ah * 0.5f, 9 * u, text);
             GT(c, ix + (int)(42 * u), ry + ah * 0.5f, fit(acts[a], 15 * u, true, iw - (int)(60 * u)), 15 * u, text, true);
         }
+        return;
+    }
+    if (F.page == SIDE_LAUNCHER)
+    {
+        // The Launcher page: the launcher's own look, each row opened with A (its colour, picture, blur).
+        LookLoad();
+        LookPrefs& lk = Look();
+        const int rw = (int)(400 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(14 * u);
+        const int rowH = (int)(58 * u), rg = (int)(8 * u), n = 8;
+        Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
+        if (lk.edit >= 0) F.prow = lk.edit;
+        F.prow = std::max(0, std::min(F.prow, n - 1));
+        F.pact = -1;
+        F.rScroll = 0;
+        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = n;
+        F.aW = 0;
+        static const char* const names[8] = { "Accent", "Panels", "Sidebar", "Top Bar", "Buttons", "Background", "Grain", "Cloud Badges" };
+        static const char* const subs[8] = { "The frame round what is chosen, and its glow", "The glass panels: a colour or a picture, see-through to solid",
+                                             "The bar down the left: a colour or a picture", "The bar along the top: a colour or a picture",
+                                             "Play, Continue, the chosen tab and the button marks at the bottom", "Game art, your own picture or a colour; its blur and dim",
+                                             "The fine speckle in the glass panels", "A cloud on the cards of games whose saves sync" };
+        static const int icons[8] = { Glass::I_SPARKLE, Glass::I_LAYERS, Glass::I_LAYOUT, Glass::I_WINDOW, Glass::I_PLAY, Glass::I_SCREENS, Glass::I_GAUGE, Glass::I_GLOBE };
+        for (int i = 0; i < n; i++)
+        {
+            const int rx = L + pad, ry = top + pad + i * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+            if (i == F.prow)
+            {
+                if (F.side < 0 && lk.edit < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
+            }
+            else Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+            std::string st;
+            if (i == 0) st = LookName(lk.col[0]);
+            else if (i <= 4) { st = lk.pic[i].empty() ? LookName(lk.col[i]) : "Picture"; if (lk.op[i] >= 0 || !lk.pic[i].empty()) st += "  " + std::to_string(LookOpacity(i)) + "%"; }
+            else if (i == 5) st = LookName(lk.backdrop) + "   Blur " + std::to_string(lk.blur) + "%   Dim " + std::to_string(lk.dim) + "%";
+            else if (i == 6) st = std::to_string(lk.grain) + "%";
+            else st = lk.badges ? "On" : "Off";
+            Glass::DrawIcon(c, icons[i], rx + 28 * u, mid, 11 * u, text);
+            GT(c, rx + (int)(56 * u), mid - 9 * u, names[i], 17 * u, text, true);
+            GT(c, rx + (int)(56 * u), mid + 11 * u, subs[i], 12 * u, hint, false);
+            const bool hasDot = i <= 4 || (i == 5 && lk.backdrop == "colour");
+            const int dot = hasDot ? (int)(14 * u) : 0;
+            const int chipW = GW(st, 12 * u, true) + (int)(20 * u) + (dot ? dot + (int)(6 * u) : 0), chipX = rx + rww - (int)(42 * u) - chipW;
+            Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+            if (dot)
+            {
+                const uint32_t dc = i >= 1 && i <= 4 && !lk.pic[i].empty() ? Glass::SurfacePic(i - 1).avg : LookRgb(i <= 4 ? i : 5);
+                Glass::Round(c, chipX + (int)(8 * u), mid - dot / 2, dot, dot, dot * 0.5f, dc, 0xB0FFFFFFu, 1.0f * u);
+            }
+            GT(c, chipX + (int)(10 * u) + (dot ? dot + (int)(6 * u) : 0), mid, st, 12 * u, i == 7 && !lk.badges ? 0xFFAEB7C4u : text, true);
+            GT(c, rx + rww - (int)(24 * u), mid, ">", 15 * u, hint, true);
+        }
+        // The chosen one: what it does; its own page when open.
+        const int dx = R - rw, ix = dx + (int)(22 * u), iw = rw - (int)(44 * u);
+        Menu::FrostBox(c, solid, dx, top, rw, bottom - top, 18 * u);
+        int y = top + (int)(22 * u);
+        auto para = [&](const std::string& s, uint32_t col, float px) {
+            for (const std::string& line : WrapLines(s, px, iw)) { GT(c, ix, y + px * 0.6f, line, px, col, false); y += (int)(px * 1.45f); }
+            y += (int)(8 * u);
+        };
+        GT(c, ix, y + 14 * u, names[F.prow], 22 * u, text, true);
+        y += (int)(44 * u);
+        lk.wr = 0; lk.fw = 0; lk.pn = 0;
+        // A bar: its colours along it, a white knob at t.
+        auto bar = [&](int k, int fy, int bx, int bw, int fh, float t, auto colourAt) {
+            const int fm = fy + fh / 2, bh = (int)(12 * u), by = fm - bh / 2;
+            for (int xx = 0; xx < bw; xx++) c.Fill(bx + xx, by, 1, bh, colourAt((float)xx / std::max(1, bw - 1)));
+            Glass::Round(c, bx, by, bw, bh, bh * 0.5f, 0, 0x80FFFFFFu, 1.0f * u);
+            const int hx = bx + (int)(t * (bw - 1)), hr = (int)(8 * u);
+            Glass::Round(c, hx - hr, fm - hr, 2 * hr, 2 * hr, (float)hr, 0xFFFFFFFFu, 0xFF18222Eu, 1.5f * u);
+            lk.fx[k] = bx; lk.fy[k] = fy;
+        };
+        if (lk.edit >= 0)
+        {
+            const int e = lk.edit;
+            const std::vector<int> fl = LookFieldList(e);
+            if (e == 6) para("The fine speckle in the frosted glass panels: 0% makes them smooth, 25% is as they were, 100% is four times as strong.", text, 14 * u);
+            else
+            {
+                // The wheel: round the edge the colours, out from the middle stronger; at the Brightness below.
+                const int D = std::min(iw - (int)(40 * u), fl.size() >= 8 ? (int)(96 * u) : fl.size() >= 6 ? (int)(128 * u) : fl.size() == 5 ? (int)(146 * u) : (int)(170 * u)), wr = D / 2, wcx = ix + iw / 2, wcy = y + wr;
+                for (int py = -wr - 1; py <= wr + 1; py++)
+                {
+                    const int yy = wcy + py;
+                    if (yy < 0 || yy >= c.h) continue;
+                    for (int qx = -wr - 1; qx <= wr + 1; qx++)
+                    {
+                        const int xx = wcx + qx;
+                        if (xx < 0 || xx >= c.w) continue;
+                        const float dd = std::sqrt((float)(qx * qx + py * py));
+                        const float a = std::max(0.0f, std::min(1.0f, wr - dd + 0.5f));
+                        if (a <= 0) continue;
+                        uint32_t& dst = c.px[(size_t)yy * c.w + xx];
+                        dst = Glass::Over(dst, Hsv(std::atan2((float)py, (float)qx) * 57.29578f, std::min(1.0f, dd / wr), lk.v), (int)(a * 255));
+                    }
+                }
+                const float ang = lk.h / 57.29578f;
+                const int mx = wcx + (int)(std::cos(ang) * lk.s * wr), my = wcy + (int)(std::sin(ang) * lk.s * wr), mr = (int)(9 * u);
+                Glass::Round(c, mx - mr, my - mr, 2 * mr, 2 * mr, (float)mr, Hsv(lk.h, lk.s, lk.v), 0xFFFFFFFFu, 2.5f * u);
+                lk.wx = wcx; lk.wy = wcy; lk.wr = wr;
+                y += D + (int)(12 * u);
+            }
+            const int fh = (int)(30 * u), bx = ix + (int)(100 * u), bw = iw - (int)(104 * u);
+            lk.fw = bw; lk.fh = fh; lk.rowX = ix - (int)(8 * u); lk.rowW = iw + (int)(16 * u);
+            for (int k = 0; k < (int)fl.size(); k++)
+            {
+                const int id = fl[k], fy = y + k * (fh + (int)(5 * u)), fm = fy + fh / 2;
+                if (k == lk.field) Glass::Round(c, ix - (int)(8 * u), fy, iw + (int)(16 * u), fh, 10 * u, 0x1FFFFFFFu, Glass::ChosenEdge(), 1.5f * u);
+                const std::string label = id == LF_SOURCE ? "Show" : id == LF_PIC ? "Picture" : id == LF_PRESET ? "Preset" : id == LF_HUE ? "Hue" : id == LF_SAT ? "Saturation" : id == LF_VAL ? "Brightness"
+                                        : id == LF_OP ? "Opacity " + std::to_string(LookOpacity(e)) + "%" : id == LF_BLUR ? "Blur " + std::to_string(lk.blur) + "%" : id == LF_DIM ? "Dim " + std::to_string(lk.dim) + "%" : "Grain " + std::to_string(lk.grain) + "%";
+                GT(c, ix, fm, label, 13 * u, k == lk.field ? text : hint, true);
+                lk.fx[k] = bx; lk.fy[k] = fy;
+                if (id == LF_SOURCE)
+                {
+                    GT(c, bx, fm, "<", 13 * u, hint, true);
+                    GT(c, bx + (int)(16 * u), fm, LookName(lk.backdrop), 13 * u, text, true);
+                    GT(c, bx + bw - (int)(8 * u), fm, ">", 13 * u, hint, true);
+                    continue;
+                }
+                if (id == LF_PIC)
+                {
+                    std::string nm = lk.pic[e].empty() ? "None" : lk.pic[e];
+                    while (nm.size() > 4 && GW(nm, 13 * u, true) > bw - (int)(40 * u)) nm = nm.substr(0, nm.size() - 4) + "...";
+                    GT(c, bx, fm, "<", 13 * u, hint, true);
+                    GT(c, bx + (int)(16 * u), fm, nm, 13 * u, lk.pic[e].empty() ? hint : text, true);
+                    GT(c, bx + bw - (int)(8 * u), fm, ">", 13 * u, hint, true);
+                    continue;
+                }
+                if (id == LF_PRESET)
+                {
+                    int pn = 0;
+                    const char* const* list = LookPresets(e, pn);
+                    const int pd = std::min((int)(18 * u), bw / pn - (int)(5 * u)), pg = (bw - pn * pd) / std::max(1, pn - 1);
+                    lk.pn = pn; lk.pd = pd; lk.py = fm - pd / 2;
+                    for (int i = 0; i < pn; i++)
+                    {
+                        const int sx = bx + i * (pd + pg);
+                        lk.px[i] = sx;
+                        const std::string nm = list[i];
+                        if (lk.pic[e].empty() && lk.col[e] == nm) Glass::Round(c, sx - (int)(3 * u), lk.py - (int)(3 * u), pd + (int)(6 * u), pd + (int)(6 * u), (pd + 6 * u) * 0.5f, 0, 0xF2FFFFFFu, 1.5f * u);
+                        Glass::Round(c, sx, lk.py, pd, pd, pd * 0.5f, nm == "clear" ? 0x30FFFFFFu : SpecRgb(nm, 0xFFFFFFFFu), 0x80FFFFFFu, 1.0f * u);
+                    }
+                    continue;
+                }
+                const float hh = lk.h, ss = lk.s, vv = lk.v;
+                const uint32_t rgb = e < 6 ? LookRgb(e) : 0;
+                if (id == LF_HUE) bar(k, fy, bx, bw, fh, hh / 360.0f, [](float t) { return Hsv(t * 360.0f, 1, 1); });
+                else if (id == LF_SAT) bar(k, fy, bx, bw, fh, ss, [hh, vv](float t) { return Hsv(hh, t, vv); });
+                else if (id == LF_VAL) bar(k, fy, bx, bw, fh, vv, [hh, ss](float t) { return Hsv(hh, ss, t); });
+                else if (id == LF_OP) bar(k, fy, bx, bw, fh, LookOpacity(e) / 100.0f, [rgb](float t) { return Glass::Over(0xFF3A4450u, rgb, (int)(t * 255)); });
+                else if (id == LF_BLUR) bar(k, fy, bx, bw, fh, lk.blur / 100.0f, [](float t) { const uint32_t g = (uint32_t)(60 + t * 150); return 0xFF000000u | g << 16 | g << 8 | g; });
+                else if (id == LF_DIM) bar(k, fy, bx, bw, fh, lk.dim / 100.0f, [](float t) { const uint32_t g = (uint32_t)(235 - t * 215); return 0xFF000000u | g << 16 | g << 8 | g; });
+                else bar(k, fy, bx, bw, fh, lk.grain / 100.0f, [&](float t) {
+                    // (Speckled more along it.)
+                    uint32_t hsh = (uint32_t)(t * 9973) * 374761393u; hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
+                    const int g = std::max(0, std::min(255, 120 + (int)(((int)((hsh >> 24) & 15) - 8) * t * 12)));
+                    return 0xFF000000u | (uint32_t)g << 16 | (uint32_t)g << 8 | (uint32_t)g; });
+            }
+            y += (int)fl.size() * (fh + (int)(5 * u)) + (int)(8 * u);
+            const bool pics = e >= 1 && e <= 5;
+#ifdef __SWITCH__
+            para(std::string("Up and down choose a row, left and right change it.") + (pics ? " Pictures: put PNG or JPG files in /switch/pokemon-ds-wide/launcher-pictures/." : "") + " A or B: done.", hint, 12 * u);
+#else
+            para(std::string("Arrows choose and change, or click.") + (pics ? " On Picture, Enter or a click picks a file." : "") + " Esc: done.", hint, 12 * u);
+#endif
+            return;
+        }
+        static const char* const about[8] = {
+            "The colour of the frame round what is chosen, and its glow, on every page of the launcher.",
+            "A colour or a picture over every glass panel. Opacity sets how much: low lets the background through, 100% makes them solid.",
+            "A colour or a picture for the sidebar, see-through to solid.",
+            "A colour or a picture for the bar along the top, see-through to solid.",
+            "Used for Play and Continue, the chosen tab, and the button marks along the bottom (Choose, Back and the rest). Their words and marks turn dark or light to stay readable.",
+            "Game Art: the chosen game's picture. Your Picture: one of your own. Colour: one colour. Plain: a calm blue. Its page also sets how blurred and how dim it is.",
+            "The fine speckle in the frosted glass panels: 0% makes them smooth, 25% is as they were.",
+            "With Cloud Saves on, a cloud shows in the corner of each game whose save syncs. Amber: it changed on two devices and needs a choice." };
+        para(about[F.prow], text, 14 * u);
+        if (F.prow <= 4 || (F.prow == 5 && (lk.backdrop == "colour" || lk.backdrop == "picture")))
+        {
+            const int e = F.prow, cw = (int)(64 * u);
+            if (e >= 1 && e <= 4 && !lk.pic[e].empty()) Glass::PictureIn(c, Glass::SurfacePic(e - 1), ix, y, cw, cw, 14 * u, 255);
+            else if (!(e == 5 && lk.backdrop == "picture" && !lk.pic[5].empty()))
+                Glass::Round(c, ix, y, cw, cw, 14 * u, LookHasOp(e) ? Glass::Over(0xFF3A4450u, LookRgb(e), LookOpacity(e) * 255 / 100) : LookRgb(e), 0xB0FFFFFFu, 1.0f * u);
+            const bool p = e > 0 && !lk.pic[e].empty() && (e != 5 || lk.backdrop == "picture");
+            const int tx = e == 5 && p ? ix : ix + cw + (int)(14 * u);
+            GT(c, tx, y + cw / 2 - 9 * u, p ? lk.pic[e] : LookName(lk.col[e]), 16 * u, text, true);
+            std::string sub2 = !p && lk.col[e][0] == '#' ? lk.col[e] : std::string();
+            if (LookHasOp(e)) sub2 += (sub2.empty() ? "" : "   ") + std::string("Opacity ") + std::to_string(LookOpacity(e)) + "%";
+            if (!sub2.empty()) GT(c, tx, y + cw / 2 + 11 * u, sub2, 12 * u, hint, false);
+            y += cw + (int)(16 * u);
+        }
+#ifdef __SWITCH__
+        para(F.prow == 7 ? "Press A to change it." : "Press A to open its page.", hint, 13 * u);
+#else
+        para(F.prow == 7 ? "Choose it to change it." : "Choose it to open its page.", hint, 13 * u);
+#endif
         return;
     }
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 0)
@@ -3009,7 +3827,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (i == F.prow)
             {
                 if (F.side < 0) Glass::Glow(c, rx, ry, rww, rowH, 14 * u, u);
-                Glass::Round(c, rx, ry, rww, rowH, 14 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, rx, ry, rww, rowH, 14 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             else Glass::Round(c, rx, ry, rww, rowH, 14 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
             std::string name, sub, st;
@@ -3160,7 +3978,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (i == F.prow)
             {
                 if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
-                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             else if (m.swapping && i == 3) Glass::Round(c, rx, ry, rww, rowH, 12 * u, 0x1A8CC8FFu);
             std::string k, v, chip, spn;
@@ -3314,7 +4132,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (a == F.pact)
             {
                 if (F.side < 0) Glass::Glow(c, ix, ry, iw, ah, 12 * u, u);
-                Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             else Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
             const int icon = F.prow == 1 || F.prow == 3 ? Glass::I_GRID : F.prow >= MOVER_FIRST ? (acts[a].rfind("Swap", 0) == 0 ? Glass::I_PEOPLE : acts[a] == "Cancel Swap" ? Glass::I_BACK : Glass::I_LOAD) : Glass::I_POKEBALL;
@@ -3366,7 +4184,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (i == F.prow)
             {
                 if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
-                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             uint32_t col = 0xFFAEB7C4u;
             std::string st, name, sub;
@@ -3501,7 +4319,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (a == F.pact)
             {
                 if (F.side < 0) Glass::Glow(c, ix, ry, iw, ah, 12 * u, u);
-                Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             else Glass::Round(c, ix, ry, iw, ah, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
             const int icon = acts[a] == "Sign In With Google" ? Glass::I_GLOBE : acts[a] == "Sign Out" || acts[a] == "Cancel" ? Glass::I_BACK : Glass::I_LOAD;
@@ -3577,7 +4395,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         if (chosen)
         {
             Glass::Glow(c, cx, y, cw, cardH, 14 * u, u);
-            Glass::Round(c, cx, y, cw, cardH, 14 * u, 0x24FFFFFFu, Menu::GlassChosenEdge, 1.5f * u);
+            Glass::Round(c, cx, y, cw, cardH, 14 * u, 0x24FFFFFFu, Glass::ChosenEdge(), 1.5f * u);
         }
         else Glass::Round(c, cx, y, cw, cardH, 14 * u, 0x14FFFFFFu);
         F.nX = cx; F.nY = y; F.nW = cw; F.nH = cardH; F.nLine = lineH;
@@ -3611,7 +4429,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (i == F.prow)
             {
                 if (F.side < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
-                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             Glass::DrawIcon(c, icons[i], rx + 24 * u, ry + rowH * 0.5f, 10 * u, text);
             GT(c, rx + (int)(48 * u), ry + rowH * 0.5f, rows[i], 17 * u, text, true);
@@ -3635,7 +4453,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         if (i == F.prow)
         {
             if (F.side < 0) Glass::Glow(c, rx, ry, rw, rowH, 12 * u, u);
-            Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
         }
         Glass::DrawIcon(c, icons[i], rx + 24 * u, ry + rowH * 0.5f, 10 * u, text);
         GT(c, rx + (int)(48 * u), ry + rowH * 0.5f, names[i], 17 * u, text, true);
@@ -3801,7 +4619,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         GT(c, ix + iw - (int)(4 * u) - GW(sub, 13 * u, true), cy, sub, 13 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
         if (g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, ix + iw - 14 * u, iy + 14 * u, 7 * u, 0xFFFFFFFFu);
         // (Its save kept in the cloud: a cloud in the corner; amber when it changed on both.)
-        if (const int cl = HubCloudOf(g))
+        if (const int cl = Look().badges ? HubCloudOf(g) : 0)
         {
             Glass::Round(c, ix + (int)(6 * u), iy + (int)(6 * u), (int)(32 * u), (int)(22 * u), 11 * u, 0xA0000000u);
             DrawCloud(c, ix + 22 * u, iy + 18 * u, 8 * u, cl == 2 ? 0xFFF2C46Bu : 0xFFFFFFFFu);
@@ -3819,7 +4637,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             if (on)
             {
                 if (lit) Glass::Glow(c, rx, ry, rw, sp.rowH, 12 * u, u);
-                Glass::Round(c, rx, ry, rw, sp.rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, rx, ry, rw, sp.rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             Glass::DrawIcon(c, SideIcon(i), rx + 27 * u, ry + sp.rowH * 0.5f, 12 * u, text);
             GT(c, rx + (int)(52 * u), ry + sp.rowH * 0.5f, SideName(i), 19 * u, text, true);
@@ -3829,14 +4647,14 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         if (cont < 0 || cont >= (int)games.size() || Focus().page >= 0) return;
         const bool played = !ContinueRom().empty() && games[cont].rom == ContinueRom();
         if (Focus().banner == 1) Glass::Glow(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, u);
-        Glass::Round(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, 0xFFFFFFFFu);
-        Glass::DrawIcon(c, Glass::I_PLAY, sp.contX + 30 * u, sp.contY + sp.contH * 0.5f, 8 * u, dark);
-        GT(c, sp.contX + (int)(48 * u), sp.contY + sp.contH * 0.5f, played ? "Continue" : "Play", 18 * u, dark, true);
+        Glass::Surface(c, 3, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, Glass::Button()); // (the Buttons: a colour or a picture)
+        Glass::DrawIcon(c, Glass::I_PLAY, sp.contX + 30 * u, sp.contY + sp.contH * 0.5f, 8 * u, Glass::ButtonInk());
+        GT(c, sp.contX + (int)(48 * u), sp.contY + sp.contH * 0.5f, played ? "Continue" : "Play", 18 * u, Glass::ButtonInk(), true);
         const int ox = sp.contX + sp.contW + (int)(10 * u), ow = GW("Game Options", 18 * u, true) + (int)(36 * u);
         if (Focus().banner == 2)
         {
             Glass::Glow(c, ox, sp.contY, ow, sp.contH, 12 * u, u);
-            Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
         }
         else Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
         GT(c, ox + (int)(18 * u), sp.contY + sp.contH * 0.5f, "Game Options", 18 * u, text, true);
@@ -3859,7 +4677,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     Glass::Shadow(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, 18 * u, 0x60);
     if (solid) Glass::Frost(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0);
     else Glass::Round(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, Menu::GlassShade);
-    Glass::Round(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, 0x30101826);
+    Glass::Surface(c, 1, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, Glass::Tint(1)); // (the Sidebar: a colour or a picture)
     Glass::Round(c, sp.sideX + sp.sideW - std::max(1, (int)u), sp.sideY, std::max(1, (int)u), sp.sideH, 0, 0x3DFFFFFF);
     // (Its rows: drawSideRows, over the kept picture.)
 
@@ -3869,18 +4687,19 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const int barX = sp.sideX + sp.sideW, barW = c.w - barX, barH = sp.tabsY * 2 + sp.tabsH, line = std::max(1, (int)u);
         if (solid) Glass::Frost(c, barX, 0, barW, barH, 0);
         else Glass::Round(c, barX, 0, barW, barH, 0, Menu::GlassShade);
-        Glass::Round(c, barX, 0, barW, barH, 0, 0x30101826);
+        Glass::Surface(c, 2, barX, 0, barW, barH, 0, Glass::Tint(2)); // (the Top Bar: a colour or a picture)
         Glass::Round(c, barX, barH - line, barW, line, 0, 0x3DFFFFFF);
         if (Focus().page < 0) for (int t = 0; t < TabCount(); t++)
         {
+            if (TabIsHidden(t)) continue; // (hidden: not drawn)
             const int px = sp.tabX[t], py = sp.tabsY + (int)(4 * u), pw = sp.tabW[t], ph = sp.tabsH - (int)(8 * u);
             const std::string name = TabLabel(t);
             if (t == tab)
             {
                 if (onTabs && !Focus().onSort) Glass::Glow(c, px, py, pw, ph, ph * 0.5f, u);
-                Glass::Round(c, px, py, pw, ph, ph * 0.5f, 0xFFFFFFFFu);
+                Glass::Surface(c, 3, px, py, pw, ph, ph * 0.5f, Glass::Button());
             }
-            GT(c, px + (pw - GW(name, sp.tabFont, true)) / 2, py + ph * 0.5f, name, sp.tabFont, t == tab ? dark : text, true);
+            GT(c, px + (pw - GW(name, sp.tabFont, true)) / 2, py + ph * 0.5f, name, sp.tabFont, t == tab ? Glass::ButtonInk() : text, true);
         }
     }
 
@@ -3943,7 +4762,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             if (onTabs && F.onSort && F.tool == k)
             {
                 Glass::Glow(c, bx, by, bw, bh, 12 * u, u);
-                Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             else Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
             if (icon >= 0)
@@ -3963,7 +4782,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         if (q.size() > 14) q = q.substr(0, 13) + "...";
         const std::string searchL = q.empty() ? std::string("Search") : "\"" + q + "\"";
         const int searchW = GW(searchL, 15 * u, true) + (int)(36 * u), searchX = sortX - (int)(10 * u) - searchW;
-        const int last = (int)sp.tabX.size() - 1;
+        const int last = LastTab();
         tool(1, sp.tabX[last] + sp.tabW[last] + (int)(10 * u), bh, "+", -1);
         tool(2, searchX, searchW, searchL, -1);
         tool(3, sortX, sortW, sortL, Glass::I_LAYERS);
@@ -4021,7 +4840,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 if (i == Focus().popup)
                 {
                     Glass::Glow(c, rx, ry, rw, rowH, 12 * u, u);
-                    Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                    Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
                 }
                 Glass::DrawIcon(c, icons[i], rx + 22 * u, ry + rowH * 0.5f, 9 * u, ink);
                 GT(c, rx + (int)(44 * u), ry + rowH * 0.5f, PopupLabel(g, i), 17 * u, ink, true);
@@ -4110,7 +4929,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             if (i == F.drow)
             {
                 Glass::Glow(c, rx, ry, rw, rowH, 12 * u, u);
-                Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+                Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             else Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
             GT(c, rx + (rw - GW(rows[i], 16 * u, true)) / 2, ry + rowH * 0.5f, rows[i], 16 * u, ink, true);
@@ -4164,8 +4983,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 if (!it.key.empty())
                 {
                     const int kh = (int)(fp * 1.7f), kw = keyW(it, fp);
-                    Glass::Round(c, x, (int)(cy - kh * 0.5f), kw, kh, kh * 0.5f, 0xF2FFFFFFu);
-                    GT(c, x + (kw - GW(it.key, fp * 0.9f, true)) / 2, cy, it.key, fp * 0.9f, dark, true);
+                    Glass::Surface(c, 3, x, (int)(cy - kh * 0.5f), kw, kh, kh * 0.5f, Glass::Button()); // (the Buttons)
+                    GT(c, x + (kw - GW(it.key, fp * 0.9f, true)) / 2, cy, it.key, fp * 0.9f, Glass::ButtonInk(), true);
                     x += kw + (int)(fp * 0.6f);
                 }
                 GT(c, x, cy, it.act, fp, text, true);

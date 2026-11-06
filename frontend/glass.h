@@ -54,9 +54,45 @@ inline void Mark(Canvas& c, int x0, int y0, int x1, int y1)
 // The game behind the menu: src (w x h, ARGB) made small, blurred, darkened a little and a little
 // greyer (so white glass and text read over any scene), then scaled back up into out (opaque).
 // Done once when the menu opens: the game is paused, so it never needs doing again.
-inline void MakeBackdrop(std::vector<uint32_t>& out, const uint32_t* src, int w, int h)
+// The tint over the launcher's panels (its Launcher page): the deep blue unless chosen.
+// The tints over the launcher's glass (its Launcher page): 0 the panels, 1 the sidebar, 2 the top bar.
+inline uint32_t& Tint(int i) { static uint32_t t[3] = { 0x30101826u, 0x30101826u, 0x30101826u }; return t[i]; }
+inline uint32_t& PanelTint() { return Tint(0); }
+// The launcher's buttons (Play, Continue, the chosen tab), and the ink that reads on them.
+inline uint32_t& Button() { static uint32_t b = 0xFFFFFFFFu; return b; }
+inline uint32_t ButtonInk()
 {
-    const int f = std::max(4, std::min(w, h) / 90);
+    const uint32_t b = Button();
+    return (0.3f * (b >> 16 & 255) + 0.59f * (b >> 8 & 255) + 0.11f * (b & 255)) > 150 ? 0xFF18222Eu : 0xFFFFFFFFu;
+}
+// blurPct: how blurred (the launcher's Blur, 0 to 100: about that many pixels at 720 high; -1 as always);
+// dimPct: how much darker and greyer (the launcher's Dim; 42 as always).
+inline void MakeBackdrop(std::vector<uint32_t>& out, const uint32_t* src, int w, int h, int blurPct = -1, int dimPct = 42)
+{
+    const float mult = 1.0f - std::max(0, std::min(100, dimPct)) / 100.0f, grey = std::max(0, std::min(100, dimPct)) / 100.0f * 0.6f;
+    if (blurPct == 0)
+    {
+        // (Sharp: only darkened, as the blurred one is.)
+        out.resize((size_t)w * h);
+        for (size_t i = 0; i < out.size(); i++)
+        {
+            const uint32_t p = src[i];
+            const float r = (float)(p >> 16 & 255), g = (float)(p >> 8 & 255), b = (float)(p & 255);
+            const float l = 0.3f * r + 0.59f * g + 0.11f * b;
+            auto k = [&](float x) { return (uint32_t)std::clamp((int)((x * (1 - grey) + l * grey) * mult), 0, 255); };
+            out[i] = 0xFF000000u | k(r) << 16 | k(g) << 8 | k(b);
+        }
+        return;
+    }
+    // (Shrunk by f, then blurred rad each way three times: about rad x f pixels in all. Shrunk at
+    // least in half: blurring the whole size is too slow for the Switch.)
+    int f = std::max(4, std::min(w, h) / 90), rad0 = 2;
+    if (blurPct > 0)
+    {
+        const float sig = blurPct * std::min(w, h) / 720.0f;
+        if (sig < 6) { rad0 = 1; f = std::max(2, (int)std::lround(sig / 1.41f)); }
+        else f = std::max(2, (int)std::lround(sig / 2.45f));
+    }
     const int sw = std::max(1, w / f), sh = std::max(1, h / f);
     std::vector<float> s((size_t)sw * sh * 3), t(s.size());
     for (int y = 0; y < sh; y++)
@@ -73,7 +109,7 @@ inline void MakeBackdrop(std::vector<uint32_t>& out, const uint32_t* src, int w,
             float* d = &s[((size_t)y * sw + x) * 3];
             d[0] = r / n; d[1] = g / n; d[2] = b / n;
         }
-    const int rad = 2; // three box blurs each way: close to a gaussian
+    const int rad = rad0; // three box blurs each way: close to a gaussian
     for (int pass = 0; pass < 3; pass++)
     {
         for (int y = 0; y < sh; y++)
@@ -96,7 +132,7 @@ inline void MakeBackdrop(std::vector<uint32_t>& out, const uint32_t* src, int w,
     for (size_t i = 0; i < s.size(); i += 3)
     {
         const float l = 0.3f * s[i] + 0.59f * s[i + 1] + 0.11f * s[i + 2];
-        for (int k = 0; k < 3; k++) s[i + k] = (s[i + k] * 0.75f + l * 0.25f) * 0.58f;
+        for (int k = 0; k < 3; k++) s[i + k] = (s[i + k] * (1 - grey) + l * grey) * mult;
     }
     // (Scaled back up in whole numbers, each column's two sources and weight worked out once: the
     // live glass does this several times a second, so it must be quick.)
@@ -169,6 +205,8 @@ inline bool Backdrop(Canvas& c)
     return false;
 }
 
+// How strong the frosted glass's grain is (the launcher's Grain): 0 none, 25 as always, 100 four times.
+inline int& Grain() { static int g = 25; return g; }
 // Frosted glass: the blurred game under a panel made lighter and more colourful, with a fine grain
 // and a soft sheen at the top, rather than a grey tint laid over it. Works on the opaque backdrop
 // (Backdrop true), inside a rounded rectangle; elsewhere it does nothing.
@@ -209,7 +247,7 @@ inline void Frost(Canvas& c, int x, int y, int w, int h, float r, const std::vec
             // (A fixed grain from the pixel's place, so it does not shimmer from frame to frame.)
             uint32_t hsh = (uint32_t)px * 374761393u + (uint32_t)py * 668265263u;
             hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
-            const int add = sheen + (int)((hsh >> 24) & 7) * 256 - 896;
+            const int add = sheen + ((int)((hsh >> 24) & 7) * 256 - 896) * Grain() / 25;
             const int ch[3] = { rr, gg, bb };
             uint32_t out = 0xFF000000u;
             for (int k = 0; k < 3; k++)
@@ -266,7 +304,7 @@ inline void FrostDraw(Canvas& c, int x, int y, int w, int h, float r, bool clear
             const int l = (77 * rr + 151 * gg + 28 * bb) >> 8;
             uint32_t hsh = (uint32_t)px * 374761393u + (uint32_t)py * 668265263u;
             hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
-            const int add = sheen + (int)((hsh >> 24) & 7) * 256 - 896; // (sheen and a fixed grain)
+            const int add = sheen + ((int)((hsh >> 24) & 7) * 256 - 896) * Grain() / 25; // (sheen and a fixed grain)
             const int ch[3] = { rr, gg, bb };
             uint32_t out = 0;
             for (int k = 0; k < 3; k++)
@@ -399,13 +437,63 @@ inline void Round(Canvas& c, int x, int y, int w, int h, float r, uint32_t fill,
 
 // A soft white glow round a box (whatever is chosen: a tile, a row, a card, a button). k: the size of
 // one design pixel.
+// The launcher's accent (its Launcher page): the frame round what is chosen and its glow. White unless chosen.
+inline uint32_t& Accent() { static uint32_t a = 0xFFFFFFFFu; return a; }
+inline uint32_t ChosenEdge() { return 0xF2000000u | (Accent() & 0xFFFFFFu); }
+// A picture of the player's own for the launcher (its Launcher page): the panels, the bars, the buttons, the background.
+struct Picture
+{
+    std::vector<uint32_t> px;
+    int w = 0, h = 0;
+    uint32_t avg = 0xFF808080u;
+};
+inline Picture& SurfacePic(int i) { static Picture p[4]; return p[i]; } // 0 the panels, 1 the sidebar, 2 the top bar, 3 the buttons
+inline int& SurfaceAlpha(int i) { static int a[4] = { 255, 255, 255, 255 }; return a[i]; }
+// The picture covering w x h (cut at the sides or top and bottom), into out.
+inline void FitCover(const Picture& p, int w, int h, uint32_t* out)
+{
+    const float sc = std::max((float)w / p.w, (float)h / p.h), ox = (p.w * sc - w) * 0.5f, oy = (p.h * sc - h) * 0.5f;
+    for (int y = 0; y < h; y++)
+    {
+        const uint32_t* row = &p.px[(size_t)std::min(p.h - 1, (int)((y + oy) / sc)) * p.w];
+        for (int x = 0; x < w; x++) out[(size_t)y * w + x] = row[std::min(p.w - 1, (int)((x + ox) / sc))] | 0xFF000000u;
+    }
+}
+// The picture in a rounded box (covering it), at alpha a.
+inline void PictureIn(Canvas& c, const Picture& p, int x, int y, int w, int h, float r, int a)
+{
+    if (p.px.empty() || w <= 0 || h <= 0) return;
+    const float sc = std::max((float)w / p.w, (float)h / p.h), ox = (p.w * sc - w) * 0.5f, oy = (p.h * sc - h) * 0.5f;
+    const int x0 = std::max(0, x), y0 = std::max(0, y), x1 = std::min(c.w, x + w), y1 = std::min(c.h, y + h);
+    for (int yy = y0; yy < y1; yy++)
+    {
+        const uint32_t* row = &p.px[(size_t)std::min(p.h - 1, (int)((yy - y + oy) / sc)) * p.w];
+        const float cy = yy + 0.5f, dy = cy < y + r ? y + r - cy : cy > y + h - r ? cy - (y + h - r) : 0;
+        for (int xx = x0; xx < x1; xx++)
+        {
+            const float cx = xx + 0.5f, dx = cx < x + r ? x + r - cx : cx > x + w - r ? cx - (x + w - r) : 0;
+            float cov = 1;
+            if (dx > 0 && dy > 0) cov = std::max(0.0f, std::min(1.0f, r - std::sqrt(dx * dx + dy * dy) + 0.5f));
+            if (cov <= 0) continue;
+            uint32_t& d = c.px[(size_t)yy * c.w + xx];
+            d = Over(d, row[std::min(p.w - 1, (int)((xx - x + ox) / sc))] | 0xFF000000u, (int)(a * cov));
+        }
+    }
+    Mark(c, x0, y0, x1, y1);
+}
+// One of the launcher's surfaces: its picture when it has one, else its colour.
+inline void Surface(Canvas& c, int i, int x, int y, int w, int h, float r, uint32_t tint)
+{
+    if (!SurfacePic(i).px.empty()) PictureIn(c, SurfacePic(i), x, y, w, h, r, SurfaceAlpha(i));
+    else Round(c, x, y, w, h, r, tint);
+}
 inline void Glow(Canvas& c, int x, int y, int w, int h, float r, float k)
 {
     for (int g = 3; g >= 1; g--)
     {
         const float e = g * 2.4f * k;
         const uint32_t a = (uint32_t)(0x14 * (4 - g)) << 24;
-        Round(c, (int)(x - e), (int)(y - e), (int)(w + 2 * e), (int)(h + 2 * e), r + e, 0, a | 0xFFFFFF, 2.4f * k);
+        Round(c, (int)(x - e), (int)(y - e), (int)(w + 2 * e), (int)(h + 2 * e), r + e, 0, a | (Accent() & 0xFFFFFFu), 2.4f * k);
     }
 }
 
