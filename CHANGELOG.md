@@ -3,6 +3,11 @@
 
 ## Unreleased
 
+- **SoulSilver and HeartGold battles: no more flash of the touch screen in the middle of a battle.** A wild
+  Pokemon breaking out of a Poke Ball, an enemy's Vine Whip, or your own Pokemon being sent out after a
+  switch, briefly ran code of the Bag and
+  party overlay, and the view jumped to the 4:3 touch-screen picture (a Poke Ball background) for
+  about ten frames. The Bag and party screens are now told apart by overlays 6 and 7 (the battle's effects) not running with them.
 - **HeartGold and SoulSilver: Fly no longer flashes both screens at 4:3 when you land.** For about
   half a second after the flight the two screens were joined at 4:3 (the overworld above the start
   menu) before the wide view came back; the world now stays up instead.
