@@ -275,6 +275,8 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
     auto view = [&]() { return Launcher::MakeView(canvas, games, tab); };
     bool guide = false; // the settings page (Launcher::SettingsPage)
     Launcher::SettingsPage page;
+    Menu setMenu;             // (the glass launcher: the page as the pause menu's settings pages)
+    std::vector<int> setMap;
     // The buttons changed in KEYS AND BUTTONS (controls.h): the list follows them (A plays, Y the
     // settings, B leaves), and the settings page's CONTROLS changes them here too. A controller's
     // buttons by their labels, as main.cpp reads them on the Switch (Controls::IN_*).
@@ -527,7 +529,18 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             if (step && (lf || rt)) change(lf ? -1 : 1);
             if (down & HidNpadButton_A) change(1);
             // (B: from a group back to the groups first; Y closes the page.)
-            if (((down & HidNpadButton_B) || tapBack) && !page.Back()) guide = false;
+            if (((down & HidNpadButton_B) || (tapBack && !Launcher::Glassy(canvas))) && !page.Back()) guide = false;
+            // (The glass settings page: a tap chooses a row, again changes it; BACK goes back.)
+            if (tapX >= 0 && Launcher::Glassy(canvas))
+            {
+                const int hit = setMenu.SettingsItemAt(tapX, tapY);
+                if (hit >= 0 && hit < (int)setMap.size())
+                {
+                    const int item = setMap[hit];
+                    if (item < 0) { if (!page.Back()) guide = false; }
+                    else if (page.items[item].key) { if (item == page.selected) change(1); else page.selected = item; }
+                }
+            }
             if (down & HidNpadButton_Y) guide = false;
             if (down & HidNpadButton_Plus) break;
         }
@@ -997,11 +1010,25 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
         // (The glass list is drawn again only when something on it changed: the Switch draws in
         // software about 20 times slower than a PC. Anything else drawn on the canvas forgets it.)
         static std::string glassKey;
+        static std::string setKey; // (the glass settings page as last drawn: drawn again only when it changes)
         if (guide)
         {
             glassKey.clear();
-            page.Draw(canvas, page.group < 0 ? "UP / DOWN: CHOOSE    A: OPEN    B: BACK"
-                                             : "UP / DOWN: CHOOSE    LEFT / RIGHT / A: CHANGE    B: BACK", theme);
+            const char* hint = page.group < 0 ? "UP / DOWN: CHOOSE    A: OPEN    B: BACK" : "UP / DOWN: CHOOSE    LEFT / RIGHT / A: CHANGE    B: BACK";
+            std::string setNow = std::to_string(page.group) + "/" + std::to_string(page.selected) + "/" + std::to_string(keysOpen) + "/";
+            for (const std::string& l : page.lines) setNow += l + "\n";
+            if (Launcher::Glassy(canvas) && !keysOpen && setNow == setKey) {}
+            else if (Launcher::Glassy(canvas))
+            {
+                setKey = keysOpen ? std::string() : setNow;
+                const u64 t0 = armGetSystemTick();
+                // (The pause menu's glass settings pages, ui_settings.h, over the chosen game's picture blurred.)
+                Launcher::BuildSettingsMenu(setMenu, setMap, page, false);
+                Launcher::GlassBackdrop(canvas, selected >= 0 && selected < (int)games.size() ? &games[selected] : nullptr);
+                setMenu.Draw(canvas, page.group < 0 ? "SETTINGS" : Launcher::SettingsGroups()[page.group].name, hint);
+                fprintf(stderr, "[launcher] glass settings drawn in %d ms\n", (int)(armTicksToNs(armGetSystemTick() - t0) / 1000000));
+            }
+            else page.Draw(canvas, hint, theme);
             if (keysOpen)
             {
                 std::string kh = keysCapture >= 0 ? "OR WAIT 5 SECONDS: AS IT WAS" : "A: CHANGE   B: BACK";
@@ -1013,6 +1040,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
         else
         {
             {
+                setKey.clear();
                 FillUpdateStatus(pageUpdateWork);
                 // (The blurred background follows the chosen game once it has stayed on it 0.4 s.)
                 static int bgSel = -2;
@@ -1062,7 +1090,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                 if (on) canvas.Fill(x - 3 * s, 4 * s, Canvas::TextWidth(text, s) + 5 * s, 13 * s, th.frame);
                 canvas.Text(x, 7 * s, text, s, on ? th.title : th.hint);
             };
-            if (guide && !keysOpen) button(8 * s, "< BACK", false);
+            if (guide && !keysOpen && !Launcher::Glassy(canvas)) button(8 * s, "< BACK", false); // (the glass page has its own)
             else if (!guide && !Launcher::Glassy(canvas)) button(canvas.w - 8 * s - Canvas::TextWidth("SETTINGS", s), "SETTINGS", onSettings);
         }
         u32 stride;

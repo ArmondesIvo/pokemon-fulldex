@@ -724,6 +724,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     int tapPlay = -1; // (the game a finger is on that was already chosen: played when it lifts)
     bool guide = false;
     Launcher::SettingsPage page;
+    Menu setMenu;             // (the glass launcher: the page as the pause menu's settings pages)
+    std::vector<int> setMap;
     // The keys and buttons changed in a game's CONTROLS (controls.h): A plays, B goes back, Y opens
     // the settings, the directions move, as they do in the game. Keys and buttons not changed
     // keep doing what they always did here.
@@ -738,6 +740,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         onBack = false;
         if (guide) page.Open(fo.cfg);
     };
+    // (SSR_LIST_GUIDE=n: the settings open, on group n (-1: the list of groups), for the test picture.)
+    if (const char* gd = getenv("SSR_LIST_GUIDE")) { guide = true; page.Open(fo.cfg); if (atoi(gd) >= 0) page.Enter(atoi(gd)); }
     // KEYS AND BUTTONS (the settings page's CONTROLS): each action's key or controller button,
     // changed as in the pause menu (main.cpp): choose one, then press what it should be (ESC or 5
     // seconds: as it was). Kept in the settings file's map_ lines (Controls::Bindings::SaveTo).
@@ -1883,7 +1887,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     }
                 }
                 if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page >= 0) break; // (no games under a page)
-                if ((guide || !Launcher::Glassy(canvas)) && e.type == SDL_MOUSEBUTTONUP && my < (canvas.h > canvas.w ? 43 : 22) * s && !dragging)
+                if (((guide && !Launcher::Glassy(canvas)) || !Launcher::Glassy(canvas)) && e.type == SDL_MOUSEBUTTONUP && my < (canvas.h > canvas.w ? 43 : 22) * s && !dragging)
                 {
                     if (guide && mx < canvas.w / 4) { if (!page.Back()) guide = false; }
                     else if (!guide && mx > canvas.w * 3 / 4) toggleGuide();
@@ -1892,6 +1896,21 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
 #elif defined(SSR_IOS)
                     else if (!guide && mx < canvas.w / 4) OpenFolder(fo.roms);
 #endif
+                    break;
+                }
+                if (guide && Launcher::Glassy(canvas))
+                {
+                    // (The glass settings page: a tap or click chooses a row, again changes it; BACK goes back.)
+                    if (e.type == SDL_MOUSEBUTTONUP)
+                    {
+                        const int hit = setMenu.SettingsItemAt(mx, my);
+                        if (hit >= 0 && hit < (int)setMap.size())
+                        {
+                            const int item = setMap[hit];
+                            if (item < 0) { onBack = false; if (!page.Back()) guide = false; }
+                            else if (page.items[item].key) { if (item == page.selected && !onBack) change(1); else { page.selected = item; onBack = false; } }
+                        }
+                    }
                     break;
                 }
                 if (guide)
@@ -2198,7 +2217,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             raPoll();
             for (Launcher::Setting& it : page.items)
                 if (it.key && !strcmp(it.key, "!ra_login") && !it.values.empty()) it.values[0].second = raAccountShown();
-            page.Draw(canvas, pageHint, theme);
+            if (Launcher::Glassy(canvas))
+            {
+                // (The pause menu's glass settings pages, ui_settings.h, over the chosen game's picture blurred.)
+                Launcher::BuildSettingsMenu(setMenu, setMap, page, onBack);
+                Launcher::GlassBackdrop(canvas, selected >= 0 && selected < (int)games.size() ? &games[selected] : nullptr);
+                setMenu.Draw(canvas, page.group < 0 ? "SETTINGS" : Launcher::SettingsGroups()[page.group].name, pageHint);
+            }
+            else page.Draw(canvas, pageHint, theme);
             if (raOpen)
                 raMenu.Draw(canvas, "RETROACHIEVEMENTS: LOG IN",
                             raField == 0 ? "TYPE YOUR USER NAME, THEN ENTER" : raField == 1 ? "TYPE YOUR PASSWORD, THEN ENTER" : "ENTER: LOG IN   ESC: CANCEL",
@@ -2243,7 +2269,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (on) canvas.Fill(x - 3 * s, buttonY + 4 * s, Canvas::TextWidth(text, s) + 5 * s, 13 * s, theme.frame);
                 Launcher::ModernText(canvas, x, buttonY + 7 * s, text, s, on ? theme.title : theme.pokemon ? 0xFFFFFFFFu : theme.hint);
             };
-            if (guide) button(8 * s, "< BACK", onBack);
+            if (guide && !Launcher::Glassy(canvas)) button(8 * s, "< BACK", onBack); // (the glass page has its own)
             else if (!Launcher::Glassy(canvas))
             {
                 button(canvas.w - 8 * s - Canvas::TextWidth("SETTINGS", s), "SETTINGS", onSettings);

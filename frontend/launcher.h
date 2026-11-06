@@ -2674,6 +2674,14 @@ struct SettingsPage
             ok = fclose(f) == 0 && ok;
             std::error_code ec;
             if (ok) std::filesystem::rename(tmp, path, ec);
+            if (ok && ec)
+            {
+                // (The Switch's SD card does not rename over a file that is there: the old one goes first.)
+                std::error_code gone;
+                std::filesystem::remove(path, gone);
+                ec.clear();
+                std::filesystem::rename(tmp, path, ec);
+            }
             if (!ok || ec) fprintf(stderr, "[launcher] cannot save settings: %s\n", path.c_str());
         }
         return s.key;
@@ -2761,5 +2769,115 @@ struct SettingsPage
     c.Text((c.w - Canvas::TextWidth(hint, hintScale)) / 2, c.h - 12 * s, hint, hintScale, th.pokemon ? 0xFFDBE9FAu : th.hint);
     }
 };
+
+// The settings page as the pause menu's glass settings pages draw it (Menu::style 1, ui_settings.h):
+// a back row, then the groups (each opens its options) or one group's options (On / Off, a choice
+// of values, something to do, or something to read), each with what it does beside the rows.
+// map: each row's place in p.items (-1: the back row). onBack: the back row chosen.
+// A settings description (written in capitals) in sentence case for the glass page: lower case but for
+// each sentence's first letter and the names kept as they are written (ROM, SD, HOME, GitHub...). A
+// lone A stays a capital only as the button (A:, A PLAYS, A / B, THE A BUTTON); else it is "a".
+inline std::string SettingSentence(const std::string& s)
+{
+    for (char ch : s) if (ch >= 'a' && ch <= 'z') return s;
+    static const char* const keep[] = { "FPS", "HUD", "GBA", "DS", "3D", "2D", "PC", "OK", "B", "X", "Y", "L", "R", "ZL", "ZR", "MB", "GPU",
+                                        "CPU", "JIT", "LCD", "ROM", "ROMS", "SD", "HOME", "USB", "AUTO", "PS", "NDS", "UI", "4X", "2X", "16:9" };
+    static const std::pair<const char*, const char*> spelt[] = { { "POKEMON", "Pok\xC3\xA9mon" }, { "POKEDEX", "Pok\xC3\xA9" "dex" },
+        { "GITHUB", "GitHub" }, { "RETROACHIEVEMENTS", "RetroAchievements" }, { "XBOX", "Xbox" }, { "JOY", "Joy" }, { "CON", "Con" },
+        { "MISSIONCONTROL", "MissionControl" }, { "SYS", "sys" }, { "FULLDEX", "Fulldex" }, { "WINDOWS", "Windows" }, { "MAC", "Mac" },
+        { "LINUX", "Linux" }, { "ANDROID", "Android" }, { "IPHONE", "iPhone" }, { "SWITCH", "Switch" }, { "STEAM", "Steam" } };
+    std::string out;
+    bool start = true;
+    size_t i = 0;
+    while (i < s.size())
+    {
+        size_t j = i;
+        while (j < s.size() && ((s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= '0' && s[j] <= '9') || (unsigned char)s[j] >= 0x80)) j++;
+        if (j == i) { out += s[i]; if (s[i] == '.' || s[i] == '!' || s[i] == '?') start = true; i++; continue; }
+        std::string w = s.substr(i, j - i);
+        bool kept = false;
+        for (const char* k : keep) if (w == k) kept = true;
+        for (const auto& sp : spelt) if (w == sp.first) { w = sp.second; kept = true; }
+        if (w == "A")
+        {
+            // (The button: before ":" or "/", before PLAYS / BUTTON, after "/" or THE.)
+            size_t k = j;
+            while (k < s.size() && s[k] == ' ') k++;
+            const std::string next = s.substr(k, 7);
+            const std::string before = out.size() >= 4 ? out.substr(out.size() - 4) : out;
+            kept = (k < s.size() && (s[k] == ':' || s[k] == '/')) || next.compare(0, 5, "PLAYS") == 0 || next.compare(0, 6, "BUTTON") == 0 ||
+                   (!out.empty() && out.find_last_not_of(' ') != std::string::npos && out[out.find_last_not_of(' ')] == '/') || before == "the ";
+        }
+        if (!kept)
+            for (size_t k = start ? 1 : 0; k < w.size(); k++)
+                if (w[k] >= 'A' && w[k] <= 'Z') w[k] += 32;
+        out += w;
+        start = false;
+        i = j;
+    }
+    return out;
+}
+// The icon a settings row has on the glass page: its group's for a group, else its own (or its group's).
+inline int SettingIcon(const Setting& s, int group)
+{
+    static const int groupIcon[] = { Glass::I_MONITOR, Glass::I_SPEAKER, Glass::I_LAYERS, Glass::I_PAD, Glass::I_WINDOW,
+                                     Glass::I_GRID, Glass::I_TROPHY, Glass::I_INFO, Glass::I_SPARKLE };
+    if (s.key && !strncmp(s.key, "!group", 6)) { const int g = atoi(s.key + 6); return g >= 0 && g < 9 ? groupIcon[g] : Glass::I_GEAR; }
+    if (!s.key) return Glass::I_INFO;
+    static const std::pair<const char*, int> own[] = {
+        { "view", Glass::I_LAYOUT }, { "large_screen", Glass::I_EXPAND }, { "fullscreen", Glass::I_FULLSCREEN }, { "smooth", Glass::I_SCREENS },
+        { "battle_buttons", Glass::I_PAD }, { "show_fps", Glass::I_GAUGE }, { "fps60", Glass::I_FAST }, { "wide", Glass::I_RATIO },
+        { "wide_map", Glass::I_GLOBE }, { "wide_lines", Glass::I_LAYERS }, { "busy_detail", Glass::I_GAUGE }, { "ff_low_res", Glass::I_FAST },
+        { "wide_gpu", Glass::I_CHIP }, { "volume", Glass::I_SPEAKER }, { "start_button", Glass::I_PAD }, { "buttons", Glass::I_PAD },
+        { "pad_touch", Glass::I_PAD }, { "!keys", Glass::I_PAD }, { "!shortcuts", Glass::I_WINDOW }, { "!forwarders", Glass::I_WINDOW },
+        { "list_lang", Glass::I_GLOBE }, { "ra", Glass::I_TROPHY }, { "!ra_login", Glass::I_PEOPLE }, { "!updates", Glass::I_LOAD } };
+    for (const auto& o : own)
+        if (!strcmp(s.key, o.first)) return o.second;
+    if (!strncmp(s.key, "list_", 5)) return Glass::I_GRID;
+    if (!strncmp(s.key, "extra_", 6)) return Glass::I_SPARKLE;
+    return group >= 0 && group < 9 ? groupIcon[group] : Glass::I_GEAR;
+}
+inline void BuildSettingsMenu(Menu& m, std::vector<int>& map, const SettingsPage& p, bool onBack)
+{
+    m.items.clear();
+    map.clear();
+    m.open = true; m.style = 1; m.keyGrid = false; m.columns = 0; m.pageIcon = Glass::I_GEAR;
+    m.items.push_back({ "BACK", "" });
+    m.items.back().kind = Menu::K_BACK;
+    map.push_back(-1);
+    for (size_t i = 0; i < p.items.size(); i++)
+    {
+        const Setting& s = p.items[i];
+        MenuItem it;
+        it.label = s.name;
+        it.desc = SettingSentence(s.text ? s.text : "");
+        it.icon = SettingIcon(s, p.group);
+        if (p.group < 0) it.kind = Menu::K_LINK;
+        else if (!s.key) it.kind = Menu::K_PLAIN;
+        else if (s.key[0] == '!') { it.kind = Menu::K_LINK; it.value = p.Shown(s); }
+        else
+        {
+            const int vi = p.ValueIndex(s);
+            bool onOff = s.values.size() == 2;
+            for (const auto& v : s.values) onOff = onOff && (v.second == "ON" || v.second == "OFF");
+            if (onOff)
+            {
+                it.kind = Menu::K_TOGGLE;
+                it.choices = { "OFF", "ON" };
+                it.choice = vi >= 0 && s.values[vi].second == "ON" ? 1 : 0;
+            }
+            else
+            {
+                it.kind = Menu::K_PICKER;
+                it.value = p.Shown(s);
+                for (const auto& v : s.values) it.choices.push_back(v.second);
+                it.choice = vi;
+            }
+        }
+        m.items.push_back(it);
+        map.push_back((int)i);
+    }
+    m.selected = onBack ? 0 : std::max(0, std::min((int)m.items.size() - 1, p.selected + 1));
+}
 
 }
