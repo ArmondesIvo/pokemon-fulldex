@@ -7,6 +7,7 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <memory>
 #include <map>
@@ -2290,6 +2291,34 @@ int main(int argc, char** argv)
     SDL_Texture* tex[2] = { nullptr, nullptr };
     SDL_Texture* overlayTex = nullptr;
     int overlayTexW = 0, overlayTexH = 0;
+    // The live companion (COMPANION WINDOW, HUD, STATUS BAR) in a layer of its own: drawn again
+    // only when something on it changes (the companion's reading, the glass read again, the
+    // clock), and shown from its texture every frame. (Drawn every frame it took 38 to 75 ms
+    // of a frame on the Switch.)
+    Canvas liveCanvas;
+    SDL_Texture* liveTex = nullptr;
+    int liveTexW = 0, liveTexH = 0;
+    bool liveTexStale = false; // (liveCanvas drawn again since the texture was filled: all of it)
+    std::vector<SDL_Rect> liveStale; // (else these parts of it)
+    std::string liveKey;       // (what the layer was last drawn for: settings, size, glass or not)
+    // Its parts (the COMPANION WINDOW or the HUD's cards; the minimap; the STATUS BAR), each drawn
+    // again only when what it shows changes: walking moves the minimap, not the cards.
+    struct LivePart
+    {
+        std::string key;
+        std::vector<Glass::LiveGlass::Rect> want;   // (its glass, to be read back)
+        std::vector<Glass::LiveGlass::Panel> panels; // (and frosted)
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;          // (where it was drawn)
+    };
+    LivePart liveParts[3];
+    // Its frost, a layer under it (Glass::FrostDraw), drawn again when the glass is read again:
+    // only the panels over the part read.
+    Canvas frostCanvas;
+    SDL_Texture* frostTex = nullptr;
+    int frostTexW = 0, frostTexH = 0;
+    unsigned frostGeneration = ~0u;
+    bool frostAllStale = false;          // (the whole layer to be sent again)
+    std::vector<SDL_Rect> frostStale;    // (else these parts of it)
     SDL_AudioDeviceID audio = 0;
     Pads pads;
     Layout layout = LayoutFromName(cfg.layout);
@@ -5271,7 +5300,11 @@ int main(int argc, char** argv)
                 it.desc = desc;
             };
             static const char* const layouts[] = { "WIDESCREEN", "BIG + SMALL", "BIG TOP", "BIG BOTTOM", "SIDE BY SIDE", "STACKED", "TOP ONLY", "BOTTOM ONLY" };
+#ifndef __SWITCH__
             const int lc = layoutChoice();
+#else
+            const int lc = -1; // (the Switch has its own layouts, under DISPLAY)
+#endif
             link(M_DISPLAY, "DISPLAY", Glass::I_MONITOR, lc >= 0 && lc < 8 ? layouts[lc] : "", "Screen layout, language, overlays",
                  "How the two screens are shown, the language, the shape of the picture and what shows over the game: battle buttons, FPS, the companion window and party HUD.");
 #ifdef __SWITCH__
@@ -6598,7 +6631,7 @@ int main(int argc, char** argv)
     struct DrawJob
     {
         bool valid = false;
-        bool merged = false, overlayUsed = false, wantShot = false;
+        bool merged = false, overlayUsed = false, wantShot = false, liveUsed = false;
         uint32_t frameNo = 0; // (for the name of a screenshot)
         int outW = 0, outH = 0;
         SDL_Rect rects[2] {};
@@ -6688,6 +6721,33 @@ int main(int argc, char** argv)
 #endif
     if (opt.headless || ref || (!opt.shotDir.empty() && !getenv("SSR_PIPELINE"))) pipelined = false;
     EmuThread emuThread;
+#ifdef __SWITCH__
+    // (Live frosted glass for the HUD's cards and the STATUS BAR; the COMPANION WINDOW's large
+    // panel dark glass. FULLDEX_GLASS_MAX to try others, 0 for any size.)
+    {
+        const char* e = getenv("FULLDEX_GLASS_MAX");
+        Glass::Live().maxArea = e ? atoi(e) : 60000;
+    }
+    // The closing down's watch (see the end of main), its thread made now: at the end, with
+    // the program's memory all but used, it was never seen to start (test runs stopped for good
+    // at "[exit] achievements", and its message never came).
+    std::atomic<double> exitDeadline { 0 };
+    std::atomic<bool> exitFinished { false };
+    std::thread exitWatch([&] {
+        bool said = false;
+        while (!exitFinished)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            const double d = exitDeadline;
+            if (d > 0 && !said) { fprintf(stderr, "[exit] (watched)\n"); fflush(stderr); said = true; }
+            if (d <= 0 || perfNow() < d || exitFinished) continue;
+            fprintf(stderr, "[exit] closing down did not finish within 5 seconds: ending the program without the rest\n");
+            fflush(stderr);
+            SwitchPlatform::Finish();
+            SwitchPlatform::ForceExit();
+        }
+    });
+#endif
     int emuSpeed = 1, emuGot = 0;
     double emuMs = 0, perfEmu = 0;
     uint64_t perfDsFrames = 0; // DS frames emulated since the last timing line (several a frame when fast forwarding)
@@ -6839,7 +6899,18 @@ int main(int argc, char** argv)
             Glass::LiveGlass& g = Glass::Live();
             std::lock_guard<std::mutex> hold(g.lock);
             static unsigned liveFrame = 0;
-            if (!menu.open && !g.wanted.empty() && j.outW > 0 && j.outH > 0 && (liveFrame++ % 3 == 0 || !g.Ready(canvas)))
+            // (How often, in frames: each read makes the graphics chip finish first, 4 to 6 ms on
+            // the Switch, and the layer is drawn again over it. FULLDEX_GLASS_EVERY to try others.)
+            static const unsigned every = [] {
+                const char* e = getenv("FULLDEX_GLASS_EVERY");
+#ifdef __SWITCH__
+                const unsigned dflt = 6;
+#else
+                const unsigned dflt = 3;
+#endif
+                return e && atoi(e) > 0 ? (unsigned)atoi(e) : dflt;
+            }();
+            if (!menu.open && !g.wanted.empty() && j.outW > 0 && j.outH > 0 && (liveFrame++ % every == 0 || !g.Ready(canvas)))
             {
                 const bool firstRead = g.w != j.outW || g.h != j.outH; // (every piece read the first time)
                 if (firstRead) { g.px.assign((size_t)j.outW * j.outH, 0xFF000000u); g.w = j.outW; g.h = j.outH; }
@@ -6875,6 +6946,7 @@ int main(int argc, char** argv)
                     if (SDL_RenderReadPixels(renderer, &rect, SDL_PIXELFORMAT_ARGB8888, shot.data(), rect.w * 4) != 0) { readOk = false; break; }
                     const double t1 = perfLog ? perfNow() : 0;
                     Glass::MakeBackdrop(blurred, shot.data(), rect.w, rect.h);
+                    g.lastRead = firstRead ? Glass::LiveGlass::Rect { 0, 0, j.outW, j.outH } : Glass::LiveGlass::Rect { rect.x, rect.y, rect.w, rect.h };
                     if (perfLog) { readMs += t1 - t0; blurMs += perfNow() - t1; pixels += (double)rect.w * rect.h; }
                     for (int y = 0; y < rect.h; y++) std::copy(&blurred[(size_t)y * rect.w], &blurred[(size_t)y * rect.w] + rect.w, &g.px[(size_t)(rect.y + y) * g.w + rect.x]);
                 }
@@ -6884,6 +6956,7 @@ int main(int argc, char** argv)
                     readMs = blurMs = pixels = 0; reads = 0;
                 }
                 if (!readOk) { g.px.clear(); g.w = g.h = 0; g.wanted.clear(); } // (a renderer that cannot be read: dark glass)
+                g.generation++; // (what is drawn on the glass is drawn again over the new picture)
             }
         }
         const bool backdropStale = canvas.backdrop.size() > 1 && canvas.backdrop.size() != (size_t)j.outW * j.outH;
@@ -6906,6 +6979,58 @@ int main(int argc, char** argv)
         {
             canvas.backdrop.clear();
             canvas.sharp.clear();
+        }
+        // The live companion's frost (frostCanvas), then what is on it (liveCanvas), each from its
+        // texture, filled again where it was drawn again.
+        if (j.liveUsed && !backdropJustRead && frostCanvas.w == j.outW && frostCanvas.h == j.outH && frostCanvas.Dirty())
+        {
+            if (!frostTex || frostTexW != j.outW || frostTexH != j.outH)
+            {
+                if (frostTex) SDL_DestroyTexture(frostTex);
+                frostTex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, j.outW, j.outH);
+                if (frostTex) SDL_SetTextureBlendMode(frostTex, SDL_BLENDMODE_BLEND);
+                frostTexW = j.outW;
+                frostTexH = j.outH;
+                frostAllStale = true;
+            }
+            const SDL_Rect dr = { frostCanvas.x0d, frostCanvas.y0d, frostCanvas.x1d - frostCanvas.x0d, frostCanvas.y1d - frostCanvas.y0d };
+            if (frostTex && frostAllStale)
+                SDL_UpdateTexture(frostTex, &dr, frostCanvas.px.data() + (size_t)dr.y * j.outW + dr.x, j.outW * 4);
+            else if (frostTex)
+                for (SDL_Rect r : frostStale)
+                {
+                    SDL_Rect c;
+                    if (!SDL_IntersectRect(&r, &dr, &c)) continue;
+                    SDL_UpdateTexture(frostTex, &c, frostCanvas.px.data() + (size_t)c.y * j.outW + c.x, j.outW * 4);
+                }
+            frostAllStale = false;
+            frostStale.clear();
+            if (frostTex) SDL_RenderCopy(renderer, frostTex, &dr, &dr);
+        }
+        if (j.liveUsed && !backdropJustRead && liveCanvas.w == j.outW && liveCanvas.h == j.outH && liveCanvas.Dirty())
+        {
+            if (!liveTex || liveTexW != j.outW || liveTexH != j.outH)
+            {
+                if (liveTex) SDL_DestroyTexture(liveTex);
+                liveTex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, j.outW, j.outH);
+                if (liveTex) SDL_SetTextureBlendMode(liveTex, SDL_BLENDMODE_BLEND);
+                liveTexW = j.outW;
+                liveTexH = j.outH;
+                liveTexStale = true;
+            }
+            const SDL_Rect dr = { liveCanvas.x0d, liveCanvas.y0d, liveCanvas.x1d - liveCanvas.x0d, liveCanvas.y1d - liveCanvas.y0d };
+            if (liveTex && liveTexStale)
+                SDL_UpdateTexture(liveTex, &dr, liveCanvas.px.data() + (size_t)dr.y * j.outW + dr.x, j.outW * 4);
+            else if (liveTex)
+                for (SDL_Rect r : liveStale)
+                {
+                    SDL_Rect c;
+                    if (!SDL_IntersectRect(&r, &dr, &c)) continue;
+                    SDL_UpdateTexture(liveTex, &c, liveCanvas.px.data() + (size_t)c.y * j.outW + c.x, j.outW * 4);
+                }
+            liveTexStale = false;
+            liveStale.clear();
+            if (liveTex) SDL_RenderCopy(renderer, liveTex, &dr, &dr);
         }
         if (j.overlayUsed && !backdropJustRead)
         {
@@ -9896,6 +10021,7 @@ int main(int argc, char** argv)
         sceneMark(2);
         // Overlay: touch cursor, status message, pause menu.
         bool overlayUsed = false;
+        bool liveUsed = false;
         canvas.Resize(outW, outH);
         canvas.Clear();
         const SDL_Rect cursorRect = merged
@@ -10033,39 +10159,219 @@ int main(int argc, char** argv)
             canvas.Text(tx + 4 * sc, ty + 3 * sc, toast, sc, (fade << 24) | 0xFFFFFF);
             overlayUsed = true;
         }
-        // The live companion: COMPANION WINDOW (beside the game), else HUD; STATUS BAR (ui_settings.h).
+        // The live companion: COMPANION WINDOW (beside the game), else HUD; STATUS BAR (ui_settings.h),
+        // in its own layer (liveCanvas), drawn again only when what it shows changes.
         if (!menu.open && (cfg.companionOverlay || cfg.partyHud || cfg.statusBar) && companionSnapshot.ready && !opt.headless)
         {
+            // (FULLDEX_PERF_LOG: what each part of the overlay costs when it is drawn, and how often.)
+            static const bool hudPerf = getenv("FULLDEX_PERF_LOG") != nullptr;
+            static double hudMs[5] = {};
+            static int hudN = 0, hudFrames = 0, hudFrost = 0;
+            double hudT = hudPerf ? perfNow() : 0;
+            auto hudMark = [&](int part) {
+                if (!hudPerf) return;
+                const double t = perfNow();
+                hudMs[part] += t - hudT;
+                hudT = t;
+            };
             if (liveViewVersion != companionVersion) { fillCompanionView(liveView); liveViewVersion = companionVersion; }
+            hudMark(0);
             std::lock_guard<std::mutex> holdGlass(Glass::Live().lock);
-            Glass::Live().want.clear(); // (each piece of glass below says where it is: the next read-back)
             // (Battle while a battle runs, then the tab that was open.)
             const bool inBattle = !liveView.battle.empty();
             if (inBattle && liveTabBeforeBattle < 0 && liveTab != 4) { liveTabBeforeBattle = liveTab; liveTab = 4; }
             if (!inBattle && liveTabBeforeBattle >= 0) { liveTab = liveTabBeforeBattle; liveTabBeforeBattle = -1; }
-            if (cfg.companionOverlay) CompanionWindow(canvas, liveView, liveTab, liveTabRects, livePanel);
-            else if (cfg.partyHud)
-            {
-                PartyHud(canvas, liveView);
-                const float k = std::max(0.42f, std::min(outW, outH) / 720.0f);
-                const int top = (int)std::lround(16 * k) + (int)liveView.party.size() * ((int)std::lround(46 * k) + (int)std::lround(6 * k)) + (int)std::lround(4 * k);
-                MiniMap(canvas, liveView, (int)std::lround(16 * k), top, (int)std::lround(132 * k), k);
-            }
+            static int battery = -1;
+            static uint32_t batteryAt = 0;
+            char clock[8] = "";
             if (cfg.statusBar && !cfg.companionOverlay)
             {
-                static int battery = -1;
-                static uint32_t batteryAt = 0;
                 if (frame >= batteryAt) { int pct = -1; battery = SDL_GetPowerInfo(nullptr, &pct) == SDL_POWERSTATE_ON_BATTERY ? pct : -1; batteryAt = frame + 600; }
-                char clock[8] = "";
                 const time_t now = time(nullptr);
                 if (const tm* t = localtime(&now)) snprintf(clock, sizeof(clock), "%02d:%02d", t->tm_hour, t->tm_min);
-                StatusBar(canvas, liveView.place, liveView.balls, clock, battery, liveView.money);
+            }
+            // (The layer as a whole depends on the settings, the size and whether there is glass to
+            // frost yet; each part on what it shows. Not on the glass itself: its frost is the
+            // layer under it, below.)
+            Glass::LiveGlass& lg = Glass::Live();
+            // (The phone's on-screen controls, kept clear of: LiveAvoid, ui_settings.h.)
+            auto& avoid = LiveAvoid();
+            avoid.clear();
+            if (touchPadUsed && touchPad.visible && touchPad.w == outW && touchPad.h == outH)
+            {
+                avoid.push_back({ (int)(touchPad.dpadX - touchPad.dpadR), (int)(touchPad.dpadY - touchPad.dpadR), (int)(touchPad.dpadX + touchPad.dpadR), (int)(touchPad.dpadY + touchPad.dpadR) });
+                for (const TouchPad::Button& b : touchPad.buttons)
+                {
+                    const float rx = b.w > 0 ? b.w / 2 : b.r, ry = b.w > 0 ? b.h / 2 : b.r;
+                    avoid.push_back({ (int)(b.x - rx), (int)(b.y - ry), (int)(b.x + rx), (int)(b.y + ry) });
+                }
+            }
+            long long avoidSum = 0;
+            for (const auto& r : avoid) avoidSum = avoidSum * 31 + r[0] + r[1] * 7 + r[2] * 13 + r[3] * 17;
+            char key[256];
+            snprintf(key, sizeof(key), "%d%d%d %dx%d %d %lld", (int)cfg.companionOverlay, (int)cfg.partyHud, (int)cfg.statusBar, outW, outH, (int)lg.Ready(canvas), avoidSum);
+            bool panelsNew = false;
+            if (liveKey != key || liveCanvas.w != outW || liveCanvas.h != outH)
+            {
+                liveKey = key;
+                liveCanvas.Resize(outW, outH);
+                liveCanvas.Clear();
+                for (LivePart& part : liveParts) part = LivePart();
+                liveTexStale = true;
+                liveStale.clear();
+                panelsNew = true;
+            }
+            float hk = std::max(0.42f, std::min(outW, outH) / 720.0f);
+            // (The HUD's column: below the phone's L button and above its D-pad, the cards and the
+            // minimap made smaller to fit there, the minimap left out if they would be too small.)
+            int hudTop = (int)std::lround(16 * hk);
+            bool hudMap = true;
+            if (cfg.partyHud && !cfg.companionOverlay && !avoid.empty())
+            {
+                int bottom = outH - (int)std::lround(16 * hk);
+                LiveBand(0, (int)std::lround(160 * hk), outH, (int)std::lround(10 * hk), hudTop, bottom);
+                const int n = (int)liveView.party.size();
+                const float unit = n * 52.0f + 4 + (liveView.map.empty() ? 0 : 132);
+                const float room = (float)std::max(0, bottom - hudTop);
+                if (room / unit < hk)
+                {
+                    hk = room / unit;
+                    if (hk < 0.42f && !liveView.map.empty()) { hudMap = false; hk = std::min(std::max(0.42f, std::min(outW, outH) / 720.0f), room / (n * 52.0f + 4)); }
+                    hk = std::max(hk, 0.3f);
+                }
+            }
+            // (A part drawn again: where it was cleared, drawn, its glass noted.)
+            auto drawPart = [&](int i, const std::string& partKey, const std::function<void()>& draw) {
+                LivePart& part = liveParts[i];
+                if (part.key == partKey) return;
+                part.key = partKey;
+                const int ox0 = liveCanvas.x0d, oy0 = liveCanvas.y0d, ox1 = liveCanvas.x1d, oy1 = liveCanvas.y1d;
+                for (int y = std::max(0, part.y0); y < std::min(outH, part.y1); y++)
+                    std::fill(liveCanvas.px.begin() + (size_t)y * outW + std::max(0, part.x0), liveCanvas.px.begin() + (size_t)y * outW + std::min(outW, part.x1), 0u);
+                if (part.x1 > part.x0) liveStale.push_back({ part.x0, part.y0, part.x1 - part.x0, part.y1 - part.y0 });
+                liveCanvas.x0d = outW; liveCanvas.y0d = outH; liveCanvas.x1d = liveCanvas.y1d = 0;
+                lg.want.clear();
+                lg.panels.clear();
+                lg.contentOnly = true;
+                draw();
+                lg.contentOnly = false;
+                if (!part.panels.empty() || !lg.panels.empty()) panelsNew = true;
+                part.want = lg.want;
+                part.panels = lg.panels;
+                if (liveCanvas.Dirty())
+                {
+                    part.x0 = liveCanvas.x0d; part.y0 = liveCanvas.y0d; part.x1 = liveCanvas.x1d; part.y1 = liveCanvas.y1d;
+                    liveStale.push_back({ part.x0, part.y0, part.x1 - part.x0, part.y1 - part.y0 });
+                }
+                else part.x0 = part.y0 = part.x1 = part.y1 = 0;
+                // (The layer's drawn rectangle: everything drawn in it, before and now.)
+                if (ox1 > ox0 && oy1 > oy0)
+                {
+                    liveCanvas.x0d = std::min(liveCanvas.x0d, ox0); liveCanvas.y0d = std::min(liveCanvas.y0d, oy0);
+                    liveCanvas.x1d = std::max(liveCanvas.x1d, ox1); liveCanvas.y1d = std::max(liveCanvas.y1d, oy1);
+                }
+                hudN++;
+            };
+            if (cfg.companionOverlay)
+            {
+                // (What the window shows, as a number: the companion is read twice a second and
+                // most reads change nothing on it.)
+                static unsigned viewHashOf = ~0u;
+                static uint64_t viewHash = 0;
+                if (viewHashOf != liveViewVersion)
+                {
+                    viewHashOf = liveViewVersion;
+                    uint64_t h = 1469598103934665603ull;
+                    auto mix = [&](const void* p, size_t n) { for (size_t i = 0; i < n; i++) { h ^= ((const uint8_t*)p)[i]; h *= 1099511628211ull; } };
+                    auto str = [&](const std::string& t) { mix(t.data(), t.size()); mix("|", 1); };
+                    auto num = [&](long long v) { mix(&v, sizeof v); };
+                    const auto& v = liveView;
+                    auto mon = [&](const Menu::CompanionView::Mon& m) {
+                        str(m.name); str(m.item); num(m.level); num(m.hp); num(m.maxHp); num(m.status); num(m.egg); num((long long)m.icon.size());
+                        for (const auto& mv : m.moves) { str(mv.name); num(mv.pp); }
+                    };
+                    for (const auto& m : v.party) mon(m);
+                    for (const auto& pk : v.pockets) { str(pk.name); num(pk.total); }
+                    for (const auto& it : v.bag) { str(it.name); num(it.quantity); }
+                    num(v.seen); num(v.caught); num(v.dexTotal); num(v.badges); num((long long)v.dex.size());
+                    str(v.place); str(v.area); num(v.mapW); num(v.mapH); num(v.balls); num(v.money);
+                    num((long long)std::floor(v.markerX * v.mapW * 4)); num((long long)std::floor(v.markerY * v.mapH * 4));
+                    for (const auto& m : v.battle) mon(m);
+                    for (const auto& l : v.battleLines) str(l);
+                    mon(v.foe); str(v.mine);
+                    for (const auto& mv : v.moves) { str(mv.name); str(mv.note); num(mv.pp); num(mv.percent); }
+                    for (const auto& c : v.coverage) { num(c.party); num(c.out); num(c.in); }
+                    for (const auto& g : v.guide) { str(g.text); num(g.shown); }
+                    viewHash = h;
+                }
+                char k[64];
+                snprintf(k, sizeof(k), "%llx %d", (unsigned long long)viewHash, liveTab);
+                drawPart(0, k, [&] { CompanionWindow(liveCanvas, liveView, liveTab, liveTabRects, livePanel); });
+                hudMark(1);
+            }
+            else if (cfg.partyHud)
+            {
+                // (The cards: each one's icon, level and HP.)
+                std::string k;
+                for (const auto& m : liveView.party)
+                    k += m.name + ' ' + std::to_string(m.level) + ' ' + std::to_string(m.hp) + '/' + std::to_string(m.maxHp) + (m.egg ? "e" : "") +
+                        std::to_string(m.iconW) + ' ' + std::to_string(m.icon.empty() ? 0u : m.icon[m.icon.size() / 2]) + ';';
+                k += std::to_string(hudTop) + ' ' + std::to_string(hk);
+                drawPart(0, k, [&] { PartyHud(liveCanvas, liveView, hudTop, hk); });
+                hudMark(1);
+                // (The minimap: which map, and where on it you are, to a quarter of its pixels.)
+                const int top = hudTop + (int)liveView.party.size() * ((int)std::lround(46 * hk) + (int)std::lround(6 * hk)) + (int)std::lround(4 * hk);
+                char mk[112];
+                snprintf(mk, sizeof(mk), "%d %d %.3f %dx%d %u %d %d", top, (int)hudMap, hk, liveView.mapW, liveView.mapH, liveView.map.empty() ? 0u : liveView.map[liveView.map.size() / 3],
+                    (int)std::floor(liveView.markerX * liveView.mapW * 4), (int)std::floor(liveView.markerY * liveView.mapH * 4));
+                drawPart(1, mk, [&] { if (hudMap) MiniMap(liveCanvas, liveView, (int)std::lround(16 * hk), top, (int)std::lround(132 * hk), hk); });
+                hudMark(2);
+            }
+            else hudMark(1);
+            if (cfg.statusBar && !cfg.companionOverlay)
+            {
+                const std::string k = liveView.place + '|' + std::to_string(liveView.balls) + '|' + std::to_string(liveView.money) + '|' + clock + '|' + std::to_string(battery);
+                drawPart(2, k, [&] { StatusBar(liveCanvas, liveView.place, liveView.balls, clock, battery, liveView.money); });
+                hudMark(3);
             }
             if (!cfg.companionOverlay) livePanel[2] = 0;
-            Glass::Live().wanted = Glass::Live().want;
-            overlayUsed = true;
+            // (The glass to read back, and to frost: every part's.)
+            lg.want.clear();
+            lg.panels.clear();
+            for (const LivePart& part : liveParts)
+            {
+                lg.want.insert(lg.want.end(), part.want.begin(), part.want.end());
+                lg.panels.insert(lg.panels.end(), part.panels.begin(), part.panels.end());
+            }
+            lg.wanted = lg.want;
+            const bool contentNew = panelsNew;
+            // The frost: all of it with what is on it, else the panels over the part read again.
+            if (contentNew || frostGeneration != lg.generation || frostCanvas.w != outW || frostCanvas.h != outH)
+            {
+                const bool all = contentNew || frostCanvas.w != outW || frostCanvas.h != outH;
+                if (all) { frostCanvas.Resize(outW, outH); frostCanvas.Clear(); frostAllStale = true; frostStale.clear(); }
+                const auto& lr = lg.lastRead;
+                for (const auto& p : lg.panels)
+                {
+                    if (!all && !(p.x < lr.x + lr.w && lr.x < p.x + p.w && p.y < lr.y + lr.h && lr.y < p.y + p.h)) continue;
+                    Glass::FrostDraw(frostCanvas, p.x, p.y, p.w, p.h, p.r, true);
+                    if (!all) frostStale.push_back({ p.x, p.y, p.w, p.h });
+                }
+                frostGeneration = lg.generation;
+                hudMark(4);
+                hudFrost++;
+            }
+            liveUsed = liveCanvas.Dirty() || frostCanvas.Dirty();
+            if (hudPerf && ++hudFrames == 300)
+            {
+                fprintf(stderr, "[hud] in 300 frames: parts drawn %d times; in all: party or window %.2f, map %.2f, status bar %.2f ms a frame; "
+                    "its frost drawn %d times, each %.2f ms; reading the companion %.2f ms a frame\n", hudN, hudMs[1] / 300, hudMs[2] / 300, hudMs[3] / 300,
+                    hudFrost, hudMs[4] / std::max(1, hudFrost), hudMs[0] / 300);
+                for (double& v : hudMs) v = 0;
+                hudN = hudFrames = hudFrost = 0;
+            }
         }
-        else { livePanel[2] = 0; std::lock_guard<std::mutex> holdGlass(Glass::Live().lock); Glass::Live().wanted.clear(); }
+        else { livePanel[2] = 0; liveKey.clear(); std::lock_guard<std::mutex> holdGlass(Glass::Live().lock); Glass::Live().wanted.clear(); }
         // The DS's two screens as the menu opens (the game is paused): the settings pages' previews.
         if (menu.open && canvas.dsTop.empty() && nds)
         {
@@ -10338,6 +10644,8 @@ int main(int argc, char** argv)
                     MergedBlackBars(shot, opt.composeW, opt.composeH);
                 }
                 else Compose(layout, opt.composeW, opt.composeH, top, bot, shot);
+                if (liveUsed && frostCanvas.w == opt.composeW && frostCanvas.h == opt.composeH) BlendCanvas(frostCanvas, shot);
+                if (liveUsed && liveCanvas.w == opt.composeW && liveCanvas.h == opt.composeH) BlendCanvas(liveCanvas, shot);
                 BlendCanvas(canvas, shot);
                 WritePNG(opt.shotDir + name, shot.data(), opt.composeW, opt.composeH);
             }
@@ -10368,6 +10676,7 @@ int main(int argc, char** argv)
             DrawJob& job = ahead ? aheadJobs[(aheadHead + aheadCount) % 3] : pipelined ? pendingJob : nowJob;
             job.merged = merged;
             job.overlayUsed = overlayUsed;
+            job.liveUsed = liveUsed;
             job.wantShot = wantShot && opt.windowShots;
             job.frameNo = frame;
             job.outW = outW;
@@ -10428,18 +10737,38 @@ int main(int argc, char** argv)
     if (!opt.noSave && !FlushSave(opt.save) && !opt.headless)
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FullDex save failed",
             "Your latest progress could not be written reliably. Check disk space and save-folder permissions. Keep the save and .tmp files for recovery.", window);
+#ifdef __SWITCH__
+    // Closing the sound has now and then never returned on the Switch (the game hung at
+    // "[exit] audio", in a test run with nothing else going on), QUIT after a save has frozen
+    // the console with the log ending in a clean "[exit] done", and test runs have stopped
+    // for good just after "[exit] saving". The save is written by now, so from here the
+    // closing down is watched: if it has not finished within five seconds the program ends
+    // without the rest (back to the HOME Menu rather than the Homebrew Menu; a test run's
+    // next run still starts).
+    exitDeadline = perfNow() + 5000;
+#endif
+    exitStep("achievements");
     Achievements::Stop();
     if (!opt.headless)
     {
+        exitStep("pictures");
         secondDisplay.Stop();
         screenEffect.Clear();
         statePreview.Clear();
         if(companionTexture){SDL_DestroyTexture(companionTexture);companionTexture=nullptr;}
+        if (overlayTex) { SDL_DestroyTexture(overlayTex); overlayTex = nullptr; }
+        if (liveTex) { SDL_DestroyTexture(liveTex); liveTex = nullptr; }
+        if (frostTex) { SDL_DestroyTexture(frostTex); frostTex = nullptr; }
+        exitStep("settings");
         if (!singleScreenRom) cfg.layout = LayoutName(layout.mode); // the automatic choice is not the player's setting
         cfg.focusMode = focus.mode;
         cfg.Save(opt.config);
     }
     Sampler::Stop();
+    // (The song-playing watcher's thread, Windows and Android: left running, the program's end
+    // stopped it as a crash, "terminate called without an active exception", exit code 3.)
+    exitStep("now playing");
+    NowPlaying::Stop();
     // The 3D render thread must be finished before anything it draws from is torn down.
     exitStep("3D render thread");
     if (auto* soft = dynamic_cast<melonDS::SoftRenderer*>(&nds->GPU.GetRenderer3D()))
@@ -10472,23 +10801,6 @@ int main(int argc, char** argv)
         fprintf(stderr, "[audio] %llu samples, peak %d, rms %.1f\n", (unsigned long long)AudioSamples, AudioPeak,
             sqrt(AudioSumSq / AudioSamples));
     if (nds->ARM9.RecompEnable) rc_print_stats();
-#ifdef __SWITCH__
-    // Closing the sound has now and then never returned on the Switch (the game hung at
-    // "[exit] audio", in a test run with nothing else going on), and QUIT after a save has
-    // frozen the console with the log ending in a clean "[exit] done", so in what the
-    // program's end does after that (the console is taken down here instead, under the
-    // watch). Everything that matters is saved by then, so if
-    // this does not finish within five seconds the program ends without the rest (back to the
-    // HOME Menu rather than the Homebrew Menu).
-    std::atomic<bool> sdlClosed { false };
-    std::thread exitWatch([&sdlClosed] {
-        for (int i = 0; i < 500 && !sdlClosed; i++) std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        if (sdlClosed) return;
-        fprintf(stderr, "[exit] closing down did not finish within 5 seconds: ending the program without the rest\n");
-        SwitchPlatform::Finish();
-        SwitchPlatform::ForceExit();
-    });
-#endif
     if (!opt.headless)
     {
         if (audio)
@@ -10503,9 +10815,8 @@ int main(int argc, char** argv)
     }
 #ifdef __SWITCH__
     exitStep("console");
-    NowPlaying::Stop();
     nds.reset();
-    sdlClosed = true;
+    exitFinished = true;
     exitWatch.join();
 #endif
 #ifdef __SWITCH__

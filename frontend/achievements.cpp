@@ -644,7 +644,18 @@ void Stop()
         g_queueWake.notify_all();
     }
     // (A request on its way is left to finish on its own: the program is ending.)
+    fprintf(stderr, "[exit] achievements: letting the request thread go%s\n", g_busy.load() ? " (it is in a request)" : "");
+    fflush(stderr);
+#ifdef __SWITCH__
+    // (On the Switch, letting it go (detach) never returned: the program stopped there for good
+    // when it ended. The thread is kept instead, in an object never destroyed, so that nothing
+    // waits for it: the program's end takes it down.)
+    if (g_worker.joinable()) new std::thread(std::move(g_worker));
+#else
     if (g_worker.joinable()) g_worker.detach();
+#endif
+    fprintf(stderr, "[exit] achievements: the game's set%s\n", g_loaded ? " unloaded" : "");
+    fflush(stderr);
     if (g_loaded) rc_client_unload_game(g_client);
     g_nds = nullptr;
     g_read.store(nullptr);

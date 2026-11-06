@@ -172,7 +172,7 @@ inline void Image(Canvas& c, Src s, float sx, float sy, float sw, float sh, int 
             if (r > 0)
             {
                 const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
-                if (qx > 0 && qy > 0) cover = std::clamp(r - std::hypot(qx, qy) + 0.5f, 0.0f, 1.0f);
+                if (qx > 0 && qy > 0) cover = std::clamp(r - Glass::Hyp(qx, qy) + 0.5f, 0.0f, 1.0f);
                 if (cover <= 0) continue;
             }
             const float u = sx + (px - dx + 0.5f) * sw / dw;
@@ -291,18 +291,18 @@ inline void Prompt(Canvas& c, int icon, const std::string& title, const std::str
 // Shapes for the controllers, as signed distances in pixels (negative inside).
 namespace PadSdf
 {
-inline float Circle(float x, float y, float cx, float cy, float r) { return std::hypot(x - cx, y - cy) - r; }
+inline float Circle(float x, float y, float cx, float cy, float r) { return Glass::Hyp(x - cx, y - cy) - r; }
 inline float Box(float x, float y, float cx, float cy, float hx, float hy, float r)
 {
     r = std::min(r, std::min(hx, hy));
     const float qx = std::fabs(x - cx) - hx + r, qy = std::fabs(y - cy) - hy + r;
-    return std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+    return Glass::Hyp(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
 }
 inline float Capsule(float x, float y, float ax, float ay, float bx, float by, float r)
 {
     const float px = x - ax, py = y - ay, dx = bx - ax, dy = by - ay;
     const float t = std::clamp((px * dx + py * dy) / (dx * dx + dy * dy), 0.0f, 1.0f);
-    return std::hypot(px - dx * t, py - dy * t) - r;
+    return Glass::Hyp(px - dx * t, py - dy * t) - r;
 }
 // A smooth join of two shapes (the grips flowing into the body), kk pixels wide.
 inline float Smin(float a, float b, float kk)
@@ -347,7 +347,7 @@ void Shade(Canvas& c, int x0, int y0, int x1, int y1, F&& sdf, uint32_t top, uin
             const float cover = std::clamp(0.5f - d, 0.0f, 1.0f);
             // (Which way the edge faces: up is lit, down is in shade.)
             const float gy = sdf(fx, fy + 1.0f) - sdf(fx, fy - 1.0f), gx = sdf(fx + 1.0f, fy) - sdf(fx - 1.0f, fy);
-            const float gl = std::max(0.001f, std::hypot(gx, gy));
+            const float gl = std::max(0.001f, Glass::Hyp(gx, gy));
             const float up = -(gy * 0.85f + gx * 0.35f) / gl; // (light from the top, a little from the left)
             const float rim = std::clamp(1.0f + d / bevel, 0.0f, 1.0f);
             uint32_t col = Mix(top, bottom, (fy - (y0 + pad)) / h);
@@ -445,7 +445,7 @@ inline void DrawPad(Canvas& c, int x, int y, int w, int h, float k, int kind, in
         const float cr = r * 0.72f;
         const float* axes = PadAxesNow() + (in == RS_ ? 2 : 0);
         float dx = std::clamp(axes[0], -1.0f, 1.0f), dy = std::clamp(axes[1], -1.0f, 1.0f);
-        const float len = std::hypot(dx, dy);
+        const float len = Glass::Hyp(dx, dy);
         if (len > 1) { dx /= len; dy /= len; }
         const float mx = cx + dx * (r - cr) * 0.95f, my = cy + dy * (r - cr) * 0.95f;
         const bool moved = len > 0.25f;
@@ -2285,6 +2285,22 @@ inline void Menu::DrawDialog(Canvas& c, const std::string& title, const std::str
     if (solid) Glass::Opaque(c);
 }
 
+// The phone's on-screen controls (x0, y0, x1, y1 each, output pixels; set by main.cpp while they
+// show): the live companion keeps clear of them, so nothing it draws sits under a button.
+inline std::vector<std::array<int, 4>>& LiveAvoid() { static std::vector<std::array<int, 4>> v; return v; }
+// The free band down the screen for something across x0..x1: below the controls in its top half,
+// above those in its bottom half (top and bottom as given when none are in the way). gap: the
+// space kept from a control.
+inline void LiveBand(int x0, int x1, int h, int gap, int& top, int& bottom)
+{
+    for (const auto& r : LiveAvoid())
+    {
+        if (r[2] <= x0 || r[0] >= x1) continue;
+        if ((r[1] + r[3]) / 2 < h / 2) top = std::max(top, r[3] + gap);
+        else bottom = std::min(bottom, r[1] - gap);
+    }
+}
+
 // The COMPANION WINDOW, live over the game as you play (PokeDaisy's companion on one screen): a
 // glass panel down the right of the screen, its tabs as icons along its top, the chosen tab's
 // picture under them. Tinted glass with a lit rim, no frost (it is drawn every frame over a moving
@@ -2296,9 +2312,18 @@ inline void CompanionWindow(Canvas& c, const Menu::CompanionView& cv, int tab, i
     // the game stays the main thing on one screen. full: the whole canvas, a second screen's, over
     // the blurred game already in it.)
     const float margin = std::min(c.w, c.h) * (full ? 0.035f : 0.03f);
-    const int ph = full ? (int)(c.h - 2 * margin) : (int)(c.h * 0.68f);
+    int ph = full ? (int)(c.h - 2 * margin) : (int)(c.h * 0.68f);
     const int pw = full ? (int)(c.w - 2 * margin) : (int)std::min(c.w * 0.25f, ph * 0.64f);
-    const int px = (int)(c.w - pw - margin), py = (int)margin;
+    const int px = (int)(c.w - pw - margin);
+    int py = (int)margin;
+    if (!full)
+    {
+        // (Between the phone's buttons above and below it, when they are in the way: shorter.)
+        int top = py, bottom = (int)(c.h - margin);
+        LiveBand(px, px + pw, c.h, (int)margin / 2, top, bottom);
+        py = top;
+        ph = std::max(std::min(ph, bottom - top), (int)(c.h * 0.3f));
+    }
     const float k = full ? std::max(0.5f, std::min(c.w, c.h) / 560.0f) : std::max(0.42f, ph / 640.0f);
     auto K = [&](float v) { return (int)std::lround(v * k); };
     if (panelRect) { panelRect[0] = px; panelRect[1] = py; panelRect[2] = pw; panelRect[3] = ph; }
@@ -2338,13 +2363,15 @@ inline void CompanionWindow(Canvas& c, const Menu::CompanionView& cv, int tab, i
 
 // The PARTY HUD, on the game while you walk: a small glass card for each Pokemon down the left,
 // its icon and HP bar (fainted ones dimmed).
-inline void PartyHud(Canvas& c, const Menu::CompanionView& cv)
+// top, scale: where the cards start and their size (main.cpp: below the phone's L button, small
+// enough to keep above its D-pad); -1 and 0 for the usual.
+inline void PartyHud(Canvas& c, const Menu::CompanionView& cv, int top = -1, float scale = 0)
 {
     using namespace SettingsArt;
-    const float k = std::max(0.42f, std::min(c.w, c.h) / 720.0f);
+    const float k = scale > 0 ? scale : std::max(0.42f, std::min(c.w, c.h) / 720.0f);
     auto K = [&](float v) { return (int)std::lround(v * k); };
     const int cw = K(132), ch = K(46), gap = K(6), x = K(16);
-    int y = K(16);
+    int y = top >= 0 ? top : K(16);
     for (const auto& m : cv.party)
     {
         if (Glass::FrostLive(c, x, y, cw, ch, 12 * k)) Glass::Round(c, x, y, cw, ch, 12 * k, Panel);
@@ -2417,7 +2444,12 @@ inline void StatusBar(Canvas& c, const std::string& place, int balls, const std:
         total += w + K(20);
     }
     total -= K(20) - K(16);
-    const int x0 = (c.w - total) / 2, y0 = K(10);
+    int y0 = K(10);
+    {
+        int bottom = c.h;
+        LiveBand((c.w - total) / 2, (c.w + total) / 2, c.h, K(6), y0, bottom); // (below the phone's buttons over it)
+    }
+    const int x0 = (c.w - total) / 2;
     if (Glass::FrostLive(c, x0, y0, total, h, h * 0.5f)) Glass::Round(c, x0, y0, total, h, h * 0.5f, Panel);
     else Glass::Round(c, x0, y0, total, h, h * 0.5f, 0xB8101826);
     Glass::Rim(c, x0, y0, total, h, h * 0.5f, std::max(1.0f, k), 0x70, 0x18);
@@ -2463,7 +2495,7 @@ inline void MiniMap(Canvas& c, const Menu::CompanionView& cv, int x, int y, int 
             if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
             // (Rounded corners.)
             const float qx = std::max(0.0f, std::fabs(xx + 0.5f - size * 0.5f) - (size * 0.5f - r)), qy = std::max(0.0f, std::fabs(yy + 0.5f - size * 0.5f) - (size * 0.5f - r));
-            const float cover = std::clamp(r + 0.5f - std::hypot(qx, qy), 0.0f, 1.0f);
+            const float cover = qx > 0 && qy > 0 ? std::clamp(r + 0.5f - Glass::Hyp(qx, qy), 0.0f, 1.0f) : 1.0f;
             if (cover <= 0) continue;
             const int mx = std::min(cv.mapW - 1, sx + xx * span / size), my = std::min(cv.mapH - 1, sy + yy * span / size);
             c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], cv.map[(size_t)my * cv.mapW + mx] | 0xFF000000u, (int)(cover * 255));

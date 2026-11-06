@@ -11,11 +11,18 @@
 
 namespace Glass
 {
+// sqrt(x*x + y*y) for the per-pixel shapes: std::hypot guards against overflow these small numbers
+// never reach and is a slow library call on the Switch (the HUD took 38 ms a frame there).
+inline float Hyp(float x, float y) { return std::sqrt(x * x + y * y); }
 // src (with its alpha, times cover/255) over dst; the result is opaque.
 inline uint32_t Over(uint32_t dst, uint32_t src, int cover = 255)
 {
     const int a = (int)(src >> 24) * cover / 255;
     const int da = (int)(dst >> 24);
+    // (Two common cases answered at once, as below would: solid over anything, and anything
+    // over nothing.)
+    if (a >= 255) return src | 0xFF000000u;
+    if (da == 0 && a > 0) return (uint32_t)a << 24 | (src & 0xFFFFFFu);
     if (da == 255 || da == 0 && a == 0)
     {
         // (Over a solid picture, as the menus' frosted game: the colour mixed, still solid.)
@@ -133,6 +140,17 @@ struct LiveGlass
     struct Rect { int x, y, w, h; };
     std::vector<Rect> want, wanted; // (this frame's pieces; the last frame's, for the read)
     std::mutex lock; // (the read and the drawing may be on two threads: the picture held while either uses it)
+    unsigned generation = 0; // (counted up at each read: what is drawn on the glass is drawn again then)
+    Rect lastRead { 0, 0, 0, 0 }; // (the part read last)
+    // The live companion is drawn in two layers (main.cpp): what is on the glass, drawn only when
+    // it changes, and the frost under it, drawn again whenever the glass is read. While the first
+    // is drawn (contentOnly), FrostLive only notes where its frost goes (panels).
+    bool contentOnly = false;
+    // Glass larger than this (pixels; 0: any) stays dark glass: on the Switch, reading back and
+    // frosting the COMPANION WINDOW's panel took over 50 ms each time.
+    int maxArea = 0;
+    struct Panel { int x, y, w, h; float r; };
+    std::vector<Panel> panels;
     bool Ready(const Canvas& c) const { return w == c.w && h == c.h && px.size() == (size_t)w * h; }
 };
 inline LiveGlass& Live() { static LiveGlass g; return g; }
@@ -170,7 +188,7 @@ inline void Frost(Canvas& c, int x, int y, int w, int h, float r)
         {
             const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
             float cover = 1.0f;
-            if (qx > 0 && qy > 0) cover = std::clamp(r - std::hypot(qx, qy) + 0.5f, 0.0f, 1.0f); // (the round corners)
+            if (qx > 0 && qy > 0) cover = std::clamp(r - Hyp(qx, qy) + 0.5f, 0.0f, 1.0f); // (the round corners)
             if (cover <= 0) continue;
             uint32_t& p = row[px];
             const float rr = (float)(p >> 16 & 255), gg = (float)(p >> 8 & 255), bb = (float)(p & 255);
@@ -198,43 +216,67 @@ inline void Frost(Canvas& c, int x, int y, int w, int h, float r)
 // Frost from the live backdrop (Live()) onto a transparent canvas, over the game: the blurred game
 // under the rounded box, given Frost's colour, grain and sheen; the corners soft-edged in alpha.
 // False when there is nothing to frost from yet (the caller draws its dark glass instead).
-inline bool FrostLive(Canvas& c, int x, int y, int w, int h, float r)
+// The frost itself (FrostLive). clearCorners: the corners outside the rounded box made clear
+// (the frost's own layer, drawn again over what it held).
+inline void FrostDraw(Canvas& c, int x, int y, int w, int h, float r, bool clearCorners = false)
 {
     LiveGlass& g = Live();
-    g.want.push_back({ x, y, w, h });
-    if (!g.Ready(c) || w <= 0 || h <= 0) return false;
+    if (!g.Ready(c) || w <= 0 || h <= 0) return;
     Mark(c, x, y, x + w, y + h);
     const float hx = w * 0.5f, hy = h * 0.5f, cx = x + hx, cy = y + hy;
     r = std::min(r, std::min(hx, hy));
+    // (Frost's colour in whole numbers, in 256ths: the Switch draws this every time the glass is
+    // read again, and its floating point per pixel cost milliseconds. The same picture to within
+    // one step of colour.)
     for (int py = std::max(0, y); py < std::min(c.h, y + h); py++)
     {
         const float qy = std::fabs(py + 0.5f - cy) - (hy - r);
         const float t = (py - y) / (float)h;
-        const float sheen = t < 0.45f ? (0.45f - t) / 0.45f * 8.0f : 0.0f;
+        const int sheen = (int)((t < 0.45f ? (0.45f - t) / 0.45f * 8.0f : 0.0f) * 256);
+        const uint32_t* src = &g.px[(size_t)py * g.w];
+        uint32_t* dst = &c.px[(size_t)py * c.w];
         for (int px = std::max(0, x); px < std::min(c.w, x + w); px++)
         {
-            const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
-            float cover = 1.0f;
-            if (qx > 0 && qy > 0) cover = std::clamp(r - std::hypot(qx, qy) + 0.5f, 0.0f, 1.0f);
-            if (cover <= 0) continue;
-            const uint32_t b = g.px[(size_t)py * g.w + px];
-            const float rr = (float)(b >> 16 & 255), gg = (float)(b >> 8 & 255), bb = (float)(b & 255);
-            const float l = 0.3f * rr + 0.59f * gg + 0.11f * bb;
+            int cover = 255;
+            if (qy > 0)
+            {
+                const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
+                if (qx > 0)
+                {
+                    const float f = std::clamp(r - Hyp(qx, qy) + 0.5f, 0.0f, 1.0f);
+                    if (f <= 0) { if (clearCorners) dst[px] = 0; continue; }
+                    cover = (int)(f * 255);
+                }
+            }
+            const uint32_t b = src[px];
+            const int rr = b >> 16 & 255, gg = b >> 8 & 255, bb = b & 255;
+            const int l = (77 * rr + 151 * gg + 28 * bb) >> 8;
             uint32_t hsh = (uint32_t)px * 374761393u + (uint32_t)py * 668265263u;
             hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
-            const float grain = (float)((hsh >> 24) & 7) - 3.5f;
-            const float ch[3] = { rr, gg, bb };
+            const int add = sheen + (int)((hsh >> 24) & 7) * 256 - 896; // (sheen and a fixed grain)
+            const int ch[3] = { rr, gg, bb };
             uint32_t out = 0;
             for (int k = 0; k < 3; k++)
             {
-                float v = (l + (ch[k] - l) * 1.35f) * 0.9f + 16.0f;
-                if (v > 112.0f) v = 112.0f + (v - 112.0f) * 0.3f;
-                v += sheen + grain;
-                out |= (uint32_t)std::clamp((int)v, 0, 255) << (16 - 8 * k);
+                // (More colour than the game, the darks lifted a little, the brights held down.)
+                int v = 311 * ch[k] - 81 * l + 16 * 256;
+                if (v > 112 * 256) v = 112 * 256 + (((v - 112 * 256) * 77) >> 8);
+                v = (v + add) >> 8;
+                out |= (uint32_t)(v < 0 ? 0 : v > 255 ? 255 : v) << (16 - 8 * k);
             }
-            c.px[(size_t)py * c.w + px] = out | (uint32_t)(cover * 255) << 24;
+            dst[px] = out | (uint32_t)cover << 24;
         }
     }
+}
+
+inline bool FrostLive(Canvas& c, int x, int y, int w, int h, float r)
+{
+    LiveGlass& g = Live();
+    if (g.maxArea > 0 && (long long)w * h > g.maxArea) return false;
+    g.want.push_back({ x, y, w, h });
+    if (!g.Ready(c) || w <= 0 || h <= 0) return false;
+    if (g.contentOnly) { g.panels.push_back({ x, y, w, h, r }); return true; }
+    FrostDraw(c, x, y, w, h, r);
     return true;
 }
 
@@ -258,10 +300,10 @@ inline void Shadow(Canvas& c, int x, int y, int w, int h, float r, float size, i
         {
             if (sides && px >= x && px < x + w) { px = x + w - 1; continue; }
             const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
-            const float d = std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+            const float d = Hyp(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
             // (Not under the panel itself: its own outline, undisplaced.)
             const float qx0 = std::fabs(px + 0.5f - (x + hx)) - (hx - r), qy0 = std::fabs(py + 0.5f - (y + hy)) - (hy - r);
-            const float d0 = std::hypot(std::max(qx0, 0.0f), std::max(qy0, 0.0f)) + std::min(std::max(qx0, qy0), 0.0f) - r;
+            const float d0 = Hyp(std::max(qx0, 0.0f), std::max(qy0, 0.0f)) + std::min(std::max(qx0, qy0), 0.0f) - r;
             if (d0 <= 0.5f || d >= size) continue;
             const float t = 1.0f - std::max(0.0f, d) / size;
             row[px] = Over(row[px], (uint32_t)(alpha * t * t) << 24);
@@ -290,7 +332,7 @@ inline void Rim(Canvas& c, int x, int y, int w, int h, float r, float bw, int to
         {
             if (sides && px > x + band && px < x + w - band) { px = x + w - (int)band - 1; continue; }
             const float qx = std::fabs(px + 0.5f - cx) - (hx - r);
-            const float d = std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+            const float d = Hyp(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
             if (d > 0.5f || d < -band) continue;
             const float outer = std::clamp(bw * 0.5f + 0.5f - std::fabs(d + bw * 0.5f), 0.0f, 1.0f);
             const float inner = std::clamp(0.5f + 0.5f - std::fabs(d + bw * 2.6f), 0.0f, 1.0f);
@@ -329,7 +371,7 @@ inline void Round(Canvas& c, int x, int y, int w, int h, float r, uint32_t fill,
             {
                 if (qx < 0 && qy < 0 && std::max(qx, qy) - r < -edgeZone) { p = Over(p, fill); continue; }
             }
-            const float d = std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+            const float d = Hyp(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
             const float inside = std::clamp(0.5f - d, 0.0f, 1.0f);
             if (inside <= 0) continue;
             p = Over(p, fill, (int)(inside * 255));
@@ -355,22 +397,22 @@ inline void Glow(Canvas& c, int x, int y, int w, int h, float r, float k)
 }
 
 // Signed distances for the icons (in the icon's own units: -1 to 1 across it).
-inline float Circle(float u, float v, float cx, float cy, float r) { return std::hypot(u - cx, v - cy) - r; }
+inline float Circle(float u, float v, float cx, float cy, float r) { return Hyp(u - cx, v - cy) - r; }
 inline float Box(float u, float v, float cx, float cy, float hx, float hy, float r)
 {
     const float qx = std::fabs(u - cx) - hx + r, qy = std::fabs(v - cy) - hy + r;
-    return std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+    return Hyp(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
 }
 inline float Segment(float u, float v, float ax, float ay, float bx, float by, float r)
 {
     const float px = u - ax, py = v - ay, dx = bx - ax, dy = by - ay;
     const float t = std::clamp((px * dx + py * dy) / (dx * dx + dy * dy), 0.0f, 1.0f);
-    return std::hypot(px - dx * t, py - dy * t) - r;
+    return Hyp(px - dx * t, py - dy * t) - r;
 }
 // A triangle pointing right, its left edge at x0, tip at x1, half height hh, centred on cy.
 inline float Play(float u, float v, float x0, float x1, float cy, float hh)
 {
-    const float len = std::hypot(x1 - x0, hh);
+    const float len = Hyp(x1 - x0, hh);
     const float top = ((v - cy) * (x1 - x0) + (u - x1) * hh) / len;   // the upper slanted edge
     const float bot = (-(v - cy) * (x1 - x0) + (u - x1) * hh) / len;  // the lower slanted edge
     return std::max(std::max(x0 - u, top), bot);
@@ -388,7 +430,7 @@ enum Icon
 // A rhombus centred on (cx, cy), half width a and half height b (close to a true distance).
 inline float Rhombus(float u, float v, float cx, float cy, float a, float b)
 {
-    return (std::fabs(u - cx) / a + std::fabs(v - cy) / b - 1.0f) * (a * b / std::hypot(a, b));
+    return (std::fabs(u - cx) / a + std::fabs(v - cy) / b - 1.0f) * (a * b / Hyp(a, b));
 }
 
 // One of the icons, centred at (cx, cy), size pixels from its centre to its edge.
@@ -461,7 +503,7 @@ inline void DrawIcon(Canvas& c, int icon, float cx, float cy, float size, uint32
         case I_GLOBE:
         {
             const float ring = std::fabs(Circle(u, v, 0, 0, 0.8f)) - t / 2;
-            const float meridian = std::fabs((std::hypot(u / 0.36f, v / 0.8f) - 1.0f) * 0.36f) - t / 2;
+            const float meridian = std::fabs((Hyp(u / 0.36f, v / 0.8f) - 1.0f) * 0.36f) - t / 2;
             float lines = std::min(Segment(u, v, -0.8f, 0, 0.8f, 0, t / 2),
                                    std::min(Segment(u, v, -0.7f, -0.4f, 0.7f, -0.4f, t / 2), Segment(u, v, -0.7f, 0.4f, 0.7f, 0.4f, t / 2)));
             lines = std::max(lines, Circle(u, v, 0, 0, 0.8f));
