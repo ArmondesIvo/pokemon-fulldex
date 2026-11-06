@@ -546,6 +546,11 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     const int side = Launcher::SideAt(canvas, tapX, tapY), t = Launcher::TabAt(canvas, tapX, tapY);
                     const int tile = Launcher::TileAt(view(), scroll, tapX, tapY);
                     if (side >= 0) { F.side = side; F.banner = 0; onTabs = false; aDown = true; }
+                    else if (F.page >= 0)
+                    {
+                        const int r = Launcher::PageRowAt(tapX, tapY);
+                        if (r >= 0) { if (F.prow == r && F.side < 0) aDown = true; F.side = -1; F.prow = r; }
+                    }
                     else if (Launcher::ContinueAt(canvas, tapX, tapY)) { F.side = -1; onTabs = false; F.banner = 1; aDown = true; }
                     else if (t >= 0) { F.side = -1; F.banner = 0; onTabs = false; if (t != tab) setTab(t - tab); }
                     else if (tile >= 0)
@@ -781,6 +786,21 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             }
             else
             {
+                // A page of the sidebar open (About): its arrows, A and B.
+                if (F.page >= 0)
+                {
+                    Launcher::PageMove(dir);
+                    if (aDown)
+                    {
+                        if (F.side == Launcher::SIDE_SETTINGS) { guide = true; page.Open(cfgPath); held = 0; }
+                        else if (F.side >= 0) { if (!Launcher::OpenSide(F.side)) note = std::string(Launcher::SideName(F.side)) + ": COMING SOON"; }
+                        else if (!Launcher::AboutUrl(F.prow).empty()) note = "OPEN IT ON YOUR PHONE OR PC";
+                    }
+                    if (bDown) Launcher::PageBack();
+                    if (down & HidNpadButton_Plus) quitList = true;
+                }
+                else
+                {
                 if (down & (tl | tr)) setTab((down & tr) ? 1 : -1);
                 if (F.side >= 0)
                 {
@@ -790,8 +810,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     if (aDown)
                     {
                         if (F.side == Launcher::SIDE_SETTINGS) { guide = true; page.Open(cfgPath); held = 0; }
-                        else if (F.side == Launcher::SIDE_HOME) F.side = -1;
-                        else note = std::string(Launcher::SideName(F.side)) + ": COMING SOON";
+                        else if (!Launcher::OpenSide(F.side)) note = std::string(Launcher::SideName(F.side)) + ": COMING SOON";
                     }
                 }
                 else if (onTabs)
@@ -839,6 +858,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                 }
                 if ((down & HidNpadButton_Plus) || (bDown && F.side < 0 && !F.banner && !onTabs)) quitList = true;
                 if (bDown && (F.side >= 0 || F.banner || onTabs)) { F.side = -1; F.banner = 0; onTabs = false; intoGames(); }
+                }
             }
             if (play && selected >= 0 && selected < (int)games.size())
             {
@@ -944,7 +964,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             }
             auto keyNow = [&]() { const Launcher::GlassFocus& F = Launcher::Focus();
                                   return std::to_string(F.side) + "," + std::to_string(F.banner) + "," + std::to_string(F.popup) + "," + std::to_string(F.dialog) + ","
-                                         + std::to_string(F.drow) + "," + F.text + "," + std::to_string(kb.selected) + std::to_string(kbLayer) + "," + std::to_string(games.size()) + "/"
+                                         + std::to_string(F.drow) + "," + std::to_string(F.page) + "," + std::to_string(F.prow) + "," + F.text + "," + std::to_string(kb.selected) + std::to_string(kbLayer) + "," + std::to_string(games.size()) + "/"
                                          + Launcher::BackdropRom() + "/" + std::to_string(tab) + "/" + std::to_string(selected) + "/" + std::to_string(scroll) + "/" + note + "/"
                                          + std::to_string(onTabs) + std::to_string(onSettings); };
             bool overlay = false;
@@ -961,7 +981,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     kb.Draw(canvas, "RENAME", "A: TYPE    X: DELETE    +: SAVE    B: CANCEL");
                 }
                 else Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected,
-                                    scroll, note, Launcher::Focus().popup >= 0 || Launcher::Focus().dialog ? "A: CHOOSE    B: BACK" : "A: PLAY    L / R: TABS    +: QUIT",
+                                    scroll, note, Launcher::Focus().popup >= 0 || Launcher::Focus().dialog || Launcher::Focus().page >= 0 ? "A: CHOOSE    B: BACK" : "A: PLAY    L / R: TABS    +: QUIT",
                                     theme, true, onTabs, onSettings);
                 glassKey = overlay ? std::string() : keyNow();
                 if (Launcher::Glassy(canvas)) fprintf(stderr, "[launcher] glass list drawn in %d ms\n", (int)(armTicksToNs(armGetSystemTick() - t0) / 1000000));

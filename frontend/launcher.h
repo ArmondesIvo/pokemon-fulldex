@@ -86,7 +86,9 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     int dialog = 0, drow = 0; std::string text; int dX = 0, dY = 0, dW = 0, dRow = 0, dRows = 0;
                     // (Dialogs 5 and up, Manage Saves: their title, words and rows as the launcher made them;
                     // dPaths each row's backup, or #folder / #close.)
-                    std::string dTitle, dMsg; std::vector<std::string> dItems, dPaths; };
+                    std::string dTitle, dMsg; std::vector<std::string> dItems, dPaths;
+                    // (The sidebar's pages: PageRows and below.)
+                    int page = -1, prow = 0; int pX = 0, pY = 0, pW = 0, pRow = 0; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
 inline int PopupCount() { return 6; }
 inline std::string PopupLabel(const Game& g, int i)
@@ -1149,6 +1151,197 @@ inline void GlassBackdrop(Canvas& c, const Game* g)
     Glass::MakeBackdrop(c.backdrop, src.data(), c.w, c.h);
 }
 
+// The sidebar's pages (About; the others to come): page, the section shown (-1: the games); prow the
+// row chosen in its list; pX..pRow where its rows were drawn (for taps).
+inline int PageRows(int page) { return page == SIDE_ABOUT ? 4 : 0; }
+inline std::string AboutUrl(int row)
+{
+    return row == 1 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 3 ? "https://github.com/mamesj/pokemon-fulldex" : "";
+}
+inline const char* PlatformLabel()
+{
+#if defined(__SWITCH__)
+    return "Nintendo Switch";
+#elif defined(__ANDROID__)
+    return "Android";
+#elif defined(__APPLE__)
+    return "Apple";
+#elif defined(_WIN32)
+    return "Windows";
+#else
+    return "Linux";
+#endif
+}
+// The arrows while a page is open: up and down in the sidebar or the page's list, right into the
+// list, left back to the sidebar. (False: no page open.)
+inline bool PageMove(int dir)
+{
+    GlassFocus& F = Focus();
+    if (F.page < 0) return false;
+    if (F.side >= 0)
+    {
+        if (dir == 3) F.side = std::max(0, F.side - 1);
+        else if (dir == 4) F.side = std::min((int)SIDES - 1, F.side + 1);
+        else if (dir == 2) F.side = -1;
+        return true;
+    }
+    if (dir == 3) F.prow = std::max(0, F.prow - 1);
+    else if (dir == 4) F.prow = std::min(PageRows(F.page) - 1, F.prow + 1);
+    else if (dir == 1) F.side = F.page;
+    return true;
+}
+// B while a page is open: the sidebar first, then back to the games. (False: no page open.)
+inline bool PageBack()
+{
+    GlassFocus& F = Focus();
+    if (F.page < 0) return false;
+    if (F.side < 0) F.side = F.page;
+    else { F.page = -1; F.side = SIDE_HOME; }
+    return true;
+}
+// A on a section of the sidebar: Home back to the games, About its page. (False: not made yet.)
+inline bool OpenSide(int side)
+{
+    GlassFocus& F = Focus();
+    if (side == SIDE_HOME) { F.page = -1; F.side = -1; return true; }
+    if (PageRows(side) > 0) { F.page = side; F.prow = 0; F.side = -1; return true; }
+    return false;
+}
+inline int PageRowAt(int x, int y)
+{
+    const GlassFocus& f = Focus();
+    if (f.page < 0 || f.pW <= 0 || f.pRow <= 0 || x < f.pX || x >= f.pX + f.pW || y < f.pY) return -1;
+    const int i = (y - f.pY) / f.pRow;
+    return i < PageRows(f.page) ? i : -1;
+}
+inline std::vector<std::string> WrapLines(const std::string& msg, float px, int w, bool bold = false)
+{
+    std::vector<std::string> lines;
+    std::string line, word;
+    auto flush = [&]() {
+        if (word.empty()) return;
+        const std::string t = line.empty() ? word : line + " " + word;
+        if (!line.empty() && GW(t, px, bold) > w) { lines.push_back(line); line = word; }
+        else line = t;
+        word.clear();
+    };
+    for (char ch : msg) { if (ch == ' ') flush(); else word += ch; }
+    flush();
+    if (!line.empty()) lines.push_back(line);
+    return lines;
+}
+// A page, right of the sidebar: its title in the bar, its sections in a glass panel on the left
+// (what Fulldex is at the bottom), the chosen one in a wider panel on the right.
+inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
+{
+    GlassFocus& F = Focus();
+    const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
+    const int barH = sp.tabsY * 2 + sp.tabsH;
+    const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, "About", 26 * u, text, true);
+    const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
+    GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
+    // The sections.
+    const int lw = (int)(300 * u), pad = (int)(12 * u), rowH = (int)(50 * u), rg = (int)(6 * u);
+    Menu::FrostBox(c, solid, L, top, lw, bottom - top, 18 * u);
+    static const char* names[] = { "Credits", "Report A Bug", "Licences", "Website" };
+    static const int icons[] = { Glass::I_PEOPLE, Glass::I_INFO, Glass::I_LAYERS, Glass::I_GLOBE };
+    F.pX = L + pad; F.pY = top + pad; F.pW = lw - 2 * pad; F.pRow = rowH + rg;
+    for (int i = 0; i < 4; i++)
+    {
+        const int rx = L + pad, ry = top + pad + i * (rowH + rg), rw = lw - 2 * pad;
+        if (i == F.prow)
+        {
+            if (F.side < 0) Glass::Glow(c, rx, ry, rw, rowH, 12 * u, u);
+            Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+        }
+        Glass::DrawIcon(c, icons[i], rx + 24 * u, ry + rowH * 0.5f, 10 * u, text);
+        GT(c, rx + (int)(48 * u), ry + rowH * 0.5f, names[i], 17 * u, text, true);
+    }
+    {
+        const std::vector<std::string> lines = WrapLines("Fulldex doesn't include any games. Play with ROMs from games you own.", 13 * u, lw - 2 * pad - (int)(28 * u));
+        const int ch = (int)(66 * u) + (int)lines.size() * (int)(18 * u);
+        const int cx = L + pad, cy = bottom - pad - ch, cw = lw - 2 * pad;
+        Glass::Round(c, cx, cy, cw, ch, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+        GT(c, cx + (int)(14 * u), cy + 24 * u, "Fulldex", 20 * u, text, true);
+        GT(c, cx + (int)(14 * u), cy + 48 * u, PlatformLabel(), 14 * u, hint, true);
+        int ly = cy + (int)(70 * u);
+        for (const std::string& l : lines) { GT(c, cx + (int)(14 * u), ly, l, 13 * u, hint, false); ly += (int)(18 * u); }
+    }
+    // The chosen section.
+    const int px = L + lw + (int)(18 * u), pw = R - px, ip = (int)(22 * u);
+    Menu::FrostBox(c, solid, px, top, pw, bottom - top, 18 * u);
+    int y = top + ip;
+    auto heading = [&](const char* h) { GT(c, px + ip, y + 14 * u, h, 22 * u, text, true); y += (int)(46 * u); };
+    auto para = [&](const std::string& s) {
+        for (const std::string& l : WrapLines(s, 16 * u, pw - 2 * ip)) { GT(c, px + ip, y + 11 * u, l, 16 * u, text, false); y += (int)(24 * u); }
+        y += (int)(10 * u);
+    };
+    auto card = [&](int x, int cy, int w, int h, const std::string& a, const std::string& b) {
+        Glass::Round(c, x, cy, w, h, 12 * u, 0x14FFFFFFu);
+        float fa = 16 * u, fb = 13 * u;
+        while (fa > 10 * u && GW(a, fa, true) > w - (int)(28 * u)) fa -= u;
+        while (fb > 9 * u && GW(b, fb, true) > w - (int)(28 * u)) fb -= u;
+        GT(c, x + (int)(14 * u), cy + h * 0.36f, a, fa, text, true);
+        GT(c, x + (int)(14 * u), cy + h * 0.70f, b, fb, hint, true);
+    };
+#ifdef __SWITCH__
+    const char* open = "Open it on your phone or PC";
+#else
+    const char* open = "Choose it to open it in your browser";
+#endif
+    if (F.prow == 0)
+    {
+        heading("Credits And Acknowledgements");
+        static const char* credits[][2] = {
+            { "ssrecomp by ClickingMaster", "The single-screen and widescreen view Fulldex grew from" },
+            { "melonDS", "The DS emulation" },
+            { "mGBA", "The GBA games, through Pok\xC3\xA9mon GBA Widescreen" },
+            { "Pok\xC3\xA9" "Daisy by Lidor Itzhari", "Companion readers and text decoders" },
+            { "pokebw2, aletheia, pret/pokeplatinum", "Function names from their decompilations" },
+            { "DeadSkullzJr's cheat database", "The built-in DS cheats, via libretro-database" },
+            { "sphaira", "How the HOME Menu icons are made" },
+            { "WeeabooGod", "Cheats menu ideas (PR #16)" },
+            { "Nils Menn", "Fucking legend" },
+            { "Everyone who reported bugs and helped test", "Thank you" } };
+        const int gap = (int)(12 * u), cw = (pw - 2 * ip - gap) / 2, ch = (int)(62 * u);
+        for (int i = 0; i < 10; i++)
+            card(px + ip + (i % 2) * (cw + gap), y + (i / 2) * (ch + (int)(10 * u)), cw, ch, credits[i][0], credits[i][1]);
+    }
+    else if (F.prow == 1)
+    {
+        heading("Report A Bug");
+        para("Found something wrong? Open an issue on the GitHub page: say which game, which device, and what happened just before.");
+        para("A screenshot helps, and so does game.log from the folder Fulldex runs from.");
+        card(px + ip, y, pw - 2 * ip, (int)(64 * u), "github.com/mamesj/pokemon-fulldex/issues", open);
+    }
+    else if (F.prow == 2)
+    {
+        heading("Licences");
+        static const char* lic[][2] = {
+            { "Fulldex", "GPL-3.0-or-later" }, { "melonDS", "GPL-3.0" }, { "Pok\xC3\xA9" "Daisy readers", "GPL-3.0" },
+            { "HOME Menu icon loader (nx-hbloader)", "GPL-3.0" }, { "mGBA", "MPL-2.0" }, { "Nunito and Noto fonts", "SIL Open Font License" } };
+        const int rh = (int)(44 * u);
+        for (int i = 0; i < 6; i++)
+        {
+            Glass::Round(c, px + ip, y, pw - 2 * ip, rh, 12 * u, 0x14FFFFFFu);
+            GT(c, px + ip + (int)(14 * u), y + rh * 0.5f, lic[i][0], 16 * u, text, true);
+            GT(c, px + pw - ip - (int)(14 * u) - GW(lic[i][1], 15 * u, true), y + rh * 0.5f, lic[i][1], 15 * u, hint, true);
+            y += rh + (int)(6 * u);
+        }
+        y += (int)(10 * u);
+        para("Not affiliated with or endorsed by Nintendo, Game Freak, The Pok\xC3\xA9mon Company or the melonDS project. Pok\xC3\xA9mon is a trademark of its owners. The full licence texts are on the GitHub page.");
+    }
+    else
+    {
+        heading("Website");
+        para("Downloads, the latest changes and the full instructions are on the GitHub page.");
+        card(px + ip, y, pw - 2 * ip, (int)(64 * u), "github.com/mamesj/pokemon-fulldex", open);
+        y += (int)(84 * u);
+        para("Tips are welcome but never expected: buymeacoffee.com/mamesj or paypal.me/mamesj.");
+    }
+}
+
 inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, int tab, int selected, int& scroll,
                       const std::string& note, const std::string& hintText, bool follow, bool onTabs, bool settingsChosen)
 {
@@ -1171,7 +1364,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     auto sig = [](const Game& g) { return g.art.empty() ? std::string("-") : std::to_string(g.art[(size_t)Art * Art / 2 + Art / 2]); };
     std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
-                    + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom();
+                    + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
+                    + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0);
     for (const Game& g : games) key += "|" + g.rom + g.customName + (g.favourite ? "*" : "") + sig(g);
     static std::vector<uint32_t> base;
     static std::string baseKey;
@@ -1206,7 +1400,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         {
             const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + (int)(16 * u), rw = sp.sideW - (int)(32 * u);
             const int fs = Focus().side;
-            const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == SIDE_HOME;
+            const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == (Focus().page >= 0 ? Focus().page : (int)SIDE_HOME);
             const bool lit = fs >= 0 ? i == fs : settingsChosen && i == SIDE_SETTINGS; // (chosen with the arrows)
             if (on)
             {
@@ -1218,7 +1412,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         }
     };
     auto drawBannerButtons = [&]() {
-        if (cont < 0 || cont >= (int)games.size()) return;
+        if (cont < 0 || cont >= (int)games.size() || Focus().page >= 0) return;
         const bool played = !ContinueRom().empty() && games[cont].rom == ContinueRom();
         if (Focus().banner == 1) Glass::Glow(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, u);
         Glass::Round(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, 0xFFFFFFFFu);
@@ -1263,7 +1457,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         else Glass::Round(c, barX, 0, barW, barH, 0, Menu::GlassShade);
         Glass::Round(c, barX, 0, barW, barH, 0, 0x30101826);
         Glass::Round(c, barX, barH - line, barW, line, 0, 0x3DFFFFFF);
-        for (int t = 0; t < TABS; t++)
+        if (Focus().page < 0) for (int t = 0; t < TABS; t++)
         {
             const int px = sp.tabX[t], py = sp.tabsY + (int)(4 * u), pw = sp.tabW[t], ph = sp.tabsH - (int)(8 * u);
             const std::string name = TabLabel(t);
@@ -1276,8 +1470,11 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         }
     }
 
+    // A page of the sidebar (About) in place of the games.
+    if (Focus().page >= 0) DrawPage(c, sp, solid, u);
+
     // The banner: the game played last, ready to carry on.
-    if (cont >= 0 && cont < (int)games.size())
+    if (Focus().page < 0 && cont >= 0 && cont < (int)games.size())
     {
         const Game& g = games[cont];
         Menu::FrostBox(c, solid, sp.bannerX, sp.bannerY, sp.bannerW, sp.bannerH, 18 * u);
@@ -1292,6 +1489,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         // (Continue and Game Options: drawBannerButtons, over the kept picture.)
     }
 
+    if (Focus().page < 0)
+    {
     // "Your Games" and how many.
     GT(c, sp.tabsX, sp.headY + 14 * u, "Your Games", 24 * u, text, true);
     {
@@ -1310,6 +1509,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     for (const View::Spot& s : v.spots)
         if (visible(s)) drawCard(s, false);
     moreBelow();
+    }
     base = c.px;
     baseKey = key;
     }
@@ -1318,7 +1518,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     // The chosen card, over the kept picture: the blurred background put back round it first.
     {
         const int k = v.SpotOf(selected);
-        if (k >= 0 && visible(v.spots[k]))
+        if (k >= 0 && visible(v.spots[k]) && Focus().page < 0)
         {
             const View::Spot& s = v.spots[k];
             const int m = (int)(7 * u), x0 = std::max(0, s.x - m), x1 = std::min(c.w, s.x + grid.cw + m);

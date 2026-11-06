@@ -662,6 +662,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     if (const char* t = getenv("SSR_LIST_TAB")) tab = std::max(0, std::min(Launcher::TABS - 1, atoi(t)));
     // (SSR_LIST_POPUP=n: the chosen game's menu open on row n, for the test picture.)
     if (const char* pp = getenv("SSR_LIST_POPUP")) Launcher::Focus().popup = atoi(pp);
+    // (SSR_LIST_PAGE=side,row: a page of the sidebar open on that row, for the test picture.)
+    if (const char* pg = getenv("SSR_LIST_PAGE")) { Launcher::Focus().page = atoi(pg); if (const char* r = strchr(pg, ',')) Launcher::Focus().prow = atoi(r + 1); }
     // (SSR_LIST_DIALOG=n: a dialog open, for the test picture: 1 Remove Game, 2 Delete, 3 Rename.)
     if (const char* dd = getenv("SSR_LIST_DIALOG")) { Launcher::Focus().dialog = atoi(dd); Launcher::Focus().text = "My HeartGold Run"; }
     // (SSR_LIST_ITEM=n: the chosen game's menu row n chosen at once, for test pictures of its dialogs.)
@@ -960,10 +962,17 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         if (Launcher::Glassy(canvas))
         {
             Launcher::GlassFocus& F = Launcher::Focus();
+            // (A in a page's list: Report A Bug and Website open in the browser.)
+            if (F.page >= 0 && F.side < 0)
+            {
+                const std::string url = Launcher::AboutUrl(F.prow);
+                if (!url.empty() && SDL_OpenURL(url.c_str()) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", url.c_str(), SDL_GetError());
+                return;
+            }
             if (F.side >= 0)
             {
                 if (F.side == Launcher::SIDE_SETTINGS) toggleGuide();
-                else if (F.side == Launcher::SIDE_HOME) F.side = -1;
+                else if (Launcher::OpenSide(F.side)) {}
                 else note = std::string(Launcher::SideName(F.side)) + ": COMING SOON";
                 return;
             }
@@ -1090,6 +1099,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 else if (dir == 4) F.popup = std::min(Launcher::PopupCount() - 1, F.popup + 1);
                 return;
             }
+            if (Launcher::PageMove(dir)) return;
             const bool banner = Launcher::ContinueGame(games, selected) >= 0;
             auto intoGames = [&]() {
                 const Launcher::View v = view();
@@ -1656,7 +1666,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 {
                     if (act == Controls::L || act == Controls::R) { if (!guide) setTab(tab + (act == Controls::R ? 1 : -1), "a key"); }
                     else if (act == Controls::A || act == Controls::START) { if (!e.key.repeat) choose(); }
-                    else if (act == Controls::B || act == Controls::MENU) { if (guide) { if (!page.Back()) guide = false; } else if (Launcher::Focus().popup >= 0) Launcher::Focus().popup = -1; else quit = true; }
+                    else if (act == Controls::B || act == Controls::MENU) { if (guide) { if (!page.Back()) guide = false; } else if (Launcher::Focus().popup >= 0) Launcher::Focus().popup = -1; else if (Launcher::PageBack()) {} else quit = true; }
                     else if (act == Controls::X && !guide)toggleFavourite();
                 else if (act == Controls::Y) toggleGuide();
                     else if (act >= Controls::UP && act <= Controls::RIGHT)
@@ -1670,7 +1680,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 case SDLK_UP: case SDLK_w: move(3); break;
                 case SDLK_DOWN: case SDLK_s: move(4); break;
                 case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: if (!e.key.repeat) choose(); break;
-                case SDLK_ESCAPE: case SDLK_AC_BACK: if (guide) { if (!page.Back()) guide = false; } else if (Launcher::Focus().popup >= 0) Launcher::Focus().popup = -1; else quit = true; break;
+                case SDLK_ESCAPE: case SDLK_AC_BACK: if (guide) { if (!page.Back()) guide = false; } else if (Launcher::Focus().popup >= 0) Launcher::Focus().popup = -1; else if (Launcher::PageBack()) {} else quit = true; break;
                 case SDLK_f: if(!guide)toggleFavourite(); break;
                 case SDLK_h: case SDLK_F1: toggleGuide(); break;
                 case SDLK_o: OpenFolder(fo.roms); break;
@@ -1726,7 +1736,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     if (!guide) setTab(tab + (act == Controls::R ? 1 : -1), why);
                 }
                 else if (act == Controls::A || act == Controls::START) choose();
-                else if (act == Controls::B || act == Controls::SELECT) { if (guide) { if (!page.Back()) guide = false; } else if (Launcher::Focus().popup >= 0) Launcher::Focus().popup = -1; else quit = true; }
+                else if (act == Controls::B || act == Controls::SELECT) { if (guide) { if (!page.Back()) guide = false; } else if (Launcher::Focus().popup >= 0) Launcher::Focus().popup = -1; else if (Launcher::PageBack()) {} else quit = true; }
                 else if (act == Controls::X && !guide)toggleFavourite();
                 else if (act == Controls::Y) toggleGuide();
                 break;
@@ -1759,7 +1769,26 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging)
                 {
                     const int side = Launcher::SideAt(canvas, mx, my);
-                    if (side >= 0) { if (side == Launcher::SIDE_SETTINGS) toggleGuide(); break; }
+                    if (side >= 0)
+                    {
+                        Launcher::Focus().side = -1;
+                        if (side == Launcher::SIDE_SETTINGS) toggleGuide();
+                        else if (!Launcher::OpenSide(side)) note = std::string(Launcher::SideName(side)) + ": COMING SOON";
+                        break;
+                    }
+                    // (A page's list: a click chooses a row; on the chosen one, opens it.)
+                    if (Launcher::Focus().page >= 0)
+                    {
+                        const int r = Launcher::PageRowAt(mx, my);
+                        if (r >= 0)
+                        {
+                            const bool again = Launcher::Focus().prow == r && Launcher::Focus().side < 0;
+                            Launcher::Focus().side = -1;
+                            Launcher::Focus().prow = r;
+                            if (again) choose();
+                        }
+                        break;
+                    }
                     if (Launcher::ContinueAt(canvas, mx, my))
                     {
                         const int cg = Launcher::ContinueGame(games, selected);
@@ -1767,6 +1796,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         break;
                     }
                 }
+                if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page >= 0) break; // (no games under a page)
                 if ((guide || !Launcher::Glassy(canvas)) && e.type == SDL_MOUSEBUTTONUP && my < (canvas.h > canvas.w ? 43 : 22) * s && !dragging)
                 {
                     if (guide && mx < canvas.w / 4) { if (!page.Back()) guide = false; }
@@ -2103,7 +2133,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             kb.Draw(canvas, "RENAME", padIn ? btn(Controls::A) + ": TYPE    " + btn(Controls::X) + ": DELETE    START: SAVE    " + btn(Controls::B) + ": CANCEL"
                                           : std::string("TYPE OR CLICK THE KEYS    ENTER: SAVE    ESC: CANCEL"));
         }
-        else Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected, scroll, note, (Launcher::Focus().popup >= 0 || Launcher::Focus().dialog) ? (padIn ? btn(Controls::A) + ": CHOOSE    " + btn(Controls::B) + ": BACK" : std::string("ENTER: CHOOSE    ESC: BACK")) : hint, theme, follow, onTabs, onSettings);
+        else Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected, scroll, note, (Launcher::Focus().popup >= 0 || Launcher::Focus().dialog || Launcher::Focus().page >= 0) ? (padIn ? btn(Controls::A) + ": CHOOSE    " + btn(Controls::B) + ": BACK" : std::string("ENTER: CHOOSE    ESC: BACK")) : hint, theme, follow, onTabs, onSettings);
 #ifdef SSR_UPDATER
         if (updateMenu.open)
             updateMenu.Draw(canvas, Updater::PopupTitle(),
