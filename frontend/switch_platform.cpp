@@ -757,6 +757,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         }
                         else closeDialog();
                     }
+                    else if (F.dialog == 15) { const std::string pick = F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close"); if (Launcher::ThemePick(pick) != 1) closeDialog(); } // (a theme: Apply, Delete)
                     else if (F.dialog >= 10 && F.dialog <= 12) { const bool yes = F.dialog == 11 && F.drow == 0; closeDialog(); if (yes) quitList = true; } // (the beer message: its code is scanned; Quit Fulldex?: Quit)
                     else if (F.dialog >= 5)
                     {
@@ -889,7 +890,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                                 note = !ok ? "COULD NOT SAVE THE LIST" : was ? "BACK IN THE LIST" : "HIDDEN FROM THE LIST";
                             }
                         }
-                        else if (F.page == Launcher::SIDE_LAUNCHER) Launcher::LookDo(F.prow, 1);
+                        else if (F.page == Launcher::SIDE_LAUNCHER) { if (Launcher::LookDo(F.prow, 1) == 2) { kbLayer = 0; kbBuild(); } } // (2: My Themes' keyboard)
                         else if (F.page == Launcher::SIDE_HUB)
                         {
                             // (The Hub: A on the list goes to the chosen row's actions; on those, does it.)

@@ -538,6 +538,34 @@ static std::string PickPictureFile(SDL_Window* window)
 }
 #endif
 
+#ifdef _WIN32
+// My Themes' Import A Theme on Windows: the system's file picker for a .zip.
+static std::string PickZipFile(SDL_Window* window)
+{
+    typedef BOOL(WINAPI * OpenFn)(LPOPENFILENAMEW);
+    static HMODULE dll = LoadLibraryW(L"comdlg32.dll");
+    OpenFn open = dll ? (OpenFn)GetProcAddress(dll, "GetOpenFileNameW") : nullptr;
+    if (!open) return std::string();
+    wchar_t file[1024] = L"";
+    OPENFILENAMEW o = {};
+    o.lStructSize = sizeof o;
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (SDL_GetWindowWMInfo(window, &info)) o.hwndOwner = info.info.win.window;
+    o.lpstrFilter = L"Fulldex themes (ZIP)\0*.zip\0\0";
+    o.lpstrFile = file;
+    o.nMaxFile = 1024;
+    o.lpstrTitle = L"Choose a Fulldex theme";
+    o.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!open(&o)) return std::string();
+    const int n = WideCharToMultiByte(CP_UTF8, 0, file, -1, nullptr, 0, nullptr, nullptr);
+    std::string out(n > 0 ? n : 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, file, -1, &out[0], n, nullptr, nullptr);
+    if (!out.empty() && out.back() == '\0') out.pop_back();
+    return out;
+}
+#endif
+
 #include "save_backups.h"
 
 // The Updates page: the updater's state, as the list draws it (Android: its own, in Java).
@@ -715,6 +743,10 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         }
         Launcher::LookFrom(pairs);
     }
+    // (Test: the Launcher page's sub-page; a theme saved as the list is first drawn.)
+    if (const char* lm = getenv("SSR_LIST_LAUNCHER")) { Launcher::LauncherMode() = atoi(lm); Launcher::ThemesRefresh(); }
+    if (const char* ts = getenv("SSR_LIST_THEMESAVE")) { Launcher::LookLoad(); Launcher::ThemeSaveStart(ts); }
+    if (const char* ta = getenv("SSR_LIST_THEMEAPPLY")) { Launcher::LookLoad(); Launcher::ThemesRefresh(); Launcher::LookApplyTheme(ta); }
     if (const char* le = getenv("SSR_LIST_LOOKEDIT")) { Launcher::LookLoad(); Launcher::Look().edit = atoi(le); Launcher::Look().field = 1; Launcher::LookSyncHsv(); }
     if (const char* hb = getenv("SSR_LIST_HUB"))
     {
@@ -1103,7 +1135,12 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (F.page == Launcher::SIDE_LAUNCHER)
                 {
                     // (Your Picture just chosen: the system's picker for it.)
-                    if (Launcher::LookDo(F.prow, 1) == 3)
+                    const int ld = Launcher::LookDo(F.prow, 1);
+                    if (ld == 2) SDL_StartTextInput(); // (My Themes: the theme's name)
+#ifdef _WIN32
+                    if (ld == 4) { const std::string zip = PickZipFile(window); if (!zip.empty()) Launcher::ThemeImport(zip); }
+#endif
+                    if (ld == 3)
                     {
 #ifdef _WIN32
                         const std::string path = PickPictureFile(window);
@@ -1410,6 +1447,20 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             reorderLibrary();
             settle();
             note = "ROM FILE DELETED. ITS SAVES ARE KEPT";
+            return;
+        }
+        if (F.dialog == 15)
+        {
+            // (A theme of My Themes: Apply, Show In Folder, Delete.)
+            const std::string pick = F.drow >= 0 && F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
+            if (pick == "#folder")
+            {
+                std::string url = "file:///" + Launcher::ThemesDir();
+                for (char& ch : url) if (ch == '\\') ch = '/';
+                if (SDL_OpenURL(url.c_str()) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", url.c_str(), SDL_GetError());
+            }
+            if (Launcher::ThemePick(pick) == 1) return;
+            dialogClose();
             return;
         }
         if (F.dialog >= 10 && F.dialog <= 12)

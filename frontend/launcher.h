@@ -32,6 +32,7 @@
 #include "optional_features.h"
 #include "cloud_saves.h"
 #include "hub_link.h"
+#include "theme_pack.h"
 #include "support_qr.h"
 #include "play_time.h"
 #ifdef SSR_POKEMON_HUB
@@ -1367,6 +1368,68 @@ struct LookPrefs
     int rowX = 0, rowW = 0;                      // its rows across
 };
 inline LookPrefs& Look() { static LookPrefs l; return l; }
+// The Launcher page's sub-pages: 0 its menu, 1 Theme Editor, 2 My Themes, 3 the Theme Library (its grid).
+inline int& LauncherMode() { static int m = 0; return m; }
+// My Themes: each a .zip in themes/ with the saves: theme.txt (as fulldex-look.txt, its pictures under
+// pictures/), the pictures, and preview.jpg (Home wearing it).
+struct ThemeState
+{
+    std::vector<std::string> list;
+    bool pending = false;        // (saving: Home drawn once for its picture)
+    std::string name, msg;
+    GlassFocus kept;
+    std::map<std::string, Glass::Picture> previews;
+    int gx = 0, gy = 0, cw = 0, ch = 0, gap = 0, cols = 4; // (the grid on screen: taps)
+    int perPage = 8, prevX = 0, nextX = 0, pageY = 0, pageW = 0, pageH = 0; // (its pages, and the < > under it)
+};
+inline ThemeState& Themes() { static ThemeState t; return t; }
+inline std::string ThemesDir() { return HubDir() + "/themes"; }
+inline std::string ThemeSafe(const std::string& raw)
+{
+    std::string n;
+    for (const char ch : raw) if (isalnum((unsigned char)ch) || ch == ' ' || ch == '-' || ch == '_' || (unsigned char)ch >= 128) n += ch;
+    while (!n.empty() && n.back() == ' ') n.pop_back();
+    while (!n.empty() && n.front() == ' ') n.erase(0, 1);
+    if (n.size() > 40) n.resize(40);
+    return n;
+}
+inline void ThemesRefresh()
+{
+    std::vector<std::string>& l = Themes().list;
+    l.clear();
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(ThemesDir(), ec))
+    {
+        const std::string n = e.path().filename().string();
+        if (e.is_regular_file(ec) && n.size() > 4 && (n.compare(n.size() - 4, 4, ".zip") == 0 || n.compare(n.size() - 4, 4, ".ZIP") == 0)) l.push_back(n.substr(0, n.size() - 4));
+    }
+    std::sort(l.begin(), l.end(), [](const std::string& a, const std::string& b) {
+        std::string x = a, y = b;
+        for (char& ch : x) ch = (char)tolower((unsigned char)ch);
+        for (char& ch : y) ch = (char)tolower((unsigned char)ch);
+        return x < y;
+    });
+}
+inline int LauncherRows() { return LauncherMode() == 1 ? 8 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : 3; }
+// A on a theme: Apply, Show In Folder (a PC), Delete.
+inline void OpenThemeMenu(int i)
+{
+    ThemeState& ts = Themes();
+    if (i < 0 || i >= (int)ts.list.size()) return;
+    GlassFocus& F = Focus();
+    const std::string n = ts.list[(size_t)i];
+    F.dialog = 15;
+    F.drow = 0;
+    F.dTitle = n;
+    F.dMsg = "A theme of your own.";
+#ifdef __SWITCH__
+    F.dItems = { "Apply", "Delete", "Close" };
+    F.dPaths = { "#apply:" + n, "#tdelask:" + n, "#close" };
+#else
+    F.dItems = { "Apply", "Show In Folder", "Delete", "Close" };
+    F.dPaths = { "#apply:" + n, "#folder", "#tdelask:" + n, "#close" };
+#endif
+}
 static const char* const kLookAccents[] = { "white", "red", "blue", "green", "purple", "gold", "pink", "teal" };
 static const char* const kLookPanels[] = { "clear", "dark", "red", "blue", "green", "purple", "gold", "pink", "teal" };
 inline uint32_t Hsv(float h, float s, float v)
@@ -1417,11 +1480,18 @@ inline std::string LookPicPath(const std::string& name)
     return HubDir() + "/launcher-pictures/" + name;
 }
 // A picture read for the launcher, at most 1920 on a side; its average colour too.
+inline bool LookDecodePicture(const std::vector<unsigned char>& data, Glass::Picture& b);
 inline bool LookLoadPicture(const std::string& path, Glass::Picture& b)
 {
     b = Glass::Picture();
     std::vector<unsigned char> data;
-    if (path.empty() || !ReadFile(path, data) || !ImageAllowed(data.data(), data.size())) return false;
+    if (path.empty() || !ReadFile(path, data)) return false;
+    return LookDecodePicture(data, b);
+}
+inline bool LookDecodePicture(const std::vector<unsigned char>& data, Glass::Picture& b)
+{
+    b = Glass::Picture();
+    if (data.empty() || !ImageAllowed(data.data(), data.size())) return false;
     int w = 0, h = 0, n = 0;
     unsigned char* px = stbi_load_from_memory(data.data(), (int)data.size(), &w, &h, &n, 4);
     if (!px) return false;
@@ -1653,8 +1723,8 @@ inline int ToolAt(int x, int y)
     return 0;
 }
 // The keyboard's title, line and done key for what it is for (GlassFocus::kbFor).
-inline const char* KbTitle() { const int k = Focus().kbFor; return k == 4 ? "TRADE CODE" : k == 1 ? "NEW TAB" : k == 2 ? "SEARCH" : k == 3 ? "RENAME TAB" : "RENAME"; }
-inline const char* KbPrompt() { const int k = Focus().kbFor; return k == 4 ? "The Other Player's Code" : k == 1 || k == 3 ? "Tab Name" : k == 2 ? "Part Of A Game's Name" : "The Game's Own Name"; }
+inline const char* KbTitle() { const int k = Focus().kbFor; return k == 5 ? "THEME NAME" : k == 4 ? "TRADE CODE" : k == 1 ? "NEW TAB" : k == 2 ? "SEARCH" : k == 3 ? "RENAME TAB" : "RENAME"; }
+inline const char* KbPrompt() { const int k = Focus().kbFor; return k == 5 ? "Your Theme's Name" : k == 4 ? "The Other Player's Code" : k == 1 || k == 3 ? "Tab Name" : k == 2 ? "Part Of A Game's Name" : "The Game's Own Name"; }
 inline const char* KbDone() { const int k = Focus().kbFor; return k == 4 ? "Join" : k == 1 ? "Make Tab" : k == 2 ? "Search" : "Save"; }
 // Add To Tab (the game's menu): the player's tabs, each marked if the game is in it, New Tab and Close.
 inline void OpenAddToTab(const std::string& rom)
@@ -1811,6 +1881,7 @@ inline int TabDialogPick(const std::string& pick, int& tab, std::string& note)
 // The keyboard's done key for anything but a game's name: a new tab (the game it came from put in it),
 // the search ("" clears it), a tab's name. tab: the tab shown after.
 inline void TradeEnterCode(const std::string& code); // (the Hub's Trade page, below)
+inline void ThemeSaveStart(const std::string& name); // (My Themes, below)
 inline void KeyboardDone(int& tab, std::string& note)
 {
     GlassFocus& F = Focus();
@@ -1833,6 +1904,7 @@ inline void KeyboardDone(int& tab, std::string& note)
         note = t.empty() ? "SEARCH CLEARED" : "";
     }
     else if (F.kbFor == 4) TradeEnterCode(t);
+    else if (F.kbFor == 5) ThemeSaveStart(t);
     else if (F.kbFor == 3 && !t.empty() && F.kbTab >= 0 && F.kbTab < (int)tabs.size())
     {
         tabs[F.kbTab].name = t;
@@ -2631,6 +2703,37 @@ inline int LookDo(int row, int dir)
     LookLoad();
     LookPrefs& l = Look();
     int out = 0;
+    if (LauncherMode() == 0)
+    {
+        // (The menu: Theme Editor, My Themes, Theme Gallery.)
+        if (row == 0) LauncherMode() = 1;
+        else if (row == 1) { LauncherMode() = 2; ThemesRefresh(); }
+        else Themes().msg = "THE THEME GALLERY IS COMING SOON";
+        if (row <= 1) Focus().prow = 0;
+        Hub().version++;
+        return 0;
+    }
+    if (LauncherMode() == 2)
+    {
+        // (My Themes: Save This Look (its name typed), Import A Theme, a theme's menu.)
+        GlassFocus& F = Focus();
+        Themes().msg.clear();
+        if (row == 0) { F.kbFor = 5; F.kbRom.clear(); F.text.clear(); F.dialog = 3; F.drow = 0; return 2; }
+        if (row == 1)
+        {
+#ifdef __SWITCH__
+            ThemesRefresh();
+            Themes().msg = "PUT .ZIP THEMES IN /SWITCH/POKEMON-DS-WIDE/THEMES/ AND THEY SHOW HERE";
+            Hub().version++;
+            return 0;
+#else
+            return 4;
+#endif
+        }
+        if (row == 2) { LauncherMode() = 3; ThemesRefresh(); F.prow = 0; F.rScroll = 0; Hub().version++; } // (the Theme Library)
+        return 0;
+    }
+    if (LauncherMode() == 3) { OpenThemeMenu(row); return 0; } // (the Theme Library: a theme's menu)
     if (l.edit >= 0)
     {
         if (l.edit != 6 && LookFieldList(l.edit)[l.field] == LF_PIC)
@@ -2780,6 +2883,192 @@ inline int LookTap(int x, int y)
         }
     if (hit) { LookSave(); Hub().version++; }
     return hit ? 1 : 0;
+}
+// Saving a theme: Home drawn once (ThemeCaptureDone, as the launcher is drawn), its picture taken, then
+// the theme written and the page as it was.
+inline Glass::Picture* ThemePreview(const std::string& name)
+{
+    ThemeState& t = Themes();
+    auto it = t.previews.find(name);
+    if (it == t.previews.end())
+    {
+        Glass::Picture p;
+        std::map<std::string, std::vector<unsigned char>> files;
+        if (ThemePack::ZipRead(ThemesDir() + "/" + name + ".zip", files, 4u << 20, "preview.jpg") && files.count("preview.jpg")) LookDecodePicture(files["preview.jpg"], p);
+        it = t.previews.emplace(name, p).first;
+    }
+    return it->second.px.empty() ? nullptr : &it->second;
+}
+inline void ThemeSaveStart(const std::string& raw)
+{
+    ThemeState& t = Themes();
+    const std::string name = ThemeSafe(raw);
+    if (name.empty()) { t.msg = "TYPE A NAME FOR THE THEME (LETTERS AND NUMBERS)"; return; }
+    t.pending = true;
+    t.name = name;
+    t.kept = Focus();
+    t.kept.dialog = 0;
+    GlassFocus& F = Focus();
+    F.page = -1; F.side = -1; F.popup = -1; F.dialog = 0; F.banner = 0;
+    t.msg = "SAVING...";
+    Hub().version++;
+}
+inline bool LookWriteTheme(const std::string& name, const std::vector<unsigned char>& preview)
+{
+    const LookPrefs& l = Look();
+    ThemeState& ts = Themes();
+    std::vector<std::pair<std::string, std::vector<unsigned char>>> files;
+    std::string picName[6];
+    size_t total = preview.size();
+    for (int i = 1; i < 6; i++)
+    {
+        if (l.pic[i].empty()) continue;
+        std::vector<unsigned char> data;
+        if (!ReadFile(LookPicPath(l.pic[i]), data) || !ImageAllowed(data.data(), data.size())) { ts.msg = "COULD NOT READ THE PICTURE " + l.pic[i]; return false; }
+        std::string base = std::filesystem::path(l.pic[i]).filename().string();
+        int w = 0, h = 0, n = 0;
+        if (stbi_info_from_memory(data.data(), (int)data.size(), &w, &h, &n) && std::max(w, h) > 3840)
+        {
+            // (Over 4K: made smaller, as a JPEG.)
+            Glass::Picture p;
+            if (!LookDecodePicture(data, p) || !ThemePack::Jpeg(p.px.data(), p.w, p.h, 90, data)) { ts.msg = "COULD NOT MAKE " + base + " SMALLER"; return false; }
+            base = base.substr(0, base.find_last_of('.')) + ".jpg";
+        }
+        picName[i] = "pictures/" + std::string(kLookKeys[i]) + "-" + base;
+        total += data.size();
+        files.push_back({ picName[i], std::move(data) });
+    }
+    std::string text = "fulldex_theme\t1\nname\t" + name + "\n";
+    for (int i = 0; i < 6; i++)
+    {
+        text += std::string(kLookKeys[i]) + "\t" + l.col[i] + "\n";
+        if (i > 0) text += std::string(kLookKeys[i]) + "_pic\t" + picName[i] + "\n";
+        if (LookHasOp(i)) text += std::string(kLookKeys[i]) + "_op\t" + std::to_string(l.op[i]) + "\n";
+    }
+    text += "background\t" + l.backdrop + "\nsoftness\t" + std::to_string(l.blur) + "\ndim\t" + std::to_string(l.dim) + "\ngrain\t" + std::to_string(l.grain) + "\nbadges\t" + (l.badges ? "on" : "off") + "\n";
+    total += text.size();
+    if (total > (20u << 20)) { ts.msg = "OVER 20 MB: USE SMALLER PICTURES"; return false; }
+    files.insert(files.begin(), { "theme.txt", std::vector<unsigned char>(text.begin(), text.end()) });
+    files.push_back({ "preview.jpg", preview });
+    std::error_code ec;
+    std::filesystem::create_directories(ThemesDir(), ec);
+    if (!ThemePack::ZipWrite(ThemesDir() + "/" + name + ".zip", files)) { ts.msg = "COULD NOT SAVE THE THEME"; return false; }
+    ts.previews.erase(name);
+    ThemesRefresh();
+    return true;
+}
+// (At the end of drawing: Home just drawn for a theme being saved.)
+inline void ThemeCaptureDone(Canvas& c)
+{
+    ThemeState& t = Themes();
+    if (!t.pending || Focus().page >= 0 || c.w <= 0 || c.h <= 0) return;
+    const int pw = 960, ph = 540;
+    std::vector<uint32_t> px((size_t)pw * ph);
+    for (int y = 0; y < ph; y++)
+        for (int x = 0; x < pw; x++) px[(size_t)y * pw + x] = c.px[(size_t)(y * c.h / ph) * c.w + x * c.w / pw];
+    std::vector<unsigned char> jpg;
+    ThemePack::Jpeg(px.data(), pw, ph, 88, jpg);
+    t.pending = false;
+    Focus() = t.kept;
+    LauncherMode() = 2;
+    if (LookWriteTheme(t.name, jpg))
+    {
+        // (Saved: the Theme Library, on it.)
+        t.msg = "SAVED: " + t.name;
+        LauncherMode() = 3;
+        Focus().prow = 0;
+        for (int i = 0; i < (int)t.list.size(); i++) if (t.list[(size_t)i] == t.name) Focus().prow = i;
+    }
+    Hub().version++;
+}
+inline bool LookApplyTheme(const std::string& name)
+{
+    ThemeState& ts = Themes();
+    std::map<std::string, std::vector<unsigned char>> files;
+    if (!ThemePack::ZipRead(ThemesDir() + "/" + name + ".zip", files, 48u << 20) || !files.count("theme.txt")) { ts.msg = "COULD NOT READ THAT THEME"; return false; }
+    std::map<std::string, std::string> p;
+    {
+        const std::vector<unsigned char>& t = files["theme.txt"];
+        const std::string all(t.begin(), t.end());
+        for (size_t at = 0; at < all.size();)
+        {
+            size_t end = all.find('\n', at);
+            if (end == std::string::npos) end = all.size();
+            std::string l = all.substr(at, end - at);
+            while (!l.empty() && l.back() == '\r') l.pop_back();
+            const size_t tb = l.find('\t');
+            if (tb != std::string::npos && tb > 0) p[l.substr(0, tb)] = l.substr(tb + 1);
+            at = end + 1;
+        }
+    }
+    if (!p.count("fulldex_theme")) { ts.msg = "THAT IS NOT A FULLDEX THEME"; return false; }
+    std::error_code ec;
+    std::filesystem::create_directories(HubDir() + "/launcher-pictures", ec);
+    for (int i = 1; i < 6; i++)
+    {
+        const auto it = p.find(std::string(kLookKeys[i]) + "_pic");
+        if (it == p.end() || it->second.empty()) continue;
+        const auto f = files.find(it->second);
+        if (f == files.end() || !ImageAllowed(f->second.data(), f->second.size())) { it->second.clear(); continue; }
+        const std::string mine = name + " - " + std::filesystem::path(it->second).filename().string();
+        FILE* o = fopen((HubDir() + "/launcher-pictures/" + mine).c_str(), "wb");
+        if (!o) { it->second.clear(); continue; }
+        const bool ok = fwrite(f->second.data(), 1, f->second.size(), o) == f->second.size();
+        fclose(o);
+        it->second = ok ? mine : std::string();
+    }
+    LookFrom(p);
+    LookSave();
+    Hub().version++;
+    ts.msg = "THEME ON: " + name;
+    return true;
+}
+// A .zip from the PC's picker, copied into the themes folder (named after its file).
+inline bool ThemeImport(const std::string& path)
+{
+    ThemeState& ts = Themes();
+    std::map<std::string, std::vector<unsigned char>> files;
+    if (!ThemePack::ZipRead(path, files, 48u << 20, "theme.txt") || !files.count("theme.txt")) { ts.msg = "THAT IS NOT A FULLDEX THEME"; Hub().version++; return false; }
+    std::string stem = ThemeSafe(std::filesystem::path(path).stem().string());
+    if (stem.empty()) stem = "Theme";
+    std::string to = stem;
+    std::error_code ec;
+    for (int n = 2; std::filesystem::exists(ThemesDir() + "/" + to + ".zip", ec); n++) to = stem + " " + std::to_string(n);
+    std::filesystem::create_directories(ThemesDir(), ec);
+    std::filesystem::copy_file(path, ThemesDir() + "/" + to + ".zip", ec);
+    ThemesRefresh();
+    ts.msg = ec ? "COULD NOT COPY THE THEME" : "IMPORTED: " + to;
+    if (!ec) { LauncherMode() = 3; Focus().prow = 0; for (int i = 0; i < (int)ts.list.size(); i++) if (ts.list[(size_t)i] == to) Focus().prow = i; } // (the Theme Library, on it)
+    Hub().version++;
+    return !ec;
+}
+// A row of a theme's menu chosen: 1 when the menu stays (Delete asked first).
+inline int ThemePick(const std::string& pick)
+{
+    ThemeState& ts = Themes();
+    GlassFocus& F = Focus();
+    if (pick.rfind("#apply:", 0) == 0) { LookApplyTheme(pick.substr(7)); return 0; }
+    if (pick.rfind("#tdelask:", 0) == 0)
+    {
+        const std::string n = pick.substr(9);
+        F.dMsg = "Delete " + n + "? Its file goes; the look you have on now stays.";
+        F.dItems = { "Delete", "Cancel" };
+        F.dPaths = { "#tdelete:" + n, "#close" };
+        F.drow = 1;
+        return 1;
+    }
+    if (pick.rfind("#tdelete:", 0) == 0)
+    {
+        const std::string n = pick.substr(9);
+        std::error_code ec;
+        std::filesystem::remove(ThemesDir() + "/" + n + ".zip", ec);
+        ts.previews.erase(n);
+        ThemesRefresh();
+        ts.msg = ec ? "COULD NOT DELETE IT" : "DELETED: " + n;
+        Hub().version++;
+        return 0;
+    }
+    return 0;
 }
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
@@ -3015,7 +3304,7 @@ inline void OpenSupportAsk()
     F.dItems = { "Buy Me A Coffee", "PayPal", "Close" };
     F.dPaths = { "#open:https://buymeacoffee.com/mamesj", "#open:https://paypal.me/mamesj", "#close" };
 }
-inline int PageRows(int page) { return page == SIDE_LAUNCHER ? 8 : page == SIDE_ABOUT ? 5 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
+inline int PageRows(int page) { return page == SIDE_LAUNCHER ? LauncherRows() : page == SIDE_ABOUT ? 5 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
 inline std::string AboutUrl(int row)
 {
     return row == 0 ? "https://buymeacoffee.com/mamesj" : row == 2 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 4 ? "https://github.com/mamesj/pokemon-fulldex" : "";
@@ -3055,6 +3344,16 @@ inline bool PageMove(int dir)
         return true;
     }
     if (F.page == SIDE_LAUNCHER && Look().edit >= 0) { LookMove(dir); return true; } // (the colour wheel)
+    if (F.page == SIDE_LAUNCHER && LauncherMode() == 3)
+    {
+        // (the Theme Library's grid: four across; left from the first of a row to the sidebar.)
+        const int cols = std::max(1, Themes().cols), n = LauncherRows();
+        if (dir == 3) { if (F.prow >= cols) F.prow -= cols; }
+        else if (dir == 4) { if (F.prow + cols < n) F.prow += cols; else if (F.prow / cols < (n - 1) / cols) F.prow = n - 1; }
+        else if (dir == 1) { if (F.prow % cols == 0) F.side = F.page; else F.prow--; }
+        else if (dir == 2) { if ((F.prow % cols < cols - 1 || (F.prow + 1) % Themes().perPage == 0) && F.prow + 1 < n) F.prow++; } // (and on to the next page)
+        return true;
+    }
     if (F.page == SIDE_ROMS || F.page == SIDE_HUB)
     {
         // (The list, and right of it the chosen row's actions: a ROM's, or the Hub's.)
@@ -3110,6 +3409,8 @@ inline bool PageBack()
     GlassFocus& F = Focus();
     if (F.page < 0) return false;
     if (F.page == SIDE_LAUNCHER && Look().edit >= 0) { Look().edit = -1; LookSave(); Hub().version++; return true; } // (the colour wheel closed)
+    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 3) { LauncherMode() = 2; F.prow = 2; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Library: back to My Themes)
+    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMode() == 1 ? 0 : 1; LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
@@ -3125,6 +3426,7 @@ inline bool OpenSide(int side)
     GlassFocus& F = Focus();
     if (side == SIDE_HOME) { F.page = -1; F.side = -1; return true; }
     if (side == SIDE_HUB) { HubMode() = 0; Mover().open = false; Hub().version++; }
+    if (side == SIDE_LAUNCHER) { LauncherMode() = 0; Look().edit = -1; ThemesRefresh(); Themes().msg.clear(); Hub().version++; }
     if (PageRows(side) > 0) { F.page = side; F.prow = 0; F.side = -1; F.nScroll = 0; F.pact = -1; F.rScroll = 0; return true; }
     return false;
 }
@@ -3132,7 +3434,25 @@ inline int PageRowAt(int x, int y)
 {
     const GlassFocus& f = Focus();
     if (f.page < 0 || f.pW <= 0 || f.pRow <= 0 || x < f.pX || x >= f.pX + f.pW || y < f.pY) return -1;
-    const int i = (y - f.pY) / f.pRow;
+    if (f.page == SIDE_LAUNCHER && LauncherMode() == 3)
+    {
+        // (the Theme Library's grid.)
+        const ThemeState& t = Themes();
+        // (The < and > under the grid: the first card of the page before or after.)
+        if (t.pageW > 0 && y >= t.pageY && y < t.pageY + t.pageH)
+        {
+            const int page = f.rScroll / std::max(1, f.rVis), pages = (LauncherRows() + t.perPage - 1) / std::max(1, t.perPage);
+            if (x >= t.prevX && x < t.prevX + t.pageW && page > 0) return (page - 1) * t.perPage;
+            if (x >= t.nextX && x < t.nextX + t.pageW && page + 1 < pages) return (page + 1) * t.perPage;
+            return -1;
+        }
+        if (t.cw <= 0 || x < t.gx || y < t.gy) return -1;
+        const int col = (x - t.gx) / (t.cw + t.gap), r = (y - t.gy) / (t.ch + t.gap);
+        if (col >= t.cols || (x - t.gx) % (t.cw + t.gap) >= t.cw || (y - t.gy) % (t.ch + t.gap) >= t.ch || r >= f.rVis) return -1;
+        const int k = (r + f.rScroll) * t.cols + col;
+        return k < LauncherRows() ? k : -1;
+    }
+    const int i = (y - f.pY) / f.pRow + (f.page == SIDE_LAUNCHER ? f.rScroll : 0); // (My Themes scrolls)
     return i < PageRows(f.page) ? i : -1;
 }
 inline int RomRowAt(int x, int y)
@@ -3243,7 +3563,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? "Launcher" : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -3602,6 +3922,174 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         // The Launcher page: the launcher's own look, each row opened with A (its colour, picture, blur).
         LookLoad();
         LookPrefs& lk = Look();
+        if (LauncherMode() == 3)
+        {
+            // The Theme Library: a grid of cards, each a theme's Home picture over its name. One panel
+            // across, rows of four, a page at a time.
+            ThemeState& ts = Themes();
+            const int pad = (int)(16 * u), gap = (int)(14 * u), cols = 4, n = LauncherRows(), W = R - L;
+            const int cw = (W - 2 * pad - (cols - 1) * gap) / cols, pw = cw - (int)(16 * u), pph = pw * 9 / 16, ch = pph + (int)(44 * u);
+            const int visRows = std::max(1, (bottom - top - 2 * pad - (int)(26 * u) + gap) / (ch + gap));
+            Menu::FrostBox(c, solid, L, top, W, bottom - top, 18 * u);
+            F.prow = std::max(0, std::min(F.prow, n - 1));
+            // (A page at a time: the chosen card's.)
+            const int perPage = cols * visRows, pages = std::max(1, (n + perPage - 1) / perPage), page = F.prow / perPage;
+            F.rScroll = page * visRows;
+            ts.perPage = perPage;
+            F.pact = -1; F.aW = 0;
+            F.pX = L + pad; F.pY = top + pad; F.pW = W - 2 * pad; F.pRow = ch + gap; F.rVis = visRows;
+            ts.gx = L + pad; ts.gy = top + pad; ts.cw = cw; ts.ch = ch; ts.gap = gap; ts.cols = cols;
+            for (int i = 0; i < (int)ts.list.size(); i++)
+            {
+                const int r = i / cols - F.rScroll;
+                if (r < 0 || r >= visRows) continue;
+                const int x = L + pad + (i % cols) * (cw + gap), y = top + pad + r * (ch + gap);
+                const bool on = i == F.prow;
+                if (on && F.side < 0) Glass::Glow(c, x, y, cw, ch, 14 * u, u);
+                if (on) Glass::Round(c, x, y, cw, ch, 14 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
+                else Glass::Round(c, x, y, cw, ch, 14 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+                const int px = x + (int)(8 * u), py = y + (int)(8 * u);
+                std::string label;
+                {
+                    label = ts.list[(size_t)i];
+                    if (const Glass::Picture* pv = ThemePreview(label)) Glass::PictureIn(c, *pv, px, py, pw, pph, 10 * u, 255);
+                    else { Glass::Round(c, px, py, pw, pph, 10 * u, 0x24FFFFFFu); GT(c, px + (pw - GW("No Picture", 12 * u, true)) / 2, py + pph / 2, "No Picture", 12 * u, hint, true); }
+                }
+                float fs = 15 * u;
+                std::string shown = label;
+                while (fs > 11 * u && GW(shown, fs, true) > pw) fs -= u;
+                while (shown.size() > 4 && GW(shown, fs, true) > pw) shown = shown.substr(0, shown.size() - 4) + "...";
+                GT(c, px, y + ch - (int)(18 * u), shown, fs, text, true);
+            }
+            // The pages: < Page 1 Of 3 > at the bottom right (the arrows tapped or clicked).
+            ts.pageW = 0;
+            if (pages > 1)
+            {
+                const std::string pl = "Page " + std::to_string(page + 1) + " Of " + std::to_string(pages);
+                const int bh = (int)(30 * u), bw = (int)(36 * u), ly = bottom - pad - bh, lw = GW(pl, 13 * u, true) + (int)(24 * u);
+                const int nx = L + W - pad - bw, lx = nx - lw, px2 = lx - bw;
+                Glass::Round(c, px2, ly, bw, bh, bh * 0.5f, page > 0 ? 0x30FFFFFFu : 0x12FFFFFFu, 0x40FFFFFFu, 1.0f * u);
+                Glass::Round(c, nx, ly, bw, bh, bh * 0.5f, page + 1 < pages ? 0x30FFFFFFu : 0x12FFFFFFu, 0x40FFFFFFu, 1.0f * u);
+                GT(c, px2 + bw / 2 - GW("<", 15 * u, true) / 2, ly + bh / 2, "<", 15 * u, page > 0 ? text : hint, true);
+                GT(c, nx + bw / 2 - GW(">", 15 * u, true) / 2, ly + bh / 2, ">", 15 * u, page + 1 < pages ? text : hint, true);
+                GT(c, lx + (lw - GW(pl, 13 * u, true)) / 2, ly + bh / 2, pl, 13 * u, text, true);
+                ts.prevX = px2; ts.nextX = nx; ts.pageY = ly; ts.pageW = bw; ts.pageH = bh;
+            }
+            if (ts.list.empty()) GT(c, L + (W - GW("No Themes Yet", 20 * u, true)) / 2, (top + bottom) / 2, "No Themes Yet", 20 * u, hint, true);
+#ifdef __SWITCH__
+            const char* say[2] = { "Save This Look on My Themes makes one.", "Press A to apply it or delete it." };
+#else
+            const char* say[2] = { "Save This Look on My Themes makes one.", "Choose it to apply it, show its file, or delete it." };
+#endif
+            const std::string line = !ts.msg.empty() ? ts.msg : say[ts.list.empty() ? 0 : 1];
+            GT(c, L + pad, bottom - pad - (int)(4 * u), line, 13 * u, ts.msg.empty() ? hint : 0xFF8CC8FFu, ts.msg.empty() ? false : true);
+            return;
+        }
+        if (LauncherMode() != 1)
+        {
+            // Its menu, or My Themes: rows, and right of them what the chosen one is (a theme: its picture).
+            ThemeState& ts = Themes();
+            const int rw = (int)(400 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(14 * u);
+            const int rowH = (int)(58 * u), rg = (int)(8 * u), n = LauncherRows();
+            const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
+            Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
+            F.prow = std::max(0, std::min(F.prow, n - 1));
+            if (F.prow < F.rScroll) F.rScroll = F.prow;
+            if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+            F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
+            F.pact = -1;
+            F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
+            F.aW = 0;
+            auto row = [&](int i, int icon, const std::string& name, const std::string& sub, const std::string& chip) {
+                const int k = i - F.rScroll;
+                if (k < 0 || k >= vis) return;
+                const int rx = L + pad, ry = top + pad + k * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+                if (i == F.prow)
+                {
+                    if (F.side < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
+                    Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
+                }
+                else Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+                Glass::DrawIcon(c, icon, rx + 28 * u, mid, 11 * u, text);
+                GT(c, rx + (int)(56 * u), mid - 9 * u, name, 17 * u, text, true);
+                GT(c, rx + (int)(56 * u), mid + 11 * u, sub, 12 * u, hint, false);
+                if (!chip.empty())
+                {
+                    const int chipW = GW(chip, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(42 * u) - chipW;
+                    Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+                    GT(c, chipX + (int)(10 * u), mid, chip, 12 * u, text, true);
+                }
+                GT(c, rx + rww - (int)(24 * u), mid, ">", 15 * u, hint, true);
+            };
+            const int dx = R - rw, ix = dx + (int)(22 * u), iw = rw - (int)(44 * u);
+            Menu::FrostBox(c, solid, dx, top, rw, bottom - top, 18 * u);
+            int y = top + (int)(22 * u);
+            auto para = [&](const std::string& s, uint32_t col, float px) {
+                for (const std::string& line : WrapLines(s, px, iw)) { GT(c, ix, y + px * 0.6f, line, px, col, false); y += (int)(px * 1.45f); }
+                y += (int)(8 * u);
+            };
+            if (LauncherMode() == 0)
+            {
+                const std::string count = std::to_string(ts.list.size()) + (ts.list.size() == 1 ? " Theme" : " Themes");
+                row(0, Glass::I_SPARKLE, "Theme Editor", "Colours, pictures, blur and the rest of the launcher's look", "");
+                row(1, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
+                row(2, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Soon");
+                static const char* const titles[3] = { "Theme Editor", "My Themes", "Theme Gallery" };
+                static const char* const about[3] = {
+                    "Change the launcher's look: the accent, the panels, the sidebar and the top bar, the buttons, the background, its blur and dim, and the glass's grain. Each can be a colour or a picture.",
+                    "Keep the look you have now as a theme, with its pictures, and switch between your themes. Each is one .zip file you can send to a friend.",
+                    "Browse themes other players have shared, see each one on a Home screen, and try one on before you keep it. Coming soon." };
+                GT(c, ix, y + 14 * u, titles[F.prow], 22 * u, text, true);
+                y += (int)(44 * u);
+                para(about[F.prow], text, 14 * u);
+            }
+            else
+            {
+                row(0, Glass::I_SAVE, "Save This Look", "Keep the look you have now as a theme", "");
+#ifdef __SWITCH__
+                row(1, Glass::I_LOAD, "Import A Theme", "From the themes folder on the SD card", "");
+#else
+                row(1, Glass::I_LOAD, "Import A Theme", "A .zip theme someone sent you", "");
+#endif
+                row(2, Glass::I_GRID, "Theme Library", "All your saved themes, as pictures", std::to_string(ts.list.size()) + (ts.list.size() == 1 ? " Theme" : " Themes"));
+                if (F.prow == 0)
+                {
+                    GT(c, ix, y + 14 * u, "Save This Look", 22 * u, text, true);
+                    y += (int)(44 * u);
+                    para("Keeps your accent, panels, bars, buttons, background, blur, dim and grain, with their pictures (up to 4K), as one .zip in the themes folder, with a picture of your Home screen wearing it.", text, 14 * u);
+                    para("You name it next. A theme can be up to 20 MB.", hint, 13 * u);
+                }
+                else if (F.prow == 1)
+                {
+                    GT(c, ix, y + 14 * u, "Import A Theme", 22 * u, text, true);
+                    y += (int)(44 * u);
+#ifdef __SWITCH__
+                    para("Put .zip themes in /switch/pokemon-ds-wide/themes/ on the SD card and they show in this list.", text, 14 * u);
+#else
+                    para("Choose a .zip theme someone sent you. It is copied into your themes folder and shows in this list.", text, 14 * u);
+#endif
+                }
+                else
+                {
+                    GT(c, ix, y + 14 * u, "Theme Library", 22 * u, text, true);
+                    y += (int)(44 * u);
+                    para("All your saved themes as pictures of Home wearing them, a page at a time. Choose one to apply it.", text, 14 * u);
+                    // (The first four, small.)
+                    const int g = (int)(10 * u), tw = (iw - g) / 2, th = tw * 9 / 16;
+                    for (int t = 0; t < std::min(4, (int)ts.list.size()); t++)
+                    {
+                        const int tx = ix + (t % 2) * (tw + g), ty = y + (t / 2) * (th + g);
+                        if (const Glass::Picture* pv = ThemePreview(ts.list[(size_t)t])) Glass::PictureIn(c, *pv, tx, ty, tw, th, 8 * u, 255);
+                        else Glass::Round(c, tx, ty, tw, th, 8 * u, 0x24FFFFFFu);
+                        Glass::Round(c, tx, ty, tw, th, 8 * u, 0, 0x50FFFFFFu, 1.0f * u);
+                    }
+                    if (ts.list.empty()) para("No themes yet: Save This Look makes one.", hint, 13 * u);
+                    else y += 2 * (th + g);
+                }
+            }
+            if (!ts.msg.empty()) para(ts.msg, 0xFF8CC8FFu, 13 * u);
+            return;
+        }
         const int rw = (int)(400 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(14 * u);
         const int rowH = (int)(58 * u), rg = (int)(8 * u), n = 8;
         Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
@@ -4993,6 +5481,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         }
     }
     if (solid) Glass::Opaque(c);
+    ThemeCaptureDone(c); // (a theme being saved: Home just drawn)
 }
 
 inline int GlassTabAt(const Canvas& c, int x, int y)
