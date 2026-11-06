@@ -1170,7 +1170,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     // draws in software about 20 times slower than a PC.)
     auto sig = [](const Game& g) { return g.art.empty() ? std::string("-") : std::to_string(g.art[(size_t)Art * Art / 2 + Art / 2]); };
     std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
-                    + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/" + std::to_string(Focus().side) + "/" + std::to_string(Focus().banner) + "/"
+                    + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom();
     for (const Game& g : games) key += "|" + g.rom + g.customName + (g.favourite ? "*" : "") + sig(g);
     static std::vector<uint32_t> base;
@@ -1199,6 +1199,40 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         GT(c, ix + iw - (int)(4 * u) - GW(sub, 13 * u, true), cy, sub, 13 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
         if (g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, ix + iw - 14 * u, iy + 14 * u, 7 * u, 0xFFFFFFFFu);
     };
+    // The sidebar's rows (the chosen one framed) and the banner's buttons: drawn over the kept picture
+    // each time, as they change with the arrows.
+    auto drawSideRows = [&]() {
+        for (int i = 0; i < SIDES; i++)
+        {
+            const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + (int)(16 * u), rw = sp.sideW - (int)(32 * u);
+            const int fs = Focus().side;
+            const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == SIDE_HOME;
+            const bool lit = fs >= 0 ? i == fs : settingsChosen && i == SIDE_SETTINGS; // (chosen with the arrows)
+            if (on)
+            {
+                if (lit) Glass::Glow(c, rx, ry, rw, sp.rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rw, sp.rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            Glass::DrawIcon(c, SideIcon(i), rx + 27 * u, ry + sp.rowH * 0.5f, 12 * u, text);
+            GT(c, rx + (int)(52 * u), ry + sp.rowH * 0.5f, SideName(i), 19 * u, text, true);
+        }
+    };
+    auto drawBannerButtons = [&]() {
+        if (cont < 0 || cont >= (int)games.size()) return;
+        const bool played = !ContinueRom().empty() && games[cont].rom == ContinueRom();
+        if (Focus().banner == 1) Glass::Glow(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, u);
+        Glass::Round(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, 0xFFFFFFFFu);
+        Glass::DrawIcon(c, Glass::I_PLAY, sp.contX + 30 * u, sp.contY + sp.contH * 0.5f, 8 * u, dark);
+        GT(c, sp.contX + (int)(48 * u), sp.contY + sp.contH * 0.5f, played ? "Continue" : "Play", 18 * u, dark, true);
+        const int ox = sp.contX + sp.contW + (int)(10 * u), ow = GW("Game Options", 18 * u, true) + (int)(36 * u);
+        if (Focus().banner == 2)
+        {
+            Glass::Glow(c, ox, sp.contY, ow, sp.contH, 12 * u, u);
+            Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+        }
+        else Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+        GT(c, ox + (int)(18 * u), sp.contY + sp.contH * 0.5f, "Game Options", 18 * u, text, true);
+    };
     auto moreBelow = [&]() {
         if (scroll + (grid.bottom - grid.top) < v.height - grid.gap)
             Glass::Round(c, sp.tabsX + grid.cols * grid.colStep / 2 - (int)(16 * u), grid.bottom + (int)(4 * u), (int)(32 * u), (int)(4 * u), 2 * u, 0x80FFFFFFu);
@@ -1219,20 +1253,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     else Glass::Round(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, Menu::GlassShade);
     Glass::Round(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, 0x30101826);
     Glass::Round(c, sp.sideX + sp.sideW - std::max(1, (int)u), sp.sideY, std::max(1, (int)u), sp.sideH, 0, 0x3DFFFFFF);
-    for (int i = 0; i < SIDES; i++)
-    {
-        const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + (int)(16 * u), rw = sp.sideW - (int)(32 * u);
-        const int fs = Focus().side;
-        const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == SIDE_HOME;
-        const bool lit = fs >= 0 ? i == fs : settingsChosen && i == SIDE_SETTINGS; // (chosen with the arrows)
-        if (on)
-        {
-            if (lit) Glass::Glow(c, rx, ry, rw, sp.rowH, 12 * u, u);
-            Glass::Round(c, rx, ry, rw, sp.rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
-        }
-        Glass::DrawIcon(c, SideIcon(i), rx + 27 * u, ry + sp.rowH * 0.5f, 12 * u, text);
-        GT(c, rx + (int)(52 * u), ry + sp.rowH * 0.5f, SideName(i), 19 * u, text, true);
-    }
+    // (Its rows: drawSideRows, over the kept picture.)
 
     // The tabs, as pills: the shown one white.
     {
@@ -1268,19 +1289,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                                + "   \xC2\xB7   " + (g.hasSave ? "Save Found" : "New Game");
         GT(c, tx, sp.bannerY + 30 * u, meta, 16 * u, hint, true);
         GT(c, tx, sp.bannerY + 66 * u, ShortName(g), 36 * u, text, true);
-        // Continue (white) and Game Options.
-        if (Focus().banner == 1) Glass::Glow(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, u);
-        Glass::Round(c, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, 0xFFFFFFFFu);
-        Glass::DrawIcon(c, Glass::I_PLAY, sp.contX + 30 * u, sp.contY + sp.contH * 0.5f, 8 * u, dark);
-        GT(c, sp.contX + (int)(48 * u), sp.contY + sp.contH * 0.5f, played ? "Continue" : "Play", 18 * u, dark, true);
-        const int ox = sp.contX + sp.contW + (int)(10 * u), ow = GW("Game Options", 18 * u, true) + (int)(36 * u);
-        if (Focus().banner == 2)
-        {
-            Glass::Glow(c, ox, sp.contY, ow, sp.contH, 12 * u, u);
-            Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
-        }
-        else Glass::Round(c, ox, sp.contY, ow, sp.contH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
-        GT(c, ox + (int)(18 * u), sp.contY + sp.contH * 0.5f, "Game Options", 18 * u, text, true);
+        // (Continue and Game Options: drawBannerButtons, over the kept picture.)
     }
 
     // "Your Games" and how many.
@@ -1304,6 +1313,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     base = c.px;
     baseKey = key;
     }
+    drawSideRows();
+    drawBannerButtons();
     // The chosen card, over the kept picture: the blurred background put back round it first.
     {
         const int k = v.SpotOf(selected);
