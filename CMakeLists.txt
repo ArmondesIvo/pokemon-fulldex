@@ -115,6 +115,23 @@ set(SSRECOMP_SOURCES
     "${SSR_GENERATED_DIR}/apps_table.cpp"
     $<TARGET_OBJECTS:gamecode>)
 
+# Cloud saves' Google sign-in (frontend/cloud_saves.cpp): the client's id and secret from a file of
+# two lines, given at build time, so they are never in the code. Without it, Google is not offered.
+set(FULLDEX_GOOGLE_CLIENT_FILE "" CACHE FILEPATH "Google sign-in client for cloud saves: a file of two lines, id and secret")
+if(FULLDEX_GOOGLE_CLIENT_FILE)
+    file(STRINGS "${FULLDEX_GOOGLE_CLIENT_FILE}" _fulldex_google LIMIT_COUNT 2)
+    list(LENGTH _fulldex_google _fulldex_google_n)
+    if(NOT _fulldex_google_n EQUAL 2)
+        message(FATAL_ERROR "FULLDEX_GOOGLE_CLIENT_FILE needs two lines: the client id, then its secret")
+    endif()
+    list(GET _fulldex_google 0 _fulldex_google_id)
+    list(GET _fulldex_google 1 _fulldex_google_secret)
+    string(STRIP "${_fulldex_google_id}" _fulldex_google_id)
+    string(STRIP "${_fulldex_google_secret}" _fulldex_google_secret)
+    set_property(SOURCE frontend/cloud_saves.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        "FULLDEX_GOOGLE_CLIENT_ID=\"${_fulldex_google_id}\"" "FULLDEX_GOOGLE_CLIENT_SECRET=\"${_fulldex_google_secret}\"")
+endif()
+
 # The app's version (Android: for its check for a newer release; Switch: shown in the
 # Homebrew Menu): the newest one in CHANGELOG.md.
 set(SSR_VERSION "")
