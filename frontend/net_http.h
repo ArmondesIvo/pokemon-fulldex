@@ -22,4 +22,8 @@ struct HttpCall
 // False when there was no answer at all (no network, bad address); a reply of any status is true.
 bool HttpRequest(const HttpCall& call, int& status, std::string& body, std::string& error);
 const char* SystemName();
+#ifdef __SWITCH__
+// The console's network, opened once and closed as the program ends (achievements_http.cpp).
+bool EnsureNetwork();
+#endif
 }

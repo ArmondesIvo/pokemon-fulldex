@@ -412,6 +412,7 @@ namespace
 std::once_flag g_curlInit;
 bool g_curlOk = false;
 std::atomic<bool> g_stop{ false };
+std::atomic<int> g_busy{ 0 }; // (transfers going on now)
 
 int Progress(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
 {
@@ -424,9 +425,26 @@ void CloseNetwork()
 {
     g_stop = true;
     ::SwitchPlatform::ExitTrace("network: closing");
+    // (Transfers end at once with g_stop; curl is cleaned up when none is left, else left be.)
+    for (int i = 0; i < 200 && g_busy > 0; i++) svcSleepThread(10000000ULL);
+    if (g_busy == 0 && g_curlOk) { curl_global_cleanup(); g_curlOk = false; ::SwitchPlatform::ExitTrace("network: curl cleaned up"); }
     socketExit();
     ::SwitchPlatform::ExitTrace("network: closed");
 }
+
+// The console's network, opened once for everything that uses it (RetroAchievements, cloud saves,
+// trades: hub_link.cpp) and closed as the program ends (CloseNetwork). Opened twice it fails, and
+// left open the next .nro never starts.
+bool OpenNetworkOnce()
+{
+    std::call_once(g_curlInit, [] {
+        if (R_FAILED(socketInitializeDefault())) return;
+        g_curlOk = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK;
+        atexit(CloseNetwork);
+    });
+    return g_curlOk;
+}
+
 
 struct Sink
 {
@@ -452,12 +470,9 @@ bool Request(const HttpCall& call, int& status, std::string& body, std::string& 
     // as the program ends. It must be closed: the Homebrew Menu's loader starts the next .nro
     // (the game chosen, the list again, a new version) in this same process, and with the
     // sockets left open that start never came (a black screen).
-    std::call_once(g_curlInit, [] {
-        if (R_FAILED(socketInitializeDefault())) return;
-        g_curlOk = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK;
-        atexit(CloseNetwork);
-    });
+    OpenNetworkOnce();
     if (!g_curlOk) { error = "no network (sockets)"; return false; }
+    struct Busy { Busy() { g_busy++; } ~Busy() { g_busy--; } } busy;
     if (g_stop) { error = "stopped"; return false; }
     CURL* c = curl_easy_init();
     if (!c) { error = "no curl"; return false; }
@@ -530,6 +545,8 @@ void HttpStop(bool on)
 {
     g_stop = on;
 }
+
+bool EnsureNetwork() { return OpenNetworkOnce(); }
 
 #elif defined(__APPLE__)
 

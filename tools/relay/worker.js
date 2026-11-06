@@ -36,6 +36,15 @@ export class Room {
     const body = new Uint8Array(await request.arrayBuffer());
     if (body.length > MAX_BODY) return new Response("too big\n", { status: 413 });
     let members = (await s.get("members")) || [];
+    // A goodbye alone (one BYE frame: length 1, type 7): that device leaves, and its messages go.
+    if (body.length === 5 && body[0] === 1 && body[1] === 0 && body[2] === 0 && body[3] === 0 && body[4] === 7) {
+      members = members.filter((x) => x !== me);
+      await s.put("members", members);
+      await s.delete(["out:" + me, "read:" + me]);
+      for (const x of members) await s.delete("read:" + x);
+      if (!members.length) await s.deleteAll();
+      return new Response(new Uint8Array([members.length]), { headers: { "Content-Type": "application/octet-stream" } });
+    }
     if (!members.includes(me)) {
       if (members.length >= 2) return new Response("room full\n", { status: 409 });
       members.push(me);

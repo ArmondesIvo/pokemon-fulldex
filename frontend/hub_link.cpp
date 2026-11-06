@@ -11,6 +11,9 @@
 #include <mutex>
 #include <random>
 #include <thread>
+#ifdef __SWITCH__
+namespace SwitchPlatform { void ExitTrace(const char* step); }
+#endif
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -64,7 +67,12 @@ void Changed() { g_version++; }
 // (A short log of the link, for finding faults: hub-link-log.txt, only with SSR_HUB_LOG set.)
 void Log(const char* fmt, ...)
 {
+#ifdef __SWITCH__
+    // (On the Switch: with hub-link-log.on beside the launcher.)
+    static const bool on = [] { FILE* t = fopen("sdmc:/switch/pokemon-ds-wide/hub-link-log.on", "r"); if (t) fclose(t); return t != nullptr; }();
+#else
     static const bool on = getenv("SSR_HUB_LOG") != nullptr;
+#endif
     if (!on) return;
 #ifdef __SWITCH__
     static FILE* f = fopen("sdmc:/switch/pokemon-ds-wide/hub-link-log.txt", "w");
@@ -105,7 +113,7 @@ void StartNet()
     if (!once) { WSADATA w; WSAStartup(MAKEWORD(2, 2), &w); once = true; }
 #elif defined(__SWITCH__)
     static bool once = false;
-    if (!once) { socketInitializeDefault(); once = true; }
+    if (!once) { Achievements::EnsureNetwork(); once = true; } // (shared: closed as the program ends)
 #endif
 }
 
@@ -283,6 +291,17 @@ void Run()
                 continue;
             }
             const int peers = (unsigned char)reply[0];
+            if (peers < 1 || peers > 2)
+            {
+                // (Not the relay's answer: a page in the way, or the wrong address.)
+                Log("relay: strange reply %d, %d bytes: %.80s", status, (int)reply.size(), reply.c_str());
+                std::lock_guard<std::mutex> l(g_m);
+                g_out.insert(g_out.begin(), out.begin(), out.end());
+                g_st.note = "The trade relay gave an answer it should not (" + std::to_string(status) + "). Trying again...";
+                Changed();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+                continue;
+            }
             inbuf.insert(inbuf.end(), reply.begin() + 1, reply.end());
             Log("relay: %d in the room, %d bytes", peers, (int)reply.size() - 1);
             {
@@ -478,11 +497,31 @@ void Run()
     closeAll();
 }
 
+// (Random numbers seeded from the clock too: std::random_device gives the same ones on every
+// start on the Switch, which made the same room code each time.)
+static uint32_t Rand()
+{
+    static std::mt19937 g = [] {
+        std::random_device rd;
+        std::seed_seq seq{ (uint32_t)rd(), (uint32_t)std::chrono::steady_clock::now().time_since_epoch().count(),
+                           (uint32_t)std::chrono::system_clock::now().time_since_epoch().count(),
+                           (uint32_t)(std::chrono::system_clock::now().time_since_epoch().count() >> 32) };
+        return std::mt19937(seq);
+    }();
+    return g();
+}
+
 void EnsureThread()
 {
     if (g_thread.joinable()) return;
+    StartNet(); // (first, so the thread is stopped below before the network closes)
     g_stop = false;
     g_thread = std::thread(Run);
+#ifdef __SWITCH__
+    // (Stopped as the program ends, before the network closes: atexit runs newest first.)
+    static bool once = false;
+    if (!once) { once = true; atexit([] { ::SwitchPlatform::ExitTrace("hub link: stopping"); g_stop = true; if (g_thread.joinable()) g_thread.join(); ::SwitchPlatform::ExitTrace("hub link: stopped"); }); }
+#endif
 }
 struct Ender { ~Ender() { g_stop = true; if (g_thread.joinable()) g_thread.join(); } } g_ender;
 
@@ -504,8 +543,7 @@ void Host(const std::string& me, const std::string& game)
         g_me = me; g_game = game;
         g_online = false;
         Reset(State::Hosting);
-        std::random_device rd;
-        g_st.code = 1000 + (int)(rd() % 9000);
+        g_st.code = 1000 + (int)(Rand() % 9000);
         g_st.note = "Room " + std::to_string(g_st.code) + " is open. On the other device, choose Join A Room.";
         Changed();
     }
@@ -597,9 +635,8 @@ void FinishDone(bool ok, const std::string& note)
 std::string NewCode()
 {
     static const char kLetters[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // (none that look alike: no I, O, 0, 1)
-    std::random_device rd;
     std::string c;
-    for (int i = 0; i < 6; i++) c += kLetters[rd() % 32];
+    for (int i = 0; i < 6; i++) c += kLetters[Rand() % 32];
     return c;
 }
 
@@ -614,10 +651,9 @@ void Online(const std::string& relay, const std::string& code, const std::string
         g_code = cl;
         g_relay = relay;
         while (!g_relay.empty() && g_relay.back() == '/') g_relay.pop_back();
-        std::random_device rd;
         static const char hex[] = "0123456789abcdef";
         g_myId.clear();
-        for (int i = 0; i < 16; i++) g_myId += hex[rd() % 16];
+        for (int i = 0; i < 16; i++) g_myId += hex[Rand() % 16];
         g_online = true;
         g_st.onlineCode = cl;
         std::vector<uint8_t> b; PutText(b, g_me); PutText(b, g_game);
