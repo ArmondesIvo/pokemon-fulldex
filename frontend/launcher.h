@@ -735,7 +735,7 @@ inline Grid Layout(const Canvas& c)
         g.gap = (int)(14 * u); g.labelH = 0; g.headH = 0;
         g.tabsY = (int)(28 * u); g.tabsH = (int)(44 * u);
         g.panelX = (int)(204 * u); g.panelW = c.w - g.panelX - (int)(28 * u);
-        g.top = (int)(320 * u); g.bottom = c.h - (int)(82 * u);
+        g.top = (int)(304 * u); g.bottom = c.h - (int)(82 * u);
         // (Box art is square: square pictures, two rows of cards in view, as many across as fit,
         // the room left over shared out between them.)
         const int minGap = (int)(14 * u);
@@ -966,8 +966,8 @@ inline GlassSpots Spots(const Canvas& c)
     // (The sidebar flush with the screen's left, top and bottom edges; its rows start level with the tabs.)
     s.sideX = 0; s.sideY = 0; s.sideW = (int)(180 * u); s.sideH = c.h;
     // (text sizes: bigger since 6 November, the sidebar and tabs most)
-    s.rowH = (int)(54 * u); s.rowGap = (int)(6 * u); s.firstRow = (int)(22 * u); // (level with the tab pills)
-    s.tabsX = (int)(204 * u); s.tabsY = (int)(18 * u); s.tabsH = (int)(54 * u);
+    s.rowH = (int)(54 * u); s.rowGap = (int)(6 * u); s.firstRow = (int)(12 * u); // (level with the tab pills)
+    s.tabsX = (int)(204 * u); s.tabsY = (int)(14 * u); s.tabsH = (int)(46 * u);
     int x = s.tabsX + (int)(4 * u);
     for (int t = 0; t < TABS; t++)
     {
@@ -975,9 +975,9 @@ inline GlassSpots Spots(const Canvas& c)
         s.tabX.push_back(x); s.tabW.push_back(w);
         x += w + (int)(2 * u);
     }
-    s.bannerX = s.tabsX; s.bannerY = (int)(106 * u); s.bannerW = c.w - s.bannerX - (int)(28 * u); s.bannerH = (int)(160 * u);
+    s.bannerX = s.tabsX; s.bannerY = (int)(90 * u); s.bannerW = c.w - s.bannerX - (int)(28 * u); s.bannerH = (int)(160 * u);
     s.contX = s.bannerX + (int)(168 * u); s.contY = s.bannerY + (int)(100 * u); s.contW = (int)(150 * u); s.contH = (int)(44 * u);
-    s.headY = (int)(282 * u);
+    s.headY = (int)(266 * u);
     return s;
 }
 inline bool Glassy(const Canvas& c);
