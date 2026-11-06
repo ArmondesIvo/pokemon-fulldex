@@ -3,7 +3,9 @@
 
 ## Unreleased
 
-- **Launcher save detection**: auto-detect existing saves matching the ROM's filename, base game title or fallback name when opening a game.
+- **Launcher: a save named after the ROM is found.** A save brought from another emulator or a flashcart
+  (`Pokemon - Edicion Negra 2.sav` beside `Pokemon - Edicion Negra 2.nds`) is used when the game's own save
+  (`black2-es.sav`) is not there. Another game's save name is never borrowed.
 - **SoulSilver: the wild Pokémon's slide to the right of a wide battle follows the game's frames.** It was
   timed by how many pictures were drawn, so the display rate, skipped frames or screenshots changed
   when (and whether) it happened.
