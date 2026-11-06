@@ -181,7 +181,10 @@ public:
             DrawPiece(tex, dst, el);
         }
         if (!useWide && scene.edgeFill && !scene.items.empty() && scene.items[0].screen >= 0)
+        {
             DrawEdgeCover(screens[scene.items[0].screen], v);
+            if (scene.wideBox[0] >= 0) DrawWideBox(screens[scene.items[0].screen], v, scene.wideBox[0], scene.wideBox[1], smooth);
+        }
     }
 
 private:
@@ -516,6 +519,30 @@ private:
         }
     }
 
+    // A text box widened to the view (Scene::wideBox), over the screen: its rows as WideBoxPixel
+    // gives them, one texture from `shift` columns left of the screen to as far right of it.
+    void DrawWideBox(const ScreenImage& top, const MergedView& v, int y0, int y1, bool smooth)
+    {
+        const int shift = WideBoxShift(v.originX, v.unit);
+        if (shift <= 0 || y0 < 0 || y1 >= 192 || y1 < y0) return;
+        const int w = 256 + 2 * shift, h = y1 - y0 + 1;
+        BoxBuf.resize((size_t)w * h);
+        for (int y = 0; y < h; y++)
+        {
+            const WideBoxRow f = WideBoxFill(top, y0 + y);
+            for (int x = 0; x < w; x++)
+                BoxBuf[(size_t)y * w + x] = 0xFF000000 | WideBoxPixel(top, y0 + y, x - shift, shift, f);
+        }
+        SDL_Texture* t = Make(BoxTex, w, h);
+        if (!t) return;
+        SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
+        SDL_SetTextureScaleMode(t, smooth ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+        SDL_UpdateTexture(t, nullptr, BoxBuf.data(), w * 4);
+        const SDL_Rect dst = { (int)(v.originX - shift * v.unit), (int)(v.originY + y0 * v.unit),
+                               (int)(w * v.unit + 0.5f), (int)(h * v.unit + 0.5f) };
+        SDL_RenderCopy(R, t, nullptr, &dst);
+    }
+
 public:
     // Time spent handing the widescreen picture to the renderer (for the frontend's timing line).
     double WideUploadMs = 0;
@@ -533,6 +560,8 @@ private:
     Tex WideTex, EdgeTex[2], EdgeInTex[2], FillTex[2], CoverTex[2], NarrowTex[2], WeatherTex[2];
     uint32_t Fill[16 * 192];
     uint32_t Cover[2 * 192];
+    Tex BoxTex;
+    std::vector<uint32_t> BoxBuf;
     std::vector<SDL_Rect> Spans;
     std::vector<uint32_t> Buf, WideFilled;
     uint32_t Edge[16 * 192];

@@ -4506,9 +4506,17 @@ int main(int argc, char** argv)
                 sc.edgeFill = true;
             }
             else if (probeActive(probeEvolution))
+            {
                 // An evolution (from a Rare Candy in the Bag it runs with no battle overlay):
-                // its bars are the scene's colours too.
+                // its bars are the scene's colours too, and its text box reaches across the view.
                 sc.edgeFill = true;
+                int y0, y1;
+                if (screens && screens[0].pixels && WideBoxFind(screens[0], y0, y1))
+                {
+                    sc.wideBox[0] = y0;
+                    sc.wideBox[1] = y1;
+                }
+            }
         }
         // The overworld is drawn across the whole wide view by the widescreen 3D renderer.
         sc.wide = viewWidth > 256.5f && (fieldActive() || menuReturn > 0) && !sc.items.empty() && sc.items[0].screen == 0 &&

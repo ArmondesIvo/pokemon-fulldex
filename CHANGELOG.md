@@ -17,8 +17,9 @@
 - **HeartGold and SoulSilver: Fly no longer flashes both screens at 4:3 when you land.** For about
   half a second after the flight the two screens were joined at 4:3 (the overworld above the start
   menu) before the wide view came back; the world now stays up instead.
-- **SoulSilver and HeartGold: an evolution from a Rare Candy in the Bag gets coloured bars beside it,
-  not black ones.** Only a battle had its edges continued; the Bag's evolution runs with no battle overlay, so it is now recognised by its own task.
+- **SoulSilver and HeartGold: an evolution from a Rare Candy in the Bag fills the wide view.** Its
+  sides carry on the scene's colours instead of black bars (only a battle had its edges continued),
+  and its text box reaches across the view instead of stopping at 4:3.
 - **SoulSilver/HeartGold: the Poke Mart's item panel no longer shows a sliver of the map above it.** The
   description strip taken from the top screen started a row too high.
 - **GBA games: the pause menu works like the DS games'.** On the Switch, + is the GBA's START and
