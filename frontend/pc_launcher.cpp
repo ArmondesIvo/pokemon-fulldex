@@ -538,6 +538,27 @@ static std::string PickPictureFile(SDL_Window* window)
 
 #include "save_backups.h"
 
+// The Updates page: the updater's state, as the list draws it (Android: its own, in Java).
+static void FillUpdateStatus()
+{
+#if defined(SSR_UPDATER) && !defined(__ANDROID__)
+    const Updater::Status st = Updater::Get();
+    Launcher::GlassFocus& F = Launcher::Focus();
+    F.upState = (int)st.state; F.upCan = st.canInstall; F.upText = st.text; F.upNotes = st.notes;
+    F.upHave = st.currentBuild ? Updater::BuildLabel(st.currentBuild) : std::string();
+    F.upNew = st.availableBuild ? Updater::BuildLabel(st.availableBuild) : std::string();
+#endif
+    // (SSR_LIST_NOTES=file: a new version with these notes, for the test picture.)
+    if (const char* tn = getenv("SSR_LIST_NOTES"))
+    {
+        Launcher::GlassFocus& T = Launcher::Focus();
+        std::vector<unsigned char> d;
+        if (Launcher::ReadFile(tn, d)) T.upNotes.assign(d.begin(), d.end());
+        T.upState = 3; T.upCan = true; T.upHave = "2026-11-05 18:20 UTC"; T.upNew = "2026-11-07 10:00 UTC";
+        if (const char* ns = getenv("SSR_LIST_NSCROLL")) T.nScroll = atoi(ns);
+    }
+}
+
 int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool& fullscreen, int winW, int winH)
 {
 #ifdef __ANDROID__
@@ -965,7 +986,18 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             // (A in a page's list: Report A Bug and Website open in the browser.)
             if (F.page >= 0 && F.side < 0)
             {
-                const std::string url = Launcher::AboutUrl(F.prow);
+                if (F.page == Launcher::SIDE_UPDATES && F.prow == 0)
+                {
+#ifdef __ANDROID__
+                    JavaVoid("checkUpdates");
+#elif defined(SSR_UPDATER)
+                    // (Checks, installs what it found, or gives the page to open.)
+                    const std::string page = Updater::Choose();
+                    if (!page.empty() && SDL_OpenURL(page.c_str()) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", page.c_str(), SDL_GetError());
+#endif
+                    return;
+                }
+                const std::string url = Launcher::PageUrl(F.page, F.prow);
                 if (!url.empty() && SDL_OpenURL(url.c_str()) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", url.c_str(), SDL_GetError());
                 return;
             }
@@ -1765,6 +1797,26 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     }
                     break;
                 }
+                // The Updates page's What's New: a click chooses it (again: the release page), dragging scrolls it.
+                if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_UPDATES)
+                {
+                    static bool held = false, moved = false;
+                    static int y0 = 0, s0 = 0;
+                    Launcher::GlassFocus& NF = Launcher::Focus();
+                    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT && Launcher::NotesAt(mx, my)) { held = true; moved = false; y0 = my; s0 = NF.nScroll; }
+                    else if (e.type == SDL_MOUSEMOTION && held && NF.nLine > 0)
+                    {
+                        if (std::abs(my - y0) > 8 * s) moved = true;
+                        if (moved) NF.nScroll = std::max(0, std::min(NF.nMax, s0 - (my - y0) / NF.nLine));
+                    }
+                    else if (e.type == SDL_MOUSEBUTTONUP && held)
+                    {
+                        held = false;
+                        if (!moved) { const bool again = NF.prow == 2 && NF.side < 0; NF.side = -1; NF.prow = 2; if (again) choose(); }
+                        break;
+                    }
+                    if (held) break;
+                }
                 // The glass launcher: a section in the sidebar (Settings opens the settings), or Continue.
                 if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging)
                 {
@@ -1924,6 +1976,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 break;
             }
             case SDL_MOUSEWHEEL:
+                if (Launcher::Glassy(canvas) && !guide && Launcher::NotesScroll(e.wheel.y > 0 ? -2 : 2)) break; // (What's New)
                 move(e.wheel.y > 0 ? 3 : 4);
                 break;
             default:
@@ -2133,7 +2186,11 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             kb.Draw(canvas, "RENAME", padIn ? btn(Controls::A) + ": TYPE    " + btn(Controls::X) + ": DELETE    START: SAVE    " + btn(Controls::B) + ": CANCEL"
                                           : std::string("TYPE OR CLICK THE KEYS    ENTER: SAVE    ESC: CANCEL"));
         }
-        else Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected, scroll, note, (Launcher::Focus().popup >= 0 || Launcher::Focus().dialog || Launcher::Focus().page >= 0) ? (padIn ? btn(Controls::A) + ": CHOOSE    " + btn(Controls::B) + ": BACK" : std::string("ENTER: CHOOSE    ESC: BACK")) : hint, theme, follow, onTabs, onSettings);
+        else
+        {
+            FillUpdateStatus();
+            Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected, scroll, note, (Launcher::Focus().popup >= 0 || Launcher::Focus().dialog || Launcher::Focus().page >= 0) ? (padIn ? btn(Controls::A) + ": CHOOSE    " + btn(Controls::B) + ": BACK" : std::string("ENTER: CHOOSE    ESC: BACK")) : hint, theme, follow, onTabs, onSettings);
+        }
 #ifdef SSR_UPDATER
         if (updateMenu.open)
             updateMenu.Draw(canvas, Updater::PopupTitle(),

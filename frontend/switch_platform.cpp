@@ -203,8 +203,23 @@ std::string InstallHomeIcons(const std::vector<Launcher::Game>& games)
 #include "library_history.h"
 #include "save_backups.h"
 
+// The Updates page: the updater's state, as the list draws it (working: CHECKING... until the work runs).
+static void FillUpdateStatus(bool working)
+{
+#ifdef SSR_UPDATER
+    const Updater::Status st = Updater::Get();
+    Launcher::GlassFocus& F = Launcher::Focus();
+    F.upState = working ? (st.state == Updater::State::Available ? 4 : 1) : (int)st.state; F.upCan = st.canInstall; F.upText = st.text; F.upNotes = st.notes;
+    F.upHave = st.currentBuild ? Updater::BuildLabel(st.currentBuild) : std::string();
+    F.upNew = st.availableBuild ? Updater::BuildLabel(st.availableBuild) : std::string();
+#else
+    (void)working;
+#endif
+}
+
 int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std::string& cfgPath, int autoFrames = 0)
 {
+    bool pageUpdateWork = false; // (Check Now / Install Now on the Updates page: done at the next pass)
     Framebuffer fb;
     if (R_FAILED(framebufferCreate(&fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888, 2))) return selected;
     framebufferMakeLinear(&fb);
@@ -358,6 +373,16 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
         }
 #endif
 #endif
+#ifdef SSR_UPDATER
+        // (The Updates page's Check Now / Install Now, after the pass that showed it working.)
+        if (pageUpdateWork)
+        {
+            const std::string url = Updater::Choose();
+            if (!url.empty()) note = "NEW VERSION: GITHUB.COM/MAMESJ/POKEMON-FULLDEX/RELEASES";
+            pageUpdateWork = false;
+            if (Updater::Get().state == Updater::State::Installed && Updater::RestartPending()) break;
+        }
+#endif
         if (autoFrames > 0 && ++shown > autoFrames)
         {
             result = selected;
@@ -391,18 +416,29 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
         const u64 down = padGetButtonsDown(&pad), now = padGetButtons(&pad);
         int tapX = -1, tapY = -1;
         {
+            // (A finger dragging What's New on the Updates page scrolls it, and is not a tap.)
+            static bool dragNotes = false, dragMoved = false;
+            static int dragY0 = 0, dragS0 = 0;
             HidTouchScreenState ts = {};
             if (hidGetTouchScreenStates(&ts, 1) && ts.count > 0)
             {
+                const bool fresh = !touching;
                 touching = true;
                 touchX = (int)ts.touches[0].x;
                 touchY = (int)ts.touches[0].y;
+                Launcher::GlassFocus& NF = Launcher::Focus();
+                if (fresh) { dragNotes = !guide && Launcher::NotesAt(touchX, touchY); dragMoved = false; dragY0 = touchY; dragS0 = NF.nScroll; }
+                if (dragNotes && NF.nLine > 0)
+                {
+                    if (std::abs(touchY - dragY0) > 12) dragMoved = true;
+                    if (dragMoved) NF.nScroll = std::max(0, std::min(NF.nMax, dragS0 - (touchY - dragY0) / NF.nLine));
+                }
             }
             else if (touching)
             {
                 touching = false;
-                tapX = touchX;
-                tapY = touchY;
+                if (!(dragNotes && dragMoved)) { tapX = touchX; tapY = touchY; }
+                dragNotes = false;
             }
         }
         const int bandH = 22 * std::max(1, canvas.h / 240);
@@ -546,6 +582,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     const int side = Launcher::SideAt(canvas, tapX, tapY), t = Launcher::TabAt(canvas, tapX, tapY);
                     const int tile = Launcher::TileAt(view(), scroll, tapX, tapY);
                     if (side >= 0) { F.side = side; F.banner = 0; onTabs = false; aDown = true; }
+                    else if (F.page >= 0 && Launcher::NotesAt(tapX, tapY)) { if (F.prow == 2 && F.side < 0) aDown = true; F.side = -1; F.prow = 2; }
                     else if (F.page >= 0)
                     {
                         const int r = Launcher::PageRowAt(tapX, tapY);
@@ -794,7 +831,8 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     {
                         if (F.side == Launcher::SIDE_SETTINGS) { guide = true; page.Open(cfgPath); held = 0; }
                         else if (F.side >= 0) { if (!Launcher::OpenSide(F.side)) note = std::string(Launcher::SideName(F.side)) + ": COMING SOON"; }
-                        else if (!Launcher::AboutUrl(F.prow).empty()) note = "OPEN IT ON YOUR PHONE OR PC";
+                        else if (F.page == Launcher::SIDE_UPDATES && F.prow == 0) pageUpdateWork = true;
+                        else if (!Launcher::PageUrl(F.page, F.prow).empty()) note = "OPEN IT ON YOUR PHONE OR PC";
                     }
                     if (bDown) Launcher::PageBack();
                     if (down & HidNpadButton_Plus) quitList = true;
@@ -953,6 +991,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
         else
         {
             {
+                FillUpdateStatus(pageUpdateWork);
                 // (The blurred background follows the chosen game once it has stayed on it 0.4 s.)
                 static int bgSel = -2;
                 static u64 bgSince = 0;
@@ -964,7 +1003,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             }
             auto keyNow = [&]() { const Launcher::GlassFocus& F = Launcher::Focus();
                                   return std::to_string(F.side) + "," + std::to_string(F.banner) + "," + std::to_string(F.popup) + "," + std::to_string(F.dialog) + ","
-                                         + std::to_string(F.drow) + "," + std::to_string(F.page) + "," + std::to_string(F.prow) + "," + F.text + "," + std::to_string(kb.selected) + std::to_string(kbLayer) + "," + std::to_string(games.size()) + "/"
+                                         + std::to_string(F.drow) + "," + std::to_string(F.page) + "," + std::to_string(F.prow) + "," + std::to_string(F.upState) + F.upText + "," + std::to_string(F.nScroll) + "," + F.text + "," + std::to_string(kb.selected) + std::to_string(kbLayer) + "," + std::to_string(games.size()) + "/"
                                          + Launcher::BackdropRom() + "/" + std::to_string(tab) + "/" + std::to_string(selected) + "/" + std::to_string(scroll) + "/" + note + "/"
                                          + std::to_string(onTabs) + std::to_string(onSettings); };
             bool overlay = false;

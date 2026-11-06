@@ -88,7 +88,11 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     // dPaths each row's backup, or #folder / #close.)
                     std::string dTitle, dMsg; std::vector<std::string> dItems, dPaths;
                     // (The sidebar's pages: PageRows and below.)
-                    int page = -1, prow = 0; int pX = 0, pY = 0, pW = 0, pRow = 0; };
+                    int page = -1, prow = 0; int pX = 0, pY = 0, pW = 0, pRow = 0;
+                    // (The Updates page: the updater's state as the platform gives it, -1 none here; Updater::State's order.)
+                    int upState = -1; bool upCan = false; std::string upHave, upNew, upText, upNotes;
+                    // (Its What's New: prow 2 when chosen; the first line shown, the last that can be, where it was drawn.)
+                    int nScroll = 0, nMax = 0, nX = 0, nY = 0, nW = 0, nH = 0, nLine = 0; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
 inline int PopupCount() { return 6; }
 inline std::string PopupLabel(const Game& g, int i)
@@ -1153,10 +1157,16 @@ inline void GlassBackdrop(Canvas& c, const Game* g)
 
 // The sidebar's pages (About; the others to come): page, the section shown (-1: the games); prow the
 // row chosen in its list; pX..pRow where its rows were drawn (for taps).
-inline int PageRows(int page) { return page == SIDE_ABOUT ? 4 : 0; }
+inline int PageRows(int page) { return page == SIDE_ABOUT ? 4 : page == SIDE_UPDATES ? 2 : 0; }
 inline std::string AboutUrl(int row)
 {
     return row == 1 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 3 ? "https://github.com/mamesj/pokemon-fulldex" : "";
+}
+// The page a row of a page opens (none: "").
+inline std::string PageUrl(int page, int row)
+{
+    if (page == SIDE_UPDATES) return row >= 1 ? "https://github.com/mamesj/pokemon-fulldex/releases" : "";
+    return page == SIDE_ABOUT ? AboutUrl(row) : "";
 }
 inline const char* PlatformLabel()
 {
@@ -1185,9 +1195,35 @@ inline bool PageMove(int dir)
         else if (dir == 2) F.side = -1;
         return true;
     }
+    if (F.page == SIDE_UPDATES)
+    {
+        // (What's New, left of the column: up and down scroll it.)
+        if (F.prow == 2)
+        {
+            if (dir == 3) F.nScroll = std::max(0, F.nScroll - 2);
+            else if (dir == 4) F.nScroll = std::min(F.nMax, F.nScroll + 2);
+            else if (dir == 1) F.side = F.page;
+            else if (dir == 2) F.prow = 0;
+            return true;
+        }
+        if (dir == 1) { F.prow = 2; return true; }
+    }
     if (dir == 3) F.prow = std::max(0, F.prow - 1);
     else if (dir == 4) F.prow = std::min(PageRows(F.page) - 1, F.prow + 1);
     else if (dir == 1) F.side = F.page;
+    return true;
+}
+// What's New on the Updates page: under a point (for taps and dragging), and the wheel.
+inline bool NotesAt(int x, int y)
+{
+    const GlassFocus& f = Focus();
+    return f.page == SIDE_UPDATES && f.nH > 0 && x >= f.nX && x < f.nX + f.nW && y >= f.nY && y < f.nY + f.nH;
+}
+inline bool NotesScroll(int by)
+{
+    GlassFocus& f = Focus();
+    if (f.page != SIDE_UPDATES) return false;
+    f.nScroll = std::max(0, std::min(f.nMax, f.nScroll + by));
     return true;
 }
 // B while a page is open: the sidebar first, then back to the games. (False: no page open.)
@@ -1204,7 +1240,7 @@ inline bool OpenSide(int side)
 {
     GlassFocus& F = Focus();
     if (side == SIDE_HOME) { F.page = -1; F.side = -1; return true; }
-    if (PageRows(side) > 0) { F.page = side; F.prow = 0; F.side = -1; return true; }
+    if (PageRows(side) > 0) { F.page = side; F.prow = 0; F.side = -1; F.nScroll = 0; return true; }
     return false;
 }
 inline int PageRowAt(int x, int y)
@@ -1230,6 +1266,75 @@ inline std::vector<std::string> WrapLines(const std::string& msg, float px, int 
     if (!line.empty()) lines.push_back(line);
     return lines;
 }
+// A release's notes (Markdown, as written on GitHub) as plain points: list marks, headings, emphasis,
+// code marks, pictures and links' addresses taken out; empty lines and headings left out.
+inline std::vector<std::string> ReleasePoints(const std::string& md)
+{
+    std::vector<std::string> out;
+    // (From a heading with "new" in it on, "What's new in this update", when there is one: the
+    // download notes above it are not news.)
+    size_t i = 0;
+    for (size_t at = 0; at < md.size();)
+    {
+        size_t end = md.find('\n', at);
+        if (end == std::string::npos) end = md.size();
+        const size_t k = md.find_first_not_of(" \t", at);
+        if (k != std::string::npos && k < end && md[k] == '#')
+        {
+            std::string low = md.substr(k, end - k);
+            for (char& ch : low) ch = (char)tolower((unsigned char)ch);
+            if (low.find("new") != std::string::npos) { i = end + 1; break; }
+        }
+        at = end + 1;
+    }
+    while (i <= md.size())
+    {
+        size_t j = md.find('\n', i);
+        if (j == std::string::npos) j = md.size();
+        std::string l = md.substr(i, j - i);
+        i = j + 1;
+        while (!l.empty() && (l.back() == '\r' || l.back() == ' ' || l.back() == '\t')) l.pop_back();
+        size_t k = 0;
+        while (k < l.size() && (l[k] == ' ' || l[k] == '\t')) k++;
+        l = l.substr(k);
+        if (l.empty() || l[0] == '#' || l[0] == '|' || l[0] == '<' || l.compare(0, 3, "---") == 0 || l.compare(0, 3, "***") == 0 || l.compare(0, 2, "![") == 0) continue;
+        if (l.size() > 1 && (l[0] == '-' || l[0] == '*' || l[0] == '+') && l[1] == ' ') l = l.substr(2);
+        else
+        {
+            size_t d = 0;
+            while (d < l.size() && isdigit((unsigned char)l[d])) d++;
+            if (d > 0 && d + 1 < l.size() && (l[d] == '.' || l[d] == ')') && l[d + 1] == ' ') l = l.substr(d + 2);
+        }
+        if (l.compare(0, 4, "[ ] ") == 0 || l.compare(0, 4, "[x] ") == 0) l = l.substr(4);
+        std::string t;
+        for (size_t a = 0; a < l.size(); a++)
+        {
+            const char ch = l[a];
+            if (ch == '*' || ch == '`' || (ch == '_' && a + 1 < l.size() && l[a + 1] == '_')) { if (ch == '_') a++; continue; }
+            if (ch == '!' && a + 1 < l.size() && l[a + 1] == '[') continue;
+            if (ch == '[')
+            {
+                const size_t close = l.find(']', a);
+                if (close != std::string::npos && close + 1 < l.size() && l[close + 1] == '(')
+                {
+                    const size_t end = l.find(')', close);
+                    if (end != std::string::npos) { t += l.substr(a + 1, close - a - 1); a = end; continue; }
+                }
+            }
+            t += ch;
+        }
+        // (Typographic marks as the font's own: minus and dashes, curly quotes, the ellipsis.)
+        static const char* const swaps[][2] = { { "\xE2\x88\x92", "-" }, { "\xE2\x80\x93", "-" }, { "\xE2\x80\x94", "-" },
+                                                { "\xE2\x80\x98", "'" }, { "\xE2\x80\x99", "'" }, { "\xE2\x80\x9C", "\"" },
+                                                { "\xE2\x80\x9D", "\"" }, { "\xE2\x80\xA6", "..." }, { "\xC2\xA0", " " } };
+        for (const auto& sw : swaps)
+            for (size_t at = t.find(sw[0]); at != std::string::npos; at = t.find(sw[0], at + strlen(sw[1])))
+                t.replace(at, strlen(sw[0]), sw[1]);
+        while (!t.empty() && t.back() == ' ') t.pop_back();
+        if (!t.empty()) out.push_back(t);
+    }
+    return out;
+}
 // A page, right of the sidebar: its title in the bar, its sections in a glass panel on the left
 // (what Fulldex is at the bottom), the chosen one in a wider panel on the right.
 inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
@@ -1238,9 +1343,122 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
+    if (F.page == SIDE_UPDATES)
+    {
+        const int rw = (int)(360 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, ip = (int)(22 * u), pad = (int)(12 * u);
+        // The state, and what an update keeps.
+        Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
+        const std::string have = F.upHave.empty() ? std::string("Unknown") : F.upHave;
+        std::string title, sub;
+        switch (F.upState)
+        {
+        case 0: title = "Not Checked Yet"; sub = "This Version: " + have; break;
+        case 1: title = "Checking..."; sub = "This Version: " + have; break;
+        case 2: title = "Fulldex Is Up To Date"; sub = "Version " + have; break;
+        case 3: title = "A New Version Is Ready"; sub = "You Have " + have + "   \xC2\xB7   New: " + F.upNew; break;
+        case 4: title = "Downloading..."; sub = "New: " + F.upNew; break;
+        case 5: title = "Installed"; sub = "The new version starts when you close the list"; break;
+        case 6: title = "Could Not Check"; sub = CleanFont::Title(F.upText); break;
+        default: title = "Check For Updates"; sub = "Fulldex looks for a new version on GitHub"; break;
+        }
+        const int cx = L + ip, cy = top + ip, cw = lw2 - 2 * ip, ch = (int)(96 * u);
+        Glass::Round(c, cx, cy, cw, ch, 14 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+        Glass::Round(c, cx + (int)(20 * u), cy + (int)(20 * u), (int)(56 * u), (int)(56 * u), 16 * u, 0x2EFFFFFFu, 0x4DFFFFFFu, 1.0f * u);
+        Glass::DrawIcon(c, Glass::I_LOAD, cx + 48 * u, cy + 48 * u, 14 * u, text);
+        GT(c, cx + (int)(96 * u), cy + 36 * u, title, 22 * u, text, true);
+        float fs = 14 * u;
+        while (fs > 9 * u && GW(sub, fs, true) > cw - (int)(112 * u)) fs -= u;
+        GT(c, cx + (int)(96 * u), cy + 66 * u, sub, fs, hint, true);
+        int y = cy + ch + (int)(28 * u);
+        GT(c, cx, y, "What's New", 18 * u, text, true);
+        y += (int)(24 * u);
+        // (The newest release's notes from GitHub; without any, what an update keeps.)
+        std::vector<std::string> points = ReleasePoints(F.upNotes);
+        const bool fromRelease = !points.empty();
+        if (!fromRelease)
+            points = { "The changes in each version are listed on its release page on GitHub.",
+                       "Your ROMs, saves and settings stay when Fulldex updates.",
+                       "The version before is kept, in case you need to go back." };
+        if (F.upState == 3 && !F.upCan) points.push_back("On this device, Open Download takes you to the release page to get it.");
+        // (All of them, a line at a time: up and down while it is chosen, a finger or the mouse
+        // dragging it, the wheel. Its rows: nScroll the first shown, nMax the last that can be.)
+        struct NoteLine { std::string s; bool first, last, note; };
+        std::vector<NoteLine> lines;
+        for (const std::string& pnt : points)
+        {
+            const std::vector<std::string> ls = WrapLines(pnt, 15 * u, cw - (int)(64 * u));
+            for (size_t k = 0; k < ls.size(); k++) lines.push_back({ ls[k], k == 0, k + 1 == ls.size(), false });
+        }
+        if (fromRelease) lines.push_back({ "The rest, and the downloads, are on the release page.", true, true, true });
+        const int lineH = (int)(22 * u), gapH = (int)(12 * u), topPad = (int)(26 * u), cardBottom = bottom - ip;
+        auto stepOf = [&](size_t k) { return lineH + (lines[k].last ? gapH : 0); };
+        int total = 0;
+        for (size_t k = 0; k < lines.size(); k++) total += stepOf(k);
+        const int room = cardBottom - y - topPad;
+        int maxStart = 0;
+        if (total > room)
+        {
+            int hh = 0;
+            size_t k = lines.size();
+            while (k > 0 && hh + stepOf(k - 1) <= room) { hh += stepOf(k - 1); k--; }
+            maxStart = (int)k;
+        }
+        F.nMax = maxStart;
+        F.nScroll = std::max(0, std::min(F.nScroll, maxStart));
+        const bool chosen = F.prow == 2 && F.side < 0;
+        const int cardH = total > room ? cardBottom - y : std::min(total + topPad, cardBottom - y);
+        if (chosen)
+        {
+            Glass::Glow(c, cx, y, cw, cardH, 14 * u, u);
+            Glass::Round(c, cx, y, cw, cardH, 14 * u, 0x24FFFFFFu, Menu::GlassChosenEdge, 1.5f * u);
+        }
+        else Glass::Round(c, cx, y, cw, cardH, 14 * u, 0x14FFFFFFu);
+        F.nX = cx; F.nY = y; F.nW = cw; F.nH = cardH; F.nLine = lineH;
+        int py = y + topPad;
+        for (size_t k = (size_t)F.nScroll; k < lines.size(); k++)
+        {
+            if (py + lineH / 2 > y + cardH - (int)(6 * u)) break;
+            if (lines[k].first && !lines[k].note) Glass::Round(c, cx + (int)(18 * u), py - (int)(3 * u), (int)(6 * u), (int)(6 * u), 3 * u, 0xE6FFFFFFu);
+            GT(c, cx + (int)(36 * u), py, lines[k].s, 15 * u, lines[k].note ? hint : text, lines[k].note);
+            py += stepOf(k);
+        }
+        if (maxStart > 0)
+        {
+            // (The scroll bar.)
+            const int tx = cx + cw - (int)(14 * u), ty = y + (int)(14 * u), th = cardH - (int)(28 * u);
+            Glass::Round(c, tx, ty, (int)(4 * u), th, 2 * u, 0x26FFFFFFu);
+            const int thumbH = std::max((int)(24 * u), (int)((long long)th * room / std::max(1, total)));
+            const int thumbY = ty + (int)((long long)(th - thumbH) * F.nScroll / maxStart);
+            Glass::Round(c, tx, thumbY, (int)(4 * u), thumbH, 2 * u, 0xCCFFFFFFu);
+        }
+        // What to do.
+        const int rx0 = R - rw, rowH = (int)(50 * u), rg = (int)(6 * u);
+        Menu::FrostBox(c, solid, rx0, top, rw, bottom - top, 18 * u);
+        const std::string action = F.upState == 1 || F.upState == 4 ? "Working..." : F.upState == 3 ? (F.upCan ? "Install Now" : "Open Download") : "Check Now";
+        const std::string rows[2] = { action, "Release Page" };
+        const int icons[2] = { Glass::I_LOAD, Glass::I_GLOBE };
+        F.pX = rx0 + pad; F.pY = top + pad; F.pW = rw - 2 * pad; F.pRow = rowH + rg;
+        for (int i = 0; i < 2; i++)
+        {
+            const int rx = rx0 + pad, ry = top + pad + i * (rowH + rg), rww = rw - 2 * pad;
+            if (i == F.prow)
+            {
+                if (F.side < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Menu::GlassChosenEdge, 1.5f * u);
+            }
+            Glass::DrawIcon(c, icons[i], rx + 24 * u, ry + rowH * 0.5f, 10 * u, text);
+            GT(c, rx + (int)(48 * u), ry + rowH * 0.5f, rows[i], 17 * u, text, true);
+        }
+        int hy = top + pad + 2 * (rowH + rg) + (int)(16 * u);
+        for (const std::string& l : WrapLines(fromRelease ? "Fulldex checks once each time it starts. Your ROMs, saves and settings stay when it updates, and the version before is kept."
+                                                          : "Fulldex checks once each time it starts.", 14 * u, rw - 2 * pad - (int)(16 * u)))
+        { GT(c, rx0 + pad + (int)(8 * u), hy, l, 14 * u, hint, false); hy += (int)(20 * u); }
+        GT(c, rx0 + pad + (int)(8 * u), hy + 6 * u, "github.com/mamesj/pokemon-fulldex/releases", 13 * u, hint, true);
+        return;
+    }
     // The sections.
     const int lw = (int)(300 * u), pad = (int)(12 * u), rowH = (int)(50 * u), rg = (int)(6 * u);
     Menu::FrostBox(c, solid, L, top, lw, bottom - top, 18 * u);
@@ -1365,7 +1583,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
-                    + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0);
+                    + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0)
+                    + (Focus().page == SIDE_UPDATES ? "/u" + std::to_string(Focus().upState) + std::to_string(Focus().upCan) + Focus().upHave + "/" + Focus().upNew + "/" + Focus().upText + "/" + Focus().upNotes + "/" + std::to_string(Focus().nScroll) : std::string());
     for (const Game& g : games) key += "|" + g.rom + g.customName + (g.favourite ? "*" : "") + sig(g);
     static std::vector<uint32_t> base;
     static std::string baseKey;
