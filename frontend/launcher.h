@@ -33,6 +33,8 @@
 #include "cloud_saves.h"
 #include "hub_link.h"
 #include "theme_pack.h"
+#include "launcher_text.h"
+#include "launcher_fonts.h"
 #include "support_qr.h"
 #include "play_time.h"
 #ifdef SSR_POKEMON_HUB
@@ -951,6 +953,7 @@ inline void LoadLook(const std::string& cfg, const std::string& folder, Theme& t
 {
     const std::string language = ConfigValue(cfg, "list_lang");
     UiLang::Set(language.empty() ? ConfigValue(cfg, "language") : language);
+    if (const char* lg = getenv("SSR_LIST_LANG")) UiLang::Set(lg); // (test: the launcher in a language)
     t = ThemeNamed(ConfigValue(cfg, "list_colour"));
     b = Background();
     t.background = nullptr;
@@ -1201,11 +1204,29 @@ inline int SideIcon(int i)
 }
 inline float GU(const Canvas& c) { return c.h / 720.0f; } // one design pixel (the designs are 1280 x 720)
 inline int GPx(float px) { return std::max(6, (int)(px + 0.5f)); }
-inline int GW(const std::string& s, float px, bool bold) { return CleanFont::Width(s, GPx(px), bold); }
+// (Each in the player's language: LauncherText.)
+inline int GW(const std::string& s, float px, bool bold) { return CleanFont::Width(LauncherText::Tr(s), GPx(px), bold); }
 // Text with its capitals centred on cy.
 inline void GT(Canvas& c, int x, float cy, const std::string& s, float px, uint32_t col, bool bold)
 {
-    CleanFont::Draw(c, x, (int)(cy + CleanFont::CapHeight(GPx(px), bold) * 0.5f), s, GPx(px), col, bold);
+    CleanFont::Draw(c, x, (int)(cy + CleanFont::CapHeight(GPx(px), bold) * 0.5f), LauncherText::Tr(s), GPx(px), col, bold);
+}
+// Text kept within w: a little smaller first, then cut with "..." (the longer languages' lines).
+inline void GTFit(Canvas& c, int x, float cy, const std::string& s0, float px, int w, uint32_t col, bool bold)
+{
+    std::string s = LauncherText::Tr(s0);
+    float p = px;
+    while (p > px * 0.82f && CleanFont::Width(s, GPx(p), bold) > w) p -= 0.5f;
+    if (CleanFont::Width(s, GPx(p), bold) > w)
+    {
+        while (s.size() > 4 && CleanFont::Width(s + "...", GPx(p), bold) > w)
+        {
+            while (!s.empty() && ((unsigned char)s.back() & 0xC0) == 0x80) s.pop_back();
+            if (!s.empty()) s.pop_back();
+        }
+        s += "...";
+    }
+    CleanFont::Draw(c, x, (int)(cy + CleanFont::CapHeight(GPx(p), bold) * 0.5f), s, GPx(p), col, bold);
 }
 // A game's name as the cards show it: HeartGold, Black 2, Ultra Violet.
 inline std::string ShortName(const Game& g)
@@ -1357,6 +1378,8 @@ struct LookPrefs
     int op[6] = { -1, -1, -1, -1, -1, -1 };
     std::string backdrop = "game";               // game, custom (the background's own picture or colour), plain
     int blur = 20, dim = 42, grain = 25;         // percent
+    std::string font = "noto-sans";              // (launcher_fonts.h)
+    int fontSize = 100;                          // percent, 85 to 120
     bool badges = true;
     bool loaded = false;
     std::string from;
@@ -1368,7 +1391,7 @@ struct LookPrefs
     int rowX = 0, rowW = 0;                      // its rows across
 };
 inline LookPrefs& Look() { static LookPrefs l; return l; }
-// The Launcher page's sub-pages: 0 its menu, 1 Theme Editor, 2 My Themes, 3 the Theme Library (its grid).
+// The Launcher page's sub-pages: 0 its menu, 1 Theme Editor, 2 My Themes, 3 the Theme Library (its grid), 4 the fonts (a grid).
 inline int& LauncherMode() { static int m = 0; return m; }
 // My Themes: each a .zip in themes/ with the saves: theme.txt (as fulldex-look.txt, its pictures under
 // pictures/), the pictures, and preview.jpg (Home wearing it).
@@ -1410,7 +1433,7 @@ inline void ThemesRefresh()
         return x < y;
     });
 }
-inline int LauncherRows() { return LauncherMode() == 1 ? 8 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : 3; }
+inline int LauncherRows() { return LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 10 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : 3; }
 // A on a theme: Apply, Show In Folder (a PC), Delete.
 inline void OpenThemeMenu(int i)
 {
@@ -1517,9 +1540,12 @@ inline bool LookDecodePicture(const std::vector<unsigned char>& data, Glass::Pic
     b.avg = 0xFF000000u | (uint32_t)(sr / cnt) << 16 | (uint32_t)(sg / cnt) << 8 | (uint32_t)(sb / cnt);
     return true;
 }
+// The launcher's font as CleanFont numbers it (its place in launcher_fonts.h; 0 Noto Sans).
+inline int LookFontId() { for (int i = 0; i < kLauncherFontCount; i++) if (Look().font == kLauncherFonts[i].id) return i; return 0; }
 inline void LookApply()
 {
     LookPrefs& l = Look();
+    CleanFont::FontSource() = LauncherFontSource;
     Glass::Accent() = LookRgb(0);
     Glass::Grain() = l.grain;
     for (int i = 0; i < 3; i++) Glass::Tint(i) = LookTint(i + 1);
@@ -1552,6 +1578,8 @@ inline void LookFrom(const std::map<std::string, std::string>& p)
     else { static const int was[5] = { 0, 10, 20, 40, 70 }; l.blur = was[std::max(0, std::min(4, atoi(get("blur", "2").c_str())))]; } // (the five steps before)
     l.dim = std::max(0, std::min(100, atoi(get("dim", "42").c_str())));
     l.grain = std::max(0, std::min(100, atoi(get("grain", "25").c_str())));
+    l.font = get("font", "noto-sans");
+    l.fontSize = std::max(85, std::min(120, atoi(get("font_size", "100").c_str())));
     l.badges = get("badges", "on") != "off";
     LookApply();
 }
@@ -1574,7 +1602,7 @@ inline void LookSave()
             if (i > 0) fprintf(f, "%s_pic\t%s\n", kLookKeys[i], l.pic[i].c_str());
             if (LookHasOp(i)) fprintf(f, "%s_op\t%d\n", kLookKeys[i], l.op[i]);
         }
-        fprintf(f, "background\t%s\nsoftness\t%d\ndim\t%d\ngrain\t%d\nbadges\t%s\n", l.backdrop.c_str(), l.blur, l.dim, l.grain, l.badges ? "on" : "off");
+        fprintf(f, "background\t%s\nsoftness\t%d\ndim\t%d\ngrain\t%d\nbadges\t%s\nfont\t%s\nfont_size\t%d\n", l.backdrop.c_str(), l.blur, l.dim, l.grain, l.badges ? "on" : "off", l.font.c_str(), l.fontSize);
         fclose(f);
     }
 }
@@ -1650,6 +1678,7 @@ inline std::vector<Game>& RomList() { static std::vector<Game> r; return r; }
 inline void BuildRomList(const std::vector<Game>& all, const std::string& savesDir)
 {
     HubDir() = savesDir;
+    LauncherText::OverrideDir() = savesDir; // (launcher-xx.txt there corrects the words)
     const auto names = ReadPairs(savesDir + "/fulldex-names.txt");
     const auto hidden = ReadPairs(savesDir + "/fulldex-hidden.txt");
     std::vector<Game>& r = RomList();
@@ -2633,10 +2662,11 @@ inline std::string LookName(const std::string& v)
     return o;
 }
 // What a row's page holds: a picture, presets, the wheel's three bars, how solid; or the blur and dim.
-enum { LF_PIC, LF_PRESET, LF_HUE, LF_SAT, LF_VAL, LF_OP, LF_BLUR, LF_DIM, LF_GRAIN, LF_SOURCE };
+enum { LF_PIC, LF_PRESET, LF_HUE, LF_SAT, LF_VAL, LF_OP, LF_BLUR, LF_DIM, LF_GRAIN, LF_SOURCE, LF_SIZE };
 inline std::vector<int> LookFieldList(int e)
 {
     if (e == 6) return { LF_GRAIN };
+    if (e == 8) return { LF_SIZE }; // (Text Size)
     if (e == 0) return { LF_PRESET, LF_HUE, LF_SAT, LF_VAL };
     if (e == 5) return { LF_SOURCE, LF_PIC, LF_PRESET, LF_HUE, LF_SAT, LF_VAL, LF_BLUR, LF_DIM };
     return { LF_PIC, LF_PRESET, LF_HUE, LF_SAT, LF_VAL, LF_OP };
@@ -2669,7 +2699,7 @@ inline void LookSetHsv()
 }
 inline void LookSyncHsv() { LookPrefs& l = Look(); if (l.edit >= 0 && l.edit < 6) ToHsv(LookRgb(l.edit), l.h, l.s, l.v); }
 inline int LookFieldIndex(int e, int id) { const auto f = LookFieldList(e); for (size_t i = 0; i < f.size(); i++) if (f[i] == id) return (int)i; return 0; }
-inline void LookOpen(int e) { LookPrefs& l = Look(); l.edit = e; l.field = e == 6 || e == 5 ? 0 : LookFieldIndex(e, LF_HUE); LookSyncHsv(); }
+inline void LookOpen(int e) { LookPrefs& l = Look(); l.edit = e; l.field = e == 6 || e == 5 || e == 8 ? 0 : LookFieldIndex(e, LF_HUE); LookSyncHsv(); }
 inline void LookPicked(int e) // (a picture chosen: shown fairly solid; a background one hardly dimmed)
 {
     LookPrefs& l = Look();
@@ -2731,9 +2761,26 @@ inline int LookDo(int row, int dir)
 #endif
         }
         if (row == 2) { LauncherMode() = 3; ThemesRefresh(); F.prow = 0; F.rScroll = 0; Hub().version++; } // (the Theme Library)
+        if (row == 3)
+        {
+            // (Default Look: asked first.)
+            F.dialog = 15;
+            F.drow = 1;
+            F.dTitle = "Default Look";
+            F.dMsg = "Go back to frosted glass over the game's art, as Fulldex starts? Your themes stay in the library: save this look first to keep it.";
+            F.dItems = { "Use The Default Look", "Cancel" };
+            F.dPaths = { "#lookdefault", "#close" };
+        }
         return 0;
     }
     if (LauncherMode() == 3) { OpenThemeMenu(row); return 0; } // (the Theme Library: a theme's menu)
+    if (LauncherMode() == 4)
+    {
+        // (A font chosen: on at once, and kept.)
+        if (row >= 0 && row < kLauncherFontCount) { l.font = kLauncherFonts[row].id; LookSave(); Themes().msg = std::string("FONT: ") + kLauncherFonts[row].name; }
+        Hub().version++;
+        return 0;
+    }
     if (l.edit >= 0)
     {
         if (l.edit != 6 && LookFieldList(l.edit)[l.field] == LF_PIC)
@@ -2747,6 +2794,8 @@ inline int LookDo(int row, int dir)
         l.edit = -1; LookSave(); Hub().version++; return 0;
     }
     if (row <= 6) { LookOpen(row); Hub().version++; return 0; } // (each opens its own page)
+    if (row == 8) { LauncherMode() = 4; Focus().prow = LookFontId(); Focus().rScroll = 0; Themes().msg.clear(); Hub().version++; return 0; } // (Font: its grid)
+    if (row == 9) { LookOpen(8); Hub().version++; return 0; } // (Text Size)
     if (row == 7) l.badges = !l.badges;
     (void)dir;
     LookSave();
@@ -2790,6 +2839,7 @@ inline void LookMove(int dir)
         else if (id == LF_DIM) l.dim = std::max(0, std::min(100, l.dim + d * 5));
         else if (id == LF_GRAIN) { l.grain = std::max(0, std::min(100, l.grain + d * 5)); Glass::Grain() = l.grain; }
         else if (id == LF_SOURCE) LookCycleSource(d);
+        else if (id == LF_SIZE) l.fontSize = std::max(85, std::min(120, l.fontSize + d * 5));
         else if (id == LF_PIC) LookNextPicture(d);
         else if (id == LF_PRESET)
         {
@@ -2861,6 +2911,7 @@ inline int LookTap(int x, int y)
             if (id == LF_BLUR) l.blur = (int)(t * 100 + 0.5f);
             else if (id == LF_DIM) l.dim = (int)(t * 100 + 0.5f);
             else if (id == LF_GRAIN) { l.grain = (int)(t * 100 + 0.5f); Glass::Grain() = l.grain; }
+            else if (id == LF_SIZE) l.fontSize = 85 + (int)(t * 35 + 0.5f);
             else if (id == LF_HUE) { l.h = t * 359.0f; if (l.s < 0.1f) l.s = 0.75f; if (l.v < 0.2f) l.v = 1; LookSetHsv(); }
             else if (id == LF_SAT) { l.s = t; LookSetHsv(); }
             else if (id == LF_VAL) { l.v = t; LookSetHsv(); }
@@ -2946,6 +2997,7 @@ inline bool LookWriteTheme(const std::string& name, const std::vector<unsigned c
         if (LookHasOp(i)) text += std::string(kLookKeys[i]) + "_op\t" + std::to_string(l.op[i]) + "\n";
     }
     text += "background\t" + l.backdrop + "\nsoftness\t" + std::to_string(l.blur) + "\ndim\t" + std::to_string(l.dim) + "\ngrain\t" + std::to_string(l.grain) + "\nbadges\t" + (l.badges ? "on" : "off") + "\n";
+    text += "font\t" + l.font + "\nfont_size\t" + std::to_string(l.fontSize) + "\n";
     total += text.size();
     if (total > (20u << 20)) { ts.msg = "OVER 20 MB: USE SMALLER PICTURES"; return false; }
     files.insert(files.begin(), { "theme.txt", std::vector<unsigned char>(text.begin(), text.end()) });
@@ -3048,6 +3100,19 @@ inline int ThemePick(const std::string& pick)
     ThemeState& ts = Themes();
     GlassFocus& F = Focus();
     if (pick.rfind("#apply:", 0) == 0) { LookApplyTheme(pick.substr(7)); return 0; }
+    if (pick == "#lookdefault")
+    {
+        // (Everything as a new install has it; the pictures and themes stay where they are.)
+        LookPrefs& l = Look();
+        const LookPrefs d;
+        for (int i = 0; i < 6; i++) { l.col[i] = d.col[i]; l.pic[i] = d.pic[i]; l.op[i] = d.op[i]; }
+        l.backdrop = d.backdrop; l.blur = d.blur; l.dim = d.dim; l.grain = d.grain; l.badges = d.badges; l.font = d.font; l.fontSize = d.fontSize;
+        LookApply();
+        LookSave();
+        ts.msg = "THE DEFAULT LOOK IS BACK";
+        Hub().version++;
+        return 0;
+    }
     if (pick.rfind("#tdelask:", 0) == 0)
     {
         const std::string n = pick.substr(9);
@@ -3344,9 +3409,9 @@ inline bool PageMove(int dir)
         return true;
     }
     if (F.page == SIDE_LAUNCHER && Look().edit >= 0) { LookMove(dir); return true; } // (the colour wheel)
-    if (F.page == SIDE_LAUNCHER && LauncherMode() == 3)
+    if (F.page == SIDE_LAUNCHER && LauncherMode() >= 3)
     {
-        // (the Theme Library's grid: four across; left from the first of a row to the sidebar.)
+        // (the Theme Library's and the fonts' grids: four across; left from the first of a row to the sidebar.)
         const int cols = std::max(1, Themes().cols), n = LauncherRows();
         if (dir == 3) { if (F.prow >= cols) F.prow -= cols; }
         else if (dir == 4) { if (F.prow + cols < n) F.prow += cols; else if (F.prow / cols < (n - 1) / cols) F.prow = n - 1; }
@@ -3409,6 +3474,7 @@ inline bool PageBack()
     GlassFocus& F = Focus();
     if (F.page < 0) return false;
     if (F.page == SIDE_LAUNCHER && Look().edit >= 0) { Look().edit = -1; LookSave(); Hub().version++; return true; } // (the colour wheel closed)
+    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 4) { LauncherMode() = 1; F.prow = 8; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the fonts: back to the Theme Editor)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 3) { LauncherMode() = 2; F.prow = 2; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Library: back to My Themes)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMode() == 1 ? 0 : 1; LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
@@ -3434,9 +3500,9 @@ inline int PageRowAt(int x, int y)
 {
     const GlassFocus& f = Focus();
     if (f.page < 0 || f.pW <= 0 || f.pRow <= 0 || x < f.pX || x >= f.pX + f.pW || y < f.pY) return -1;
-    if (f.page == SIDE_LAUNCHER && LauncherMode() == 3)
+    if (f.page == SIDE_LAUNCHER && LauncherMode() >= 3)
     {
-        // (the Theme Library's grid.)
+        // (the Theme Library's and the fonts' grids.)
         const ThemeState& t = Themes();
         // (The < and > under the grid: the first card of the page before or after.)
         if (t.pageW > 0 && y >= t.pageY && y < t.pageY + t.pageH)
@@ -3470,8 +3536,9 @@ inline int RomActionAt(int x, int y)
     const int i = (y - f.aY) / f.aRow;
     return i < (f.page == SIDE_HUB ? (int)HubActions(f.prow).size() : RomActions()) ? i : -1;
 }
-inline std::vector<std::string> WrapLines(const std::string& msg, float px, int w, bool bold = false)
+inline std::vector<std::string> WrapLines(const std::string& msg0, float px, int w, bool bold = false)
 {
+    const std::string msg = LauncherText::Tr(msg0); // (in the player's language before it is wrapped)
     std::vector<std::string> lines;
     std::string line, word;
     auto flush = [&]() {
@@ -3563,7 +3630,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : "Launcher") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -3922,6 +3989,63 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         // The Launcher page: the launcher's own look, each row opened with A (its colour, picture, blur).
         LookLoad();
         LookPrefs& lk = Look();
+        if (LauncherMode() == 4)
+        {
+            // The fonts: a grid of cards, each its name and a line in itself; the one in use marked.
+            ThemeState& ts = Themes();
+            const int pad = (int)(16 * u), gap = (int)(12 * u), cols = 4, n = kLauncherFontCount, W = R - L;
+            const int cw = (W - 2 * pad - (cols - 1) * gap) / cols, ch = (int)(96 * u);
+            const int visRows = std::max(1, (bottom - top - 2 * pad - (int)(40 * u) + gap) / (ch + gap));
+            Menu::FrostBox(c, solid, L, top, W, bottom - top, 18 * u);
+            F.prow = std::max(0, std::min(F.prow, n - 1));
+            const int perPage = cols * visRows, pages = std::max(1, (n + perPage - 1) / perPage), page = F.prow / perPage;
+            F.rScroll = page * visRows;
+            ts.perPage = perPage;
+            F.pact = -1; F.aW = 0;
+            F.pX = L + pad; F.pY = top + pad; F.pW = W - 2 * pad; F.pRow = ch + gap; F.rVis = visRows;
+            ts.gx = L + pad; ts.gy = top + pad; ts.cw = cw; ts.ch = ch; ts.gap = gap; ts.cols = cols;
+            const int inUse = LookFontId(), was = CleanFont::FontId();
+            for (int i = page * perPage; i < std::min(n, (page + 1) * perPage); i++)
+            {
+                const int r = i / cols - F.rScroll, x = L + pad + (i % cols) * (cw + gap), y = top + pad + r * (ch + gap);
+                const bool on = i == F.prow;
+                if (on && F.side < 0) Glass::Glow(c, x, y, cw, ch, 14 * u, u);
+                if (on) Glass::Round(c, x, y, cw, ch, 14 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
+                else Glass::Round(c, x, y, cw, ch, 14 * u, Menu::GlassRow, i == inUse ? Glass::ChosenEdge() & 0x80FFFFFFu : 0x3DFFFFFFu, 1.0f * u);
+                GT(c, x + (int)(14 * u), y + (int)(18 * u), kLauncherFonts[i].group, 11 * u, hint, true);
+                if (i == inUse)
+                {
+                    const int iw2 = GW("In Use", 11 * u, true) + (int)(16 * u);
+                    Glass::Round(c, x + cw - iw2 - (int)(10 * u), y + (int)(8 * u), iw2, (int)(20 * u), 10 * u, 0x30FFFFFFu);
+                    GT(c, x + cw - iw2 - (int)(2 * u), y + (int)(18 * u), "In Use", 11 * u, text, true);
+                }
+                // (Its name and a line in the font itself.)
+                CleanFont::FontId() = i;
+                GTFit(c, x + (int)(14 * u), y + (int)(50 * u), kLauncherFonts[i].name, 20 * u, cw - (int)(28 * u), text, true);
+                GTFit(c, x + (int)(14 * u), y + (int)(76 * u), "Pok\xC3\xA9mon Fulldex 123", 14 * u, cw - (int)(28 * u), hint, false);
+                CleanFont::FontId() = was;
+            }
+            ts.pageW = 0;
+            if (pages > 1)
+            {
+                const std::string pl = "Page " + std::to_string(page + 1) + " Of " + std::to_string(pages);
+                const int bh = (int)(30 * u), bw = (int)(36 * u), ly = bottom - pad - bh, lw = GW(pl, 13 * u, true) + (int)(24 * u);
+                const int nx = L + W - pad - bw, lx = nx - lw, px2 = lx - bw;
+                Glass::Round(c, px2, ly, bw, bh, bh * 0.5f, page > 0 ? 0x30FFFFFFu : 0x12FFFFFFu, 0x40FFFFFFu, 1.0f * u);
+                Glass::Round(c, nx, ly, bw, bh, bh * 0.5f, page + 1 < pages ? 0x30FFFFFFu : 0x12FFFFFFu, 0x40FFFFFFu, 1.0f * u);
+                GT(c, px2 + bw / 2 - GW("<", 15 * u, true) / 2, ly + bh / 2, "<", 15 * u, page > 0 ? text : hint, true);
+                GT(c, nx + bw / 2 - GW(">", 15 * u, true) / 2, ly + bh / 2, ">", 15 * u, page + 1 < pages ? text : hint, true);
+                GT(c, lx + (lw - GW(pl, 13 * u, true)) / 2, ly + bh / 2, pl, 13 * u, text, true);
+                ts.prevX = px2; ts.nextX = nx; ts.pageY = ly; ts.pageW = bw; ts.pageH = bh;
+            }
+#ifdef __SWITCH__
+            const std::string line = !ts.msg.empty() ? ts.msg : "Press A to use a font. B goes back to the Theme Editor.";
+#else
+            const std::string line = !ts.msg.empty() ? ts.msg : "Choose a font to use it. Back goes to the Theme Editor.";
+#endif
+            GT(c, L + pad, bottom - pad - (int)(4 * u), line, 13 * u, ts.msg.empty() ? hint : 0xFF8CC8FFu, !ts.msg.empty());
+            return;
+        }
         if (LauncherMode() == 3)
         {
             // The Theme Library: a grid of cards, each a theme's Home picture over its name. One panel
@@ -4012,7 +4136,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 else Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
                 Glass::DrawIcon(c, icon, rx + 28 * u, mid, 11 * u, text);
                 GT(c, rx + (int)(56 * u), mid - 9 * u, name, 17 * u, text, true);
-                GT(c, rx + (int)(56 * u), mid + 11 * u, sub, 12 * u, hint, false);
+                GTFit(c, rx + (int)(56 * u), mid + 11 * u, sub, 12 * u, rww - (int)(56 * u) - (chip.empty() ? (int)(40 * u) : GW(chip, 12 * u, true) + (int)(80 * u)), hint, false);
                 if (!chip.empty())
                 {
                     const int chipW = GW(chip, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(42 * u) - chipW;
@@ -4052,6 +4176,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 row(1, Glass::I_LOAD, "Import A Theme", "A .zip theme someone sent you", "");
 #endif
                 row(2, Glass::I_GRID, "Theme Library", "All your saved themes, as pictures", std::to_string(ts.list.size()) + (ts.list.size() == 1 ? " Theme" : " Themes"));
+                row(3, Glass::I_REWIND, "Default Look", "Frosted glass over the game's art, as Fulldex starts", "");
                 if (F.prow == 0)
                 {
                     GT(c, ix, y + 14 * u, "Save This Look", 22 * u, text, true);
@@ -4068,6 +4193,13 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #else
                     para("Choose a .zip theme someone sent you. It is copied into your themes folder and shows in this list.", text, 14 * u);
 #endif
+                }
+                else if (F.prow == 3)
+                {
+                    GT(c, ix, y + 14 * u, "Default Look", 22 * u, text, true);
+                    y += (int)(44 * u);
+                    para("Puts back the look Fulldex starts with: frosted glass over the chosen game's art, white highlights, the usual blur and dim.", text, 14 * u);
+                    para("Your saved themes and pictures stay. Save This Look first if you want to come back to the look you have now.", hint, 13 * u);
                 }
                 else
                 {
@@ -4091,20 +4223,21 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             return;
         }
         const int rw = (int)(400 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(14 * u);
-        const int rowH = (int)(58 * u), rg = (int)(8 * u), n = 8;
+        const int rowH = (int)(46 * u), rg = (int)(6 * u), n = 10;
         Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
-        if (lk.edit >= 0) F.prow = lk.edit;
+        if (lk.edit >= 0) F.prow = lk.edit == 8 ? 9 : lk.edit;
         F.prow = std::max(0, std::min(F.prow, n - 1));
         F.pact = -1;
         F.rScroll = 0;
         F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = n;
         F.aW = 0;
-        static const char* const names[8] = { "Accent", "Panels", "Sidebar", "Top Bar", "Buttons", "Background", "Grain", "Cloud Badges" };
-        static const char* const subs[8] = { "The frame round what is chosen, and its glow", "The glass panels: a colour or a picture, see-through to solid",
+        static const char* const names[10] = { "Accent", "Panels", "Sidebar", "Top Bar", "Buttons", "Background", "Grain", "Cloud Badges", "Font", "Text Size" };
+        static const char* const subs[10] = { "The frame round what is chosen, and its glow", "The glass panels: a colour or a picture, see-through to solid",
                                              "The bar down the left: a colour or a picture", "The bar along the top: a colour or a picture",
                                              "Play, Continue, the chosen tab and the button marks at the bottom", "Game art, your own picture or a colour; its blur and dim",
-                                             "The fine speckle in the glass panels", "A cloud on the cards of games whose saves sync" };
-        static const int icons[8] = { Glass::I_SPARKLE, Glass::I_LAYERS, Glass::I_LAYOUT, Glass::I_WINDOW, Glass::I_PLAY, Glass::I_SCREENS, Glass::I_GAUGE, Glass::I_GLOBE };
+                                             "The fine speckle in the glass panels", "A cloud on the cards of games whose saves sync",
+                                              "The letters everywhere in the launcher", "How big the writing is" };
+        static const int icons[10] = { Glass::I_SPARKLE, Glass::I_LAYERS, Glass::I_LAYOUT, Glass::I_WINDOW, Glass::I_PLAY, Glass::I_SCREENS, Glass::I_GAUGE, Glass::I_GLOBE, Glass::I_NOTE, Glass::I_EXPAND };
         for (int i = 0; i < n; i++)
         {
             const int rx = L + pad, ry = top + pad + i * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
@@ -4119,10 +4252,12 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             else if (i <= 4) { st = lk.pic[i].empty() ? LookName(lk.col[i]) : "Picture"; if (lk.op[i] >= 0 || !lk.pic[i].empty()) st += "  " + std::to_string(LookOpacity(i)) + "%"; }
             else if (i == 5) st = LookName(lk.backdrop) + "   Blur " + std::to_string(lk.blur) + "%   Dim " + std::to_string(lk.dim) + "%";
             else if (i == 6) st = std::to_string(lk.grain) + "%";
-            else st = lk.badges ? "On" : "Off";
+            else if (i == 7) st = lk.badges ? "On" : "Off";
+            else if (i == 8) st = kLauncherFonts[LookFontId()].name;
+            else st = std::to_string(lk.fontSize) + "%";
             Glass::DrawIcon(c, icons[i], rx + 28 * u, mid, 11 * u, text);
-            GT(c, rx + (int)(56 * u), mid - 9 * u, names[i], 17 * u, text, true);
-            GT(c, rx + (int)(56 * u), mid + 11 * u, subs[i], 12 * u, hint, false);
+            GT(c, rx + (int)(56 * u), mid - 8 * u, names[i], 16 * u, text, true);
+            GTFit(c, rx + (int)(56 * u), mid + 10 * u, subs[i], 12 * u, rww - (int)(56 * u) - GW(st, 12 * u, true) - (int)(100 * u), hint, false);
             const bool hasDot = i <= 4 || (i == 5 && lk.backdrop == "colour");
             const int dot = hasDot ? (int)(14 * u) : 0;
             const int chipW = GW(st, 12 * u, true) + (int)(20 * u) + (dot ? dot + (int)(6 * u) : 0), chipX = rx + rww - (int)(42 * u) - chipW;
@@ -4159,7 +4294,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         {
             const int e = lk.edit;
             const std::vector<int> fl = LookFieldList(e);
-            if (e == 6) para("The fine speckle in the frosted glass panels: 0% makes them smooth, 25% is as they were, 100% is four times as strong.", text, 14 * u);
+            if (e == 6 || e == 8) para(e == 6 ? "The fine speckle in the frosted glass panels: 0% makes them smooth, 25% is as they were, 100% is four times as strong." : "How big the writing is in the launcher, from 85% to 120%. Each font is already sized to fill a line as the others do.", text, 14 * u);
             else
             {
                 // The wheel: round the edge the colours, out from the middle stronger; at the Brightness below.
@@ -4192,7 +4327,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 const int id = fl[k], fy = y + k * (fh + (int)(5 * u)), fm = fy + fh / 2;
                 if (k == lk.field) Glass::Round(c, ix - (int)(8 * u), fy, iw + (int)(16 * u), fh, 10 * u, 0x1FFFFFFFu, Glass::ChosenEdge(), 1.5f * u);
                 const std::string label = id == LF_SOURCE ? "Show" : id == LF_PIC ? "Picture" : id == LF_PRESET ? "Preset" : id == LF_HUE ? "Hue" : id == LF_SAT ? "Saturation" : id == LF_VAL ? "Brightness"
-                                        : id == LF_OP ? "Opacity " + std::to_string(LookOpacity(e)) + "%" : id == LF_BLUR ? "Blur " + std::to_string(lk.blur) + "%" : id == LF_DIM ? "Dim " + std::to_string(lk.dim) + "%" : "Grain " + std::to_string(lk.grain) + "%";
+                                        : id == LF_OP ? "Opacity " + std::to_string(LookOpacity(e)) + "%" : id == LF_BLUR ? "Blur " + std::to_string(lk.blur) + "%" : id == LF_DIM ? "Dim " + std::to_string(lk.dim) + "%" : id == LF_SIZE ? "Size " + std::to_string(lk.fontSize) + "%" : "Grain " + std::to_string(lk.grain) + "%";
                 GT(c, ix, fm, label, 13 * u, k == lk.field ? text : hint, true);
                 lk.fx[k] = bx; lk.fy[k] = fy;
                 if (id == LF_SOURCE)
@@ -4235,6 +4370,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 else if (id == LF_OP) bar(k, fy, bx, bw, fh, LookOpacity(e) / 100.0f, [rgb](float t) { return Glass::Over(0xFF3A4450u, rgb, (int)(t * 255)); });
                 else if (id == LF_BLUR) bar(k, fy, bx, bw, fh, lk.blur / 100.0f, [](float t) { const uint32_t g = (uint32_t)(60 + t * 150); return 0xFF000000u | g << 16 | g << 8 | g; });
                 else if (id == LF_DIM) bar(k, fy, bx, bw, fh, lk.dim / 100.0f, [](float t) { const uint32_t g = (uint32_t)(235 - t * 215); return 0xFF000000u | g << 16 | g << 8 | g; });
+                else if (id == LF_SIZE) bar(k, fy, bx, bw, fh, (lk.fontSize - 85) / 35.0f, [](float t) { const uint32_t g = (uint32_t)(90 + t * 120); return 0xFF000000u | g << 16 | g << 8 | g; });
                 else bar(k, fy, bx, bw, fh, lk.grain / 100.0f, [&](float t) {
                     // (Speckled more along it.)
                     uint32_t hsh = (uint32_t)(t * 9973) * 374761393u; hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
@@ -4250,7 +4386,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #endif
             return;
         }
-        static const char* const about[8] = {
+        static const char* const about[10] = {
             "The colour of the frame round what is chosen, and its glow, on every page of the launcher.",
             "A colour or a picture over every glass panel. Opacity sets how much: low lets the background through, 100% makes them solid.",
             "A colour or a picture for the sidebar, see-through to solid.",
@@ -4258,7 +4394,9 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             "Used for Play and Continue, the chosen tab, and the button marks along the bottom (Choose, Back and the rest). Their words and marks turn dark or light to stay readable.",
             "Game Art: the chosen game's picture. Your Picture: one of your own. Colour: one colour. Plain: a calm blue. Its page also sets how blurred and how dim it is.",
             "The fine speckle in the frosted glass panels: 0% makes them smooth, 25% is as they were.",
-            "With Cloud Saves on, a cloud shows in the corner of each game whose save syncs. Amber: it changed on two devices and needs a choice." };
+            "With Cloud Saves on, a cloud shows in the corner of each game whose save syncs. Amber: it changed on two devices and needs a choice.",
+            "The letters everywhere in the launcher: 30 to choose from, clean, rounded, bold, retro, fun, handwritten and easy to read. The pause menu keeps its own.",
+            "How big the writing is in the launcher, from 85% to 120%." };
         para(about[F.prow], text, 14 * u);
         if (F.prow <= 4 || (F.prow == 5 && (lk.backdrop == "colour" || lk.backdrop == "picture")))
         {
@@ -4352,8 +4490,8 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             }
             Glass::DrawIcon(c, i == 0 ? Glass::I_GLOBE : i == 2 ? Glass::I_PEOPLE : i == 3 ? Glass::I_CHAT : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
             GT(c, rx + (int)(60 * u), mid - 11 * u, name, 18 * u, text, true);
-            GT(c, rx + (int)(60 * u), mid + 13 * u, sub, 13 * u, hint, false);
             const int chipW = GW(st, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(46 * u) - chipW;
+            GTFit(c, rx + (int)(60 * u), mid + 13 * u, sub, 13 * u, chipX - (rx + (int)(60 * u)) - (int)(12 * u), hint, false);
             Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
             GT(c, chipX + (int)(10 * u), mid, st, 12 * u, col, true);
             GT(c, rx + rww - (int)(26 * u), mid, ">", 16 * u, hint, true);
@@ -5031,7 +5169,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         heading("Licences");
         static const char* lic[][2] = {
             { "Fulldex", "GPL-3.0-or-later" }, { "melonDS", "GPL-3.0" }, { "Pok\xC3\xA9" "Daisy readers", "GPL-3.0" },
-            { "HOME Menu icon loader (nx-hbloader)", "GPL-3.0" }, { "mGBA", "MPL-2.0" }, { "Nunito and Noto fonts", "SIL Open Font License" } };
+            { "HOME Menu icon loader (nx-hbloader)", "GPL-3.0" }, { "mGBA", "MPL-2.0" }, { "Noto Sans, Nunito and the launcher's other fonts", "SIL Open Font License" } };
         const int rh = (int)(44 * u);
         for (int i = 0; i < 6; i++)
         {
@@ -5056,6 +5194,9 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, int tab, int selected, int& scroll,
                       const std::string& note, const std::string& hintText, bool follow, bool onTabs, bool settingsChosen)
 {
+    // (The launcher's own font and Text Size while it draws; CleanFont's own after.)
+    LookLoad();
+    struct FontUse { FontUse() { CleanFont::FontId() = LookFontId(); CleanFont::SizeScale() = Look().fontSize / 100.0f; } ~FontUse() { CleanFont::FontId() = 0; CleanFont::SizeScale() = 1.0f; } } fontUse;
     const float u = GU(c);
     const Grid& grid = v.g;
     const GlassSpots sp = Spots(c);

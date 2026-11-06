@@ -744,6 +744,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         Launcher::LookFrom(pairs);
     }
     // (Test: the Launcher page's sub-page; a theme saved as the list is first drawn.)
+    if (const char* lg = getenv("SSR_LIST_LANG")) UiLang::Set(lg); // (test: the launcher in a language)
     if (const char* lm = getenv("SSR_LIST_LAUNCHER")) { Launcher::LauncherMode() = atoi(lm); Launcher::ThemesRefresh(); }
     if (const char* ts = getenv("SSR_LIST_THEMESAVE")) { Launcher::LookLoad(); Launcher::ThemeSaveStart(ts); }
     if (const char* ta = getenv("SSR_LIST_THEMEAPPLY")) { Launcher::LookLoad(); Launcher::ThemesRefresh(); Launcher::LookApplyTheme(ta); }

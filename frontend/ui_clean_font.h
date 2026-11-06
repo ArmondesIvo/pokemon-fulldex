@@ -20,22 +20,30 @@ struct Face
     stbtt_fontinfo info{};
     bool ok = false;
     int ascent = 0, descent = 0, gap = 0;
+    float scale = 1.0f; // (the font's own fit beside Noto Sans)
 };
 
-inline Face& Get(bool bold)
+// The face drawn with: 0 Noto Sans (built in here), 1 and up a font FontSource gives (the launcher's
+// own, launcher_fonts.h); and how much bigger or smaller (the launcher's Text Size). The launcher sets
+// them while it draws and puts them back; the pause menu keeps Noto Sans.
+inline int& FontId() { static int id = 0; return id; }
+inline float& SizeScale() { static float s = 1.0f; return s; }
+typedef const unsigned char* (*FontSourceFn)(int id, bool bold, float* scale);
+inline FontSourceFn& FontSource() { static FontSourceFn f = nullptr; return f; }
+inline Face& GetFace(int id, bool bold)
 {
-    static Face faces[2];
-    static bool loaded[2] = {};
-    Face& f = faces[bold];
-    if (!loaded[bold])
-    {
-        loaded[bold] = true;
-        const unsigned char* data = bold ? CleanFontData::SemiBold : CleanFontData::Regular;
-        f.ok = stbtt_InitFont(&f.info, data, stbtt_GetFontOffsetForIndex(data, 0)) != 0;
-        if (f.ok) stbtt_GetFontVMetrics(&f.info, &f.ascent, &f.descent, &f.gap);
-    }
-    return f;
+    static std::map<int, Face> faces;
+    const int key = id * 2 + (bold ? 1 : 0);
+    auto it = faces.find(key);
+    if (it != faces.end()) return it->second;
+    Face f;
+    const unsigned char* data = id > 0 && FontSource() ? FontSource()(id, bold, &f.scale) : nullptr;
+    if (!data) { data = bold ? CleanFontData::SemiBold : CleanFontData::Regular; f.scale = 1.0f; }
+    f.ok = stbtt_InitFont(&f.info, data, stbtt_GetFontOffsetForIndex(data, 0)) != 0;
+    if (f.ok) stbtt_GetFontVMetrics(&f.info, &f.ascent, &f.descent, &f.gap);
+    return faces.emplace(key, f).first->second;
 }
+inline Face& Get(bool bold) { return GetFace(FontId(), bold); }
 
 // Next code point of UTF-8 text (bad bytes are taken as Latin-1).
 inline uint32_t Next(const std::string& s, size_t& i)
@@ -66,14 +74,17 @@ struct Glyph
 inline const Glyph& Get(bool bold, int px, uint32_t cp)
 {
     static std::map<uint64_t, Glyph> cache;
-    const uint64_t key = (uint64_t)bold << 63 | (uint64_t)(px & 0xFFFF) << 32 | cp;
+    const int id = FontId(), size = (int)(SizeScale() * 100 + 0.5f);
+    const uint64_t key = (uint64_t)bold << 63 | (uint64_t)(id & 0x7F) << 56 | (uint64_t)(size & 0xFF) << 48 | (uint64_t)(px & 0xFFFF) << 32 | cp;
     auto it = cache.find(key);
     if (it != cache.end()) return it->second;
     Glyph g;
-    Face& f = Get(bold);
+    Face* fp = &GetFace(id, bold);
+    if (id > 0 && fp->ok && !stbtt_FindGlyphIndex(&fp->info, (int)cp)) fp = &GetFace(0, bold); // (not in that font: Noto Sans's)
+    Face& f = *fp;
     if (f.ok)
     {
-        const float scale = stbtt_ScaleForPixelHeight(&f.info, (float)px);
+        const float scale = stbtt_ScaleForPixelHeight(&f.info, px * f.scale * SizeScale());
         int adv = 0, lsb = 0;
         stbtt_GetCodepointHMetrics(&f.info, (int)cp, &adv, &lsb);
         g.advance = adv * scale;
@@ -94,7 +105,7 @@ inline bool Has(bool bold, uint32_t cp) { Face& f = Get(bold); return f.ok && st
 inline float Kern(bool bold, int px, uint32_t a, uint32_t b)
 {
     Face& f = Get(bold);
-    return f.ok ? stbtt_GetCodepointKernAdvance(&f.info, (int)a, (int)b) * stbtt_ScaleForPixelHeight(&f.info, (float)px) : 0;
+    return f.ok ? stbtt_GetCodepointKernAdvance(&f.info, (int)a, (int)b) * stbtt_ScaleForPixelHeight(&f.info, px * f.scale * SizeScale()) : 0;
 }
 
 // The PlayStation button marks the hints use (\x01 cross, \x02 circle, \x03 square, \x04 triangle):

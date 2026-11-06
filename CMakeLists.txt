@@ -110,6 +110,7 @@ set(SSRECOMP_SOURCES
     frontend/cloud_autosync.cpp
     frontend/hub_link.cpp
     frontend/theme_pack.cpp
+    frontend/launcher_fonts.cpp
     frontend/trade_evolutions.cpp
     frontend/platform.cpp
     runtime/recomp_rt.cpp
