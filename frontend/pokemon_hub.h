@@ -66,6 +66,8 @@ enum class Verdict
     Empty,          // no Pokémon there
     ReadOnly,       // a ROM hack's save, or a format not written yet
     Full,           // no free box space in the other game
+    LastInParty,    // the party's last Pokémon: a game needs one
+    Taken,          // that place has a Pokémon in it
     NoEvolution,    // (CanEvolve) not one that evolves by trading, or not holding what it needs
 };
 
@@ -96,5 +98,45 @@ bool Commit(Save& save, std::string& error, std::vector<std::string>* backups = 
 // Writes the changed saves, each backed up first; when the second cannot be written, the first
 // is put back, so a Pokémon is never in both games or in neither.
 bool Commit(Save& a, Save& b, std::string& error, std::vector<std::string>* backups = nullptr);
+
+
+// ---- Added for the launcher's Move Pokémon page and trades -------------------------------------
+
+// A Pokémon's place: a box and its slot, or the party (box PARTY, slot 0 to 5). As a place to go,
+// box ANY_BOX means the first free place in the boxes, TO_PARTY the end of the party.
+const int PARTY = -1;
+const int ANY_BOX = -1;
+const int TO_PARTY = -2;
+
+// The party (box PARTY in each Mon), and whether a place is free.
+std::vector<Mon> Party(const Save& save);
+bool Free(const Save& save, int box, int slot);
+bool PartyFull(const Save& save);
+
+// Moving to a chosen place (CanMove above checks the Pokémon; this, the place too).
+Check CanMoveTo(const Save& from, int box, int slot, const Save& to, int toBox, int toSlot);
+
+// SWAP: one Pokémon each way between two of the player's games, as a trade (so both games must
+// let the other's in: in practice the same generation). Karrablast and Shelmet traded for each
+// other both evolve, as they do in Black and White.
+Check CanSwap(const Save& a, int boxA, int slotA, const Save& b, int boxB, int slotB);
+bool Swap(Save& a, int boxA, int slotA, Save& b, int boxB, int slotB, bool evolve, std::string& error);
+
+// A Pokémon as sent to another device (a friend's trade, or the player's own other device):
+// its generation and bytes, and what it is, to show before it is accepted.
+struct Packed
+{
+    int generation = 0;
+    std::vector<uint8_t> data;
+    Mon mon;
+    std::string game; // the game it comes from
+};
+bool Pack(const Save& save, int box, int slot, Packed& out, std::string& error);
+// tradedFor: the species going the other way in a trade (0: none), for Karrablast and Shelmet.
+Check CanReceive(const Packed& p, const Save& to, int tradedFor = 0);
+bool Receive(Save& to, const Packed& p, bool evolve, int tradedFor, std::string& error, int toBox = ANY_BOX, int toSlot = -1);
+// Takes it out (once the other side has it). Not the last Pokémon of the party.
+Check CanRemove(const Save& save, int box, int slot);
+bool Remove(Save& save, int box, int slot, std::string& error);
 
 }

@@ -75,10 +75,16 @@ const TradeEvo kTradeEvos[] = {
 };
 const int kEverstone = 229;
 
-const TradeEvo* EvolutionFor(const pksm::PKX& pk, const pksm::Sav& to)
+// (Karrablast and Shelmet: only when traded for each other.)
+const TradeEvo kPairEvos[] = { { 588, 0, 589, 5 }, { 616, 0, 617, 5 } };
+
+const TradeEvo* EvolutionFor(const pksm::PKX& pk, const pksm::Sav& to, int tradedFor = 0)
 {
     if (pk.egg() || pk.heldItem() == kEverstone) return nullptr;
     const int species = (int)pk.species(), item = pk.heldItem();
+    if ((species == 588 && tradedFor == 616) || (species == 616 && tradedFor == 588))
+        for (const TradeEvo& e : kPairEvos)
+            if (e.from == species && e.to <= (int)to.maxSpecies() && GenNumber(to.generation()) >= 5) return &e;
     for (const TradeEvo& e : kTradeEvos)
         if (e.from == species && (e.item == 0 || e.item == item) && e.to <= (int)to.maxSpecies() && GenNumber(to.generation()) >= std::max(e.gen, 3))
             return &e;
@@ -199,11 +205,50 @@ struct Save::Impl
 
     std::unique_ptr<pksm::PKX> At(int box, int slot) const
     {
+        if (box == PARTY)
+        {
+            if (slot < 0 || slot >= 6 || slot >= (int)sav->partyCount()) return nullptr;
+            auto pk = sav->pkm((u8)slot);
+            return pk && (int)pk->species() != 0 ? std::move(pk) : nullptr;
+        }
         if (box < 0 || box >= sav->maxBoxes() || slot < 0 || slot >= 30) return nullptr;
         auto pk = sav->pkm((u8)box, (u8)slot);
         return pk && (int)pk->species() != 0 ? std::move(pk) : nullptr;
     }
 };
+
+namespace
+{
+pksm::Generation GenOf(int n)
+{
+    return n == 3 ? Generation::THREE : n == 4 ? Generation::FOUR : n == 5 ? Generation::FIVE : n == 6 ? Generation::SIX : Generation::SEVEN;
+}
+// A party Pokémon as a box one (the first part of the party form is the box form).
+std::unique_ptr<pksm::PKX> BoxForm(const pksm::PKX& pk)
+{
+    if (!pk.isParty()) return pk.clone();
+    const int g = GenNumber(pk.generation());
+    const size_t len = g == 3 ? 80 : g <= 5 ? 136 : 232;
+    std::vector<u8> raw(pk.rawData().begin(), pk.rawData().begin() + std::min<size_t>(len, pk.rawData().size()));
+    return pksm::PKX::getPKM(pk.generation(), raw.data(), raw.size());
+}
+Mon MonOf(const pksm::PKX& pk, int box, int slot)
+{
+    Mon m;
+    m.box = box;
+    m.slot = slot;
+    m.species = (int)pk.species();
+    m.form = pk.alternativeForm();
+    m.level = pk.level();
+    m.nickname = pk.nickname();
+    m.speciesName = SpeciesName(m.species);
+    m.trainer = pk.otName();
+    m.shiny = pk.shiny();
+    m.egg = pk.egg();
+    m.heldItem = pk.heldItem();
+    return m;
+}
+}
 
 Save::Save() : d(new Impl) {}
 Save::~Save() {}
@@ -238,22 +283,7 @@ std::vector<Mon> Save::Box(int box) const
 {
     std::vector<Mon> out;
     for (int slot = 0; slot < 30; slot++)
-        if (auto pk = d->At(box, slot))
-        {
-            Mon m;
-            m.box = box;
-            m.slot = slot;
-            m.species = (int)pk->species();
-            m.form = pk->alternativeForm();
-            m.level = pk->level();
-            m.nickname = pk->nickname();
-            m.speciesName = SpeciesName(m.species);
-            m.trainer = pk->otName();
-            m.shiny = pk->shiny();
-            m.egg = pk->egg();
-            m.heldItem = pk->heldItem();
-            out.push_back(m);
-        }
+        if (auto pk = d->At(box, slot)) out.push_back(MonOf(*pk, box, slot));
     return out;
 }
 
@@ -290,18 +320,18 @@ void Evolve(pksm::PKX& pk, const TradeEvo& e, int generation)
 
 namespace
 {
-// The Pokémon as it would arrive, and the check of it.
-std::unique_ptr<pksm::PKX> Arriving(const Save& from, int box, int slot, const Save& to, Check& c)
+// The Pokémon as it would arrive, and the check of it. needRoom: a free place in the boxes too.
+std::unique_ptr<pksm::PKX> ArrivingPk(const pksm::PKX& source, int a, bool readOnly, const Save& to, Check& c, bool needRoom, int tradedFor)
 {
-    auto pk = from.d->At(box, slot);
+    auto pk = BoxForm(source);
     if (!pk) { c.verdict = Verdict::Empty; c.reason = "THERE IS NO POKEMON THERE"; return nullptr; }
-    if (from.ReadOnly() || to.ReadOnly())
+    if (readOnly || to.ReadOnly())
     {
         c.verdict = Verdict::ReadOnly;
         c.reason = "THE HUB CANNOT CHANGE THIS GAME'S SAVE YET";
         return nullptr;
     }
-    const int a = from.Generation(), b = to.Generation();
+    const int b = to.Generation();
     if (b < a)
     {
         c.verdict = Verdict::Backwards;
@@ -334,16 +364,74 @@ std::unique_ptr<pksm::PKX> Arriving(const Save& from, int box, int slot, const S
     }
     if (pk->heldItem() != 0 && arrives->heldItem() != pk->heldItem())
         c.losses.push_back("LEAVES ITS " + ItemName(pk->heldItem()) + " BEHIND");
-    if (const TradeEvo* e = EvolutionFor(*arrives, *to.d->sav))
+    if (const TradeEvo* e = EvolutionFor(*arrives, *to.d->sav, tradedFor))
     {
         c.evolvesTo = e->to;
         c.evolution = SpeciesName(e->from) + " CAN EVOLVE INTO " + SpeciesName(e->to) + " ON ARRIVAL, AS IF TRADED" +
                       (e->item ? " (USING ITS " + ItemName(e->item) + ")" : "");
     }
     int fb, fs;
-    if (!to.FirstEmpty(fb, fs)) { c.verdict = Verdict::Full; c.reason = "THERE IS NO ROOM IN " + Upper(to.GameName()) + "'S BOXES"; return nullptr; }
+    if (needRoom && !to.FirstEmpty(fb, fs)) { c.verdict = Verdict::Full; c.reason = "THERE IS NO ROOM IN " + Upper(to.GameName()) + "'S BOXES"; return nullptr; }
     c.verdict = Verdict::Ok;
     return arrives;
+}
+std::unique_ptr<pksm::PKX> Arriving(const Save& from, int box, int slot, const Save& to, Check& c, bool needRoom = true, int tradedFor = 0)
+{
+    auto pk = from.d->At(box, slot);
+    if (!pk) { c.verdict = Verdict::Empty; c.reason = "THERE IS NO POKEMON THERE"; return nullptr; }
+    return ArrivingPk(*pk, from.Generation(), from.ReadOnly(), to, c, needRoom, tradedFor);
+}
+// (Taking the party's last Pokémon that is not an egg would leave a game nothing to play with.)
+bool LastInParty(const Save& s, int box, int slot)
+{
+    if (box != PARTY) return false;
+    int others = 0;
+    for (int i = 0; i < (int)s.d->sav->partyCount(); i++)
+        if (i != slot)
+            if (auto pk = s.d->At(PARTY, i)) others += !pk->egg();
+    return others == 0;
+}
+// Puts a Pokémon at a place (the party, or a box), and takes one away.
+void Put(Save& s, const pksm::PKX& pk, int box, int slot)
+{
+    if (box == PARTY)
+    {
+        s.d->sav->pkm(pk, (u8)slot);
+        s.d->sav->fixParty();
+    }
+    else s.d->sav->pkm(pk, (u8)box, (u8)slot, true);
+    s.d->changed = true;
+}
+void Take(Save& s, int box, int slot)
+{
+    if (box == PARTY)
+    {
+        s.d->sav->pkm(*s.d->sav->emptyPkm(), (u8)slot);
+        s.d->sav->fixParty();
+    }
+    else s.d->sav->pkm(*s.d->sav->emptyPkm(), (u8)box, (u8)slot, false);
+    s.d->changed = true;
+}
+// Where it goes: ANY_BOX the first free place, TO_PARTY the end of the party. False: no room there.
+bool Place(const Save& to, int& box, int& slot)
+{
+    if (box == TO_PARTY)
+    {
+        if ((int)to.d->sav->partyCount() >= 6) return false;
+        box = PARTY;
+        slot = (int)to.d->sav->partyCount();
+        return true;
+    }
+    if (box == ANY_BOX) return to.FirstEmpty(box, slot);
+    if (box < 0 || box >= to.Boxes()) return false;
+    if (slot < 0)
+    {
+        // (A box chosen, not a slot: its first free one.)
+        for (slot = 0; slot < 30; slot++)
+            if (!to.d->At(box, slot)) return true;
+        return false;
+    }
+    return !to.d->At(box, slot) && box >= 0 && box < to.Boxes() && slot >= 0 && slot < 30;
 }
 }
 
@@ -357,17 +445,16 @@ Check CanMove(const Save& from, int box, int slot, const Save& to)
 bool Move(Save& from, int box, int slot, Save& to, bool evolve, std::string& error, int toBox, int toSlot)
 {
     if (&from == &to) { error = "CHOOSE TWO DIFFERENT GAMES"; return false; }
-    Check c;
-    auto pk = Arriving(from, box, slot, to, c);
-    if (!pk) { error = c.reason; return false; }
-    if (toBox < 0 && !to.FirstEmpty(toBox, toSlot)) { error = "NO ROOM"; return false; }
-    if (to.d->At(toBox, toSlot)) { error = "THAT PLACE IS TAKEN"; return false; }
+    const Check c = CanMoveTo(from, box, slot, to, toBox, toSlot);
+    if (c.verdict != Verdict::Ok) { error = c.reason; return false; }
+    Check again;
+    auto pk = Arriving(from, box, slot, to, again, false);
+    if (!pk || !Place(to, toBox, toSlot)) { error = "THERE IS NO ROOM THERE"; return false; }
     if (evolve)
         if (const TradeEvo* e = EvolutionFor(*pk, *to.d->sav)) Evolve(*pk, *e, to.Generation());
     pk->refreshChecksum();
-    to.d->sav->pkm(*pk, (u8)toBox, (u8)toSlot, true);
-    from.d->sav->pkm(*from.d->sav->emptyPkm(), (u8)box, (u8)slot, false);
-    from.d->changed = to.d->changed = true;
+    Take(from, box, slot);
+    Put(to, *pk, toBox, toSlot);
     return true;
 }
 
@@ -451,6 +538,148 @@ bool Commit(Save& a, Save& b, std::string& error, std::vector<std::string>* back
             ReadFile(s->Path(), s->d->original);
             s->d->changed = false;
         }
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+
+std::vector<Mon> Party(const Save& save)
+{
+    std::vector<Mon> out;
+    for (int slot = 0; slot < 6; slot++)
+        if (auto pk = save.d->At(PARTY, slot)) out.push_back(MonOf(*pk, PARTY, slot));
+    return out;
+}
+
+bool Free(const Save& save, int box, int slot) { return !save.d->At(box, slot); }
+bool PartyFull(const Save& save) { return (int)save.d->sav->partyCount() >= 6; }
+
+Check CanMoveTo(const Save& from, int box, int slot, const Save& to, int toBox, int toSlot)
+{
+    Check c;
+    if (&from == &to) { c.verdict = Verdict::Empty; c.reason = "CHOOSE TWO DIFFERENT GAMES"; return c; }
+    if (!Arriving(from, box, slot, to, c, false)) return c;
+    if (LastInParty(from, box, slot))
+    {
+        c.verdict = Verdict::LastInParty;
+        c.reason = "IT IS THE LAST POKEMON IN YOUR PARTY: A GAME NEEDS ONE";
+        return c;
+    }
+    int b = toBox, s = toSlot;
+    if (!Place(to, b, s))
+    {
+        c.verdict = toBox == ANY_BOX ? Verdict::Full : Verdict::Taken;
+        c.reason = toBox == ANY_BOX ? "THERE IS NO ROOM IN " + Upper(to.GameName()) + "'S BOXES"
+                 : toBox == TO_PARTY ? "THE PARTY IN " + Upper(to.GameName()) + " IS FULL" : "THAT PLACE IS TAKEN";
+    }
+    return c;
+}
+
+Check CanSwap(const Save& a, int boxA, int slotA, const Save& b, int boxB, int slotB)
+{
+    Check c;
+    if (&a == &b) { c.verdict = Verdict::Empty; c.reason = "CHOOSE TWO DIFFERENT GAMES"; return c; }
+    auto pa = a.d->At(boxA, slotA), pb = b.d->At(boxB, slotB);
+    if (!pa || !pb) { c.verdict = Verdict::Empty; c.reason = "CHOOSE A POKEMON IN EACH GAME"; return c; }
+    Check ca, cb;
+    if (!Arriving(a, boxA, slotA, b, ca, false, (int)pb->species())) return ca;
+    if (!Arriving(b, boxB, slotB, a, cb, false, (int)pa->species())) return cb;
+    c.verdict = Verdict::Ok;
+    for (const std::string& l : ca.losses) c.losses.push_back(SpeciesName((int)pa->species()) + ": " + l);
+    for (const std::string& l : cb.losses) c.losses.push_back(SpeciesName((int)pb->species()) + ": " + l);
+    if (ca.evolvesTo || cb.evolvesTo)
+    {
+        c.evolvesTo = ca.evolvesTo ? ca.evolvesTo : cb.evolvesTo;
+        c.evolution = ca.evolution + (ca.evolvesTo && cb.evolvesTo ? "; " : "") + cb.evolution;
+    }
+    return c;
+}
+
+bool Swap(Save& a, int boxA, int slotA, Save& b, int boxB, int slotB, bool evolve, std::string& error)
+{
+    const Check c = CanSwap(a, boxA, slotA, b, boxB, slotB);
+    if (c.verdict != Verdict::Ok) { error = c.reason; return false; }
+    const int sa = (int)a.d->At(boxA, slotA)->species(), sb = (int)b.d->At(boxB, slotB)->species();
+    Check x, y;
+    auto toB = Arriving(a, boxA, slotA, b, x, false, sb);
+    auto toA = Arriving(b, boxB, slotB, a, y, false, sa);
+    if (!toB || !toA) { error = "THE TRADE COULD NOT BE MADE"; return false; }
+    if (evolve)
+    {
+        if (const TradeEvo* e = EvolutionFor(*toB, *b.d->sav, sb)) Evolve(*toB, *e, b.Generation());
+        if (const TradeEvo* e = EvolutionFor(*toA, *a.d->sav, sa)) Evolve(*toA, *e, a.Generation());
+    }
+    toB->refreshChecksum();
+    toA->refreshChecksum();
+    Put(b, *toB, boxB, slotB);
+    Put(a, *toA, boxA, slotA);
+    return true;
+}
+
+bool Pack(const Save& save, int box, int slot, Packed& out, std::string& error)
+{
+    auto pk = save.d->At(box, slot);
+    if (!pk) { error = "THERE IS NO POKEMON THERE"; return false; }
+    auto bx = BoxForm(*pk);
+    if (!bx) { error = "THIS POKEMON CANNOT BE SENT"; return false; }
+    out.generation = save.Generation();
+    out.mon = MonOf(*bx, box, slot);
+    out.game = save.GameName();
+    bx->encrypt();
+    out.data.assign(bx->rawData().begin(), bx->rawData().end());
+    return true;
+}
+
+namespace
+{
+std::unique_ptr<pksm::PKX> Unpack(const Packed& p)
+{
+    if (p.generation < 3 || p.generation > 7 || p.data.empty() || p.data.size() > 512) return nullptr;
+    std::vector<u8> raw = p.data;
+    auto pk = pksm::PKX::getPKM(GenOf(p.generation), raw.data(), raw.size());
+    return pk && (int)pk->species() != 0 ? std::move(pk) : nullptr;
+}
+}
+
+Check CanReceive(const Packed& p, const Save& to, int tradedFor)
+{
+    Check c;
+    auto pk = Unpack(p);
+    if (!pk) { c.verdict = Verdict::Empty; c.reason = "WHAT ARRIVED IS NOT A POKEMON THE HUB CAN READ"; return c; }
+    ArrivingPk(*pk, p.generation, false, to, c, true, tradedFor);
+    return c;
+}
+
+bool Receive(Save& to, const Packed& p, bool evolve, int tradedFor, std::string& error, int toBox, int toSlot)
+{
+    auto src = Unpack(p);
+    if (!src) { error = "WHAT ARRIVED IS NOT A POKEMON THE HUB CAN READ"; return false; }
+    Check c;
+    auto pk = ArrivingPk(*src, p.generation, false, to, c, false, tradedFor);
+    if (!pk) { error = c.reason; return false; }
+    if (!Place(to, toBox, toSlot)) { error = "THERE IS NO ROOM THERE"; return false; }
+    if (evolve)
+        if (const TradeEvo* e = EvolutionFor(*pk, *to.d->sav, tradedFor)) Evolve(*pk, *e, to.Generation());
+    pk->refreshChecksum();
+    Put(to, *pk, toBox, toSlot);
+    return true;
+}
+
+Check CanRemove(const Save& save, int box, int slot)
+{
+    Check c;
+    if (!save.d->At(box, slot)) { c.verdict = Verdict::Empty; c.reason = "THERE IS NO POKEMON THERE"; return c; }
+    if (save.ReadOnly()) { c.verdict = Verdict::ReadOnly; c.reason = "THE HUB CANNOT CHANGE THIS GAME'S SAVE YET"; return c; }
+    if (LastInParty(save, box, slot)) { c.verdict = Verdict::LastInParty; c.reason = "IT IS THE LAST POKEMON IN YOUR PARTY: A GAME NEEDS ONE"; return c; }
+    c.verdict = Verdict::Ok;
+    return c;
+}
+
+bool Remove(Save& save, int box, int slot, std::string& error)
+{
+    const Check c = CanRemove(save, box, slot);
+    if (c.verdict != Verdict::Ok) { error = c.reason; return false; }
+    Take(save, box, slot);
     return true;
 }
 
