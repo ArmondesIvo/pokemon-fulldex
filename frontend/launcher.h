@@ -2176,13 +2176,16 @@ inline bool HubEnter(int row)
     GlassFocus& F = Focus();
     if (row == 0) { HubMode() = 1; F.prow = 0; }
     else if (row == 2) { HubMode() = 2; F.prow = 2; }
+    else if (row == 3) return false; // (Discord: a link, nothing to open here)
     else { MoverShow(true); F.prow = MOVER_FIRST; }
     F.pact = -1; F.rScroll = 0;
     Hub().version++;
     return true;
 }
 inline bool HubTop() { return !Mover().open && HubMode() == 0; }
-inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 3 : HubMode() == 2 ? TradeRows() : HUB_FIRST + (int)HubGames().size(); }
+// (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
+static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
+inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 4 : HubMode() == 2 ? TradeRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
     if (Mover().open) return MoverActions(row);
@@ -2401,6 +2404,7 @@ inline std::string AboutUrl(int row)
 inline std::string PageUrl(int page, int row)
 {
     if (page == SIDE_UPDATES) return row >= 1 ? "https://github.com/mamesj/pokemon-fulldex/releases" : "";
+    if (page == SIDE_HUB) return HubTop() && row == 3 ? kDiscordUrl : "";
     return page == SIDE_ABOUT ? AboutUrl(row) : "";
 }
 inline const char* PlatformLabel()
@@ -2991,7 +2995,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         lk.unlock();
         const int moverGames = (int)MoverGames().size();
         const int rw = (int)(400 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(14 * u);
-        const int rowH = (int)(72 * u), rg = (int)(10 * u), n = 3;
+        const int rowH = (int)(72 * u), rg = (int)(10 * u), n = 4;
         const HubLink::Status link = HubLink::Snapshot();
         Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
         F.prow = std::max(0, std::min(F.prow, n - 1));
@@ -3027,13 +3031,20 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 st = link.state == HubLink::State::Linked ? "Linked" : link.state == HubLink::State::Online ? "Online" : link.state == HubLink::State::Hosting ? "Room Open" : link.state == HubLink::State::Browsing ? "Looking" : "Same Wi-Fi";
                 if (link.state != HubLink::State::Off) col = 0xFF8CC8FFu;
             }
+            else if (i == 3)
+            {
+                name = "Fulldex Discord";
+                sub = "Find people to trade with, get help and hear what's coming";
+                st = "Join";
+                col = 0xFF8CC8FFu;
+            }
             else
             {
                 name = "Move Pok\xC3\xA9mon";
                 sub = "Between your own games, as a trade would";
                 st = std::to_string(moverGames) + (moverGames == 1 ? " Save" : " Saves");
             }
-            Glass::DrawIcon(c, i == 0 ? Glass::I_GLOBE : i == 2 ? Glass::I_PEOPLE : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
+            Glass::DrawIcon(c, i == 0 ? Glass::I_GLOBE : i == 2 ? Glass::I_PEOPLE : i == 3 ? Glass::I_CHAT : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
             GT(c, rx + (int)(60 * u), mid - 11 * u, name, 18 * u, text, true);
             GT(c, rx + (int)(60 * u), mid + 13 * u, sub, 13 * u, hint, false);
             const int chipW = GW(st, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(46 * u) - chipW;
@@ -3054,7 +3065,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             GT(c, cx, cy + 28 * u, v, 15 * u, text, true);
             (void)cw;
         };
-        GT(c, ix, y + 14 * u, F.prow == 0 ? "Cloud Saves" : F.prow == 2 ? "Trade" : "Move Pok\xC3\xA9mon", 22 * u, text, true);
+        GT(c, ix, y + 14 * u, F.prow == 0 ? "Cloud Saves" : F.prow == 2 ? "Trade" : F.prow == 3 ? "Fulldex Discord" : "Move Pok\xC3\xA9mon", 22 * u, text, true);
         y += (int)(44 * u);
         if (F.prow == 0)
         {
@@ -3078,6 +3089,20 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         {
             para("Trade with a friend, online or on the same Wi-Fi, or send Pok\xC3\xA9mon to another of your own devices: a PC and a Switch, say.", text, 14 * u);
             para("Trades follow the real games' rules: one each way, both say yes, and those that evolve by trading evolve, Karrablast and Shelmet too. Each save is backed up before it is written.", hint, 13 * u);
+        }
+        else if (F.prow == 3)
+        {
+            para("Join the Fulldex Discord: find someone to trade with, get help with a game, report a bug and see what's coming next.", text, 14 * u);
+            GT(c, ix, y + 10 * u, "discord.gg/pnGeMYyJR", 16 * u, 0xFF8CC8FFu, true);
+            y += (int)(34 * u);
+            const int qs = std::max((int)(90 * u), std::min(iw - (int)(80 * u), bottom - y - (int)(70 * u)));
+            DrawQr(c, kDiscordQr, kDiscordQrSize, ix + (iw - qs) / 2, y, qs);
+            y += qs + (int)(18 * u);
+#ifdef __SWITCH__
+            para("Scan the code with your phone's camera.", hint, 13 * u);
+#else
+            para("Choose it to open Discord in your browser, or scan the code with your phone.", hint, 13 * u);
+#endif
         }
         else
         {

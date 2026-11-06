@@ -437,7 +437,7 @@ enum Icon
     I_PLAY, I_SAVE, I_LOAD, I_CHEATS, I_FAST, I_TROPHY, I_GEAR, I_POWER,
     I_BACK, I_MONITOR, I_SCREENS, I_GLOBE, I_RATIO, I_LAYOUT, I_EXPAND, I_FULLSCREEN, I_GRID, I_LAYERS,
     I_PAD, I_GAUGE, I_WINDOW, I_PEOPLE, I_SPARKLE, I_INFO, I_CHEVRON_L, I_CHEVRON_R, I_CHEVRON_U, I_CHEVRON_D, I_POKEBALL, I_CHIP, I_SPEAKER, I_REWIND,
-    I_PAUSE, I_PREV, I_NEXT, I_NOTE,
+    I_PAUSE, I_PREV, I_NEXT, I_NOTE, I_CHAT,
     I_COUNT
 };
 // A rhombus centred on (cx, cy), half width a and half height b (close to a true distance).
@@ -627,6 +627,14 @@ inline void DrawIcon(Canvas& c, int icon, float cx, float cy, float size, uint32
             const float stems = std::min(Segment(u, v, -0.26f, 0.5f, -0.26f, -0.5f, t / 2), Segment(u, v, 0.62f, 0.36f, 0.62f, -0.66f, t / 2));
             const float beam = std::max(std::fabs((v + 0.58f) + (u + 0.26f) * (0.16f / 0.88f)) - 0.1f, std::max(-0.32f - u, u - 0.68f));
             return std::min(heads, std::min(stems, beam));
+        }
+        case I_CHAT:
+        {
+            // (A speech bubble with three dots: the Discord row.)
+            const float bubble = std::fabs(Box(u, v, 0, -0.12f, 0.8f, 0.54f, 0.32f)) - t / 2;
+            const float tail = std::max(std::min(Segment(u, v, -0.42f, 0.42f, -0.52f, 0.8f, t / 2), Segment(u, v, -0.52f, 0.8f, -0.06f, 0.42f, t / 2)), -(v - 0.4f));
+            const float dots = std::min(Circle(u, v, -0.34f, -0.12f, 0.1f), std::min(Circle(u, v, 0, -0.12f, 0.1f), Circle(u, v, 0.34f, -0.12f, 0.1f)));
+            return std::min(bubble, std::min(tail, dots));
         }
         case I_POKEBALL:
         {

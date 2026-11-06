@@ -890,7 +890,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                         else if (F.page == Launcher::SIDE_HUB)
                         {
                             // (The Hub: A on the list goes to the chosen row's actions; on those, does it.)
-                            if (F.pact < 0) { if (!Launcher::HubEnter(F.prow) && !Launcher::HubActions(F.prow).empty()) F.pact = 0; }
+                            if (F.pact < 0) { if (!Launcher::HubEnter(F.prow) && !Launcher::HubActions(F.prow).empty()) F.pact = 0; else if (Launcher::HubTop() && F.prow == 3) note = "SCAN THE CODE WITH YOUR PHONE"; }
                             else { const std::string said = Launcher::HubDo(F.prow, F.pact); if (!said.empty()) note = said; if (F.dialog == 3) { kbLayer = 0; kbBuild(); } }
                         }
                         else if (F.page == Launcher::SIDE_UPDATES && F.prow == 0) pageUpdateWork = true;

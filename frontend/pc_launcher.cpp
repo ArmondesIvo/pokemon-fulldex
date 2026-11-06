@@ -1083,7 +1083,13 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (F.page == Launcher::SIDE_HUB)
                 {
                     // (The Hub: A on the list goes to the chosen row's actions; on those, does it.)
-                    if (F.pact < 0) { if (Launcher::HubEnter(F.prow)) return; if (!Launcher::HubActions(F.prow).empty()) F.pact = 0; return; }
+                    if (F.pact < 0)
+                    {
+                        if (Launcher::HubEnter(F.prow)) return;
+                        if (!Launcher::HubActions(F.prow).empty()) F.pact = 0;
+                        else if (Launcher::HubTop() && F.prow == 3 && SDL_OpenURL(Launcher::kDiscordUrl) != 0) fprintf(stderr, "[launcher] could not open Discord: %s\n", SDL_GetError());
+                        return;
+                    }
                     const std::string said = Launcher::HubDo(F.prow, F.pact);
                     if (!said.empty()) note = said;
                     if (F.dialog == 3) SDL_StartTextInput(); // (the Trade page's code)
