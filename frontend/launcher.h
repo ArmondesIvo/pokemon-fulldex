@@ -1494,6 +1494,8 @@ struct HubState
 };
 inline HubState& Hub() { static HubState h; return h; }
 struct HubGame { std::string name, path; const Game* g; };
+// (A game's other folder as the old list wrote it, "IN BLACK2": just the folder.)
+inline std::string WhereName(const std::string& w) { return w.rfind("IN ", 0) == 0 ? w.substr(3) : w; }
 inline std::string HubSavePath(const Game& g)
 {
 #ifdef __SWITCH__
@@ -1572,7 +1574,7 @@ inline MoverState& Mover() { static MoverState m; return m; }
 inline std::vector<MoverGame> MoverGames()
 {
     std::vector<MoverGame> r;
-    for (const HubGame& g : HubGames()) if (g.g && g.g->hasSave) r.push_back({ g.name, g.path, IsHack(*g.g) });
+    for (const HubGame& g : HubGames()) if (g.g && g.g->hasSave) r.push_back({ g.name + (g.g->where.empty() ? std::string() : "  \xC2\xB7  " + WhereName(g.g->where)), g.path, IsHack(*g.g) });
     return r;
 }
 #ifdef SSR_POKEMON_HUB
@@ -1728,6 +1730,24 @@ inline std::string MonName(const std::string& up)
     return s;
 }
 #endif
+// (Names from a save as the font can show them: Japanese ones, and empty ones, give way.)
+inline bool Drawable(const std::string& s)
+{
+    bool any = false;
+    for (size_t i = 0; i < s.size();)
+    {
+        const unsigned char b = (unsigned char)s[i];
+        uint32_t cp = b;
+        int n = 1;
+        if (b >= 0xF0) { n = 4; cp = b & 7; } else if (b >= 0xE0) { n = 3; cp = b & 15; } else if (b >= 0xC0) { n = 2; cp = b & 31; }
+        for (int k = 1; k < n && i + k < s.size(); k++) cp = cp << 6 | ((unsigned char)s[i + k] & 63);
+        if (cp >= 0x2000 || cp < 0x20) return false;
+        if (cp != ' ') any = true;
+        i += n;
+    }
+    return any;
+}
+inline std::string Shown(const std::string& s, const std::string& otherwise) { return Drawable(s) ? s : otherwise; }
 inline int MoverRows()
 {
 #ifdef SSR_POKEMON_HUB
@@ -1778,7 +1798,7 @@ inline std::string MoverDo(int row, int act)
     if (i < 0 || i >= (int)mons.size() || !m.a || !m.b) return "";
     std::string err;
     std::vector<std::string> backups;
-    const std::string name = mons[i].nickname;
+    const std::string name = Shown(mons[i].nickname, MonName(mons[i].speciesName));
     const std::string toName = MoverGames()[m.to].name;
     if (!PokemonHub::Move(*m.a, mons[i].box, mons[i].slot, *m.b, acts[act] == "Move And Evolve", err)
         || !PokemonHub::Commit(*m.a, *m.b, err, &backups))
@@ -2411,18 +2431,19 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             else if (i == 1) { k = "Box"; v = "-"; }
             else if (i == 2) { k = "To"; v = toName; }
 #ifdef SSR_POKEMON_HUB
-            if (i == 0 && m.a) chip = m.a->Trainer();
-            if (i == 2 && m.b) chip = m.b->Trainer();
-            if (i == 1 && m.a) { v = m.a->BoxName(m.box); chip = std::to_string(mons.size()) + (mons.size() == 1 ? " Pok\xC3\xA9mon" : " Pok\xC3\xA9mon"); }
+            if (i == 0 && m.a) chip = Shown(m.a->Trainer(), "-");
+            if (i == 2 && m.b) chip = Shown(m.b->Trainer(), "-");
+            if (i == 1 && m.a) { v = Shown(m.a->BoxName(m.box), "Box " + std::to_string(m.box + 1)); chip = std::to_string(mons.size()) + (mons.size() == 1 ? " Pok\xC3\xA9mon" : " Pok\xC3\xA9mon"); }
             if (i >= 3)
             {
                 const PokemonHub::Mon& mon = mons[i - 3];
                 const PokemonHub::Check ck = check(mon);
                 col = ck.verdict == PokemonHub::Verdict::Ok ? okCol : noCol;
                 k = mon.egg ? std::string("Egg") : "Lv " + std::to_string(mon.level);
-                v = mon.nickname + (mon.shiny ? "  \xE2\x98\x85" : "");
+                v = Shown(mon.nickname, MonName(mon.speciesName));
                 if (!mon.egg && !mon.speciesName.empty()) spn = MonName(mon.speciesName);
                 if (MonIcon(mon.species, mon.egg, ic)) DrawMonIcon(c, ic, rx + (int)(2 * u), mid - (int)(21 * u), (int)(40 * u));
+                if (mon.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, rx + 38 * u, mid - 12 * u, 6 * u, 0xFFF2C46Bu);
                 chip = ck.verdict == PokemonHub::Verdict::Ok ? (ck.evolvesTo ? "Can Move, Evolves" : "Can Move") : "Can't Move";
                 if (ic.empty()) Glass::Round(c, rx + (int)(14 * u), mid - (int)(4 * u), (int)(8 * u), (int)(8 * u), 4 * u, col);
             }
@@ -2471,7 +2492,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (!s) para("This save could not be read. " + (F.prow == 0 ? m.aErr : m.bErr), noCol, 13 * u);
             else
             {
-                cell(ix, y, iw / 2, "Trainer", s->Trainer());
+                cell(ix, y, iw / 2, "Trainer", Shown(s->Trainer(), "-"));
                 cell(ix + iw / 2, y, iw / 2, "Generation", std::to_string(s->Generation()));
                 y += (int)(56 * u);
                 if (s->ReadOnly()) para("Pok\xC3\xA9mon can be looked at in this game but not moved in or out yet.", noCol, 13 * u);
@@ -2481,7 +2502,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         else if (F.prow == 1)
         {
             GT(c, ix, y + 14 * u, "Box", 13 * u, hint, true);
-            GT(c, ix, y + 40 * u, fit(m.a ? m.a->BoxName(m.box) : std::string("-"), 22 * u, true, iw), 22 * u, text, true);
+            GT(c, ix, y + 40 * u, fit(m.a ? Shown(m.a->BoxName(m.box), "Box " + std::to_string(m.box + 1)) : std::string("-"), 22 * u, true, iw), 22 * u, text, true);
             y += (int)(64 * u);
             if (m.a) cell(ix, y, iw / 2, "Box", std::to_string(m.box + 1) + " of " + std::to_string(m.a->Boxes()));
             cell(ix + iw / 2, y, iw / 2, "Pok\xC3\xA9mon", std::to_string(mons.size()));
@@ -2494,11 +2515,11 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             std::vector<uint32_t> big;
             const int bs = (int)(96 * u);
             if (MonIcon(mon.species, mon.egg, big)) DrawMonIcon(c, big, ix + iw - bs, y - (int)(18 * u), bs);
-            GT(c, ix, y + 14 * u, fit(mon.nickname + (mon.shiny ? "  \xE2\x98\x85" : ""), 22 * u, true, iw - bs), 22 * u, text, true);
-            GT(c, ix, y + 42 * u, mon.egg ? std::string("Egg") : MonName(mon.speciesName), 15 * u, hint, true);
+            GT(c, ix, y + 14 * u, fit(Shown(mon.nickname, MonName(mon.speciesName)), 22 * u, true, iw - bs), 22 * u, text, true);
+            GT(c, ix, y + 42 * u, (mon.egg ? std::string("Egg") : MonName(mon.speciesName)) + (mon.shiny ? "   \xC2\xB7   Shiny" : ""), 15 * u, mon.shiny ? 0xFFF2C46Bu : hint, true);
             y += (int)(66 * u);
             cell(ix, y, iw / 2, "Level", mon.egg ? std::string("Egg") : std::to_string(mon.level));
-            cell(ix + iw / 2, y, iw / 2, "Trainer", mon.trainer);
+            cell(ix + iw / 2, y, iw / 2, "Trainer", Shown(mon.trainer, "-"));
             y += (int)(58 * u);
             GT(c, ix, y + 8 * u, "To " + toName, 12 * u, hint, true);
             y += (int)(24 * u);
@@ -2606,7 +2627,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             {
                 const HubGame& g = games[i - HUB_FIRST];
                 name = g.name;
-                sub = fileOf(g.path) + (g.g && !g.g->hasSave ? "   \xC2\xB7   none here yet" : "");
+                sub = (g.g && !g.g->where.empty() ? WhereName(g.g->where) + "   \xC2\xB7   " : std::string()) + fileOf(g.path) + (g.g && !g.g->hasSave ? "   \xC2\xB7   none here yet" : "");
                 st = HubStatus(resultOf(g.path), on, col);
                 Glass::Round(c, rx + (int)(14 * u), mid - (int)(4 * u), (int)(8 * u), (int)(8 * u), 4 * u, col);
             }

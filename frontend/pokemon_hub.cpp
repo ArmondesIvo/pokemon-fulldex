@@ -193,6 +193,7 @@ struct Save::Impl
 {
     std::string path;
     std::vector<u8> original;            // the file as read, for putting back
+    std::vector<u8> tail;                // what an emulator keeps after a GBA save (mGBA: 16 bytes of clock), kept as it was
     std::unique_ptr<pksm::Sav> sav;
     bool readOnly = false, changed = false;
 
@@ -211,9 +212,13 @@ std::unique_ptr<Save> Save::Open(const std::string& path, std::string& error, bo
 {
     std::unique_ptr<Save> s(new Save);
     if (!ReadFile(path, s->d->original) || s->d->original.empty()) { error = "CANNOT READ THE SAVE"; return nullptr; }
-    auto data = std::shared_ptr<u8[]>(new u8[s->d->original.size()]);
-    std::copy(s->d->original.begin(), s->d->original.end(), data.get());
-    s->d->sav = pksm::Sav::getSave(data, (u32)s->d->original.size());
+    // (A GBA save with something after its 128 KB, as mGBA's clock: read without it, written back with it.)
+    size_t size = s->d->original.size();
+    if (size > 0x20000 && size <= 0x20000 + 0x100) size = 0x20000;
+    s->d->tail.assign(s->d->original.begin() + size, s->d->original.end());
+    auto data = std::shared_ptr<u8[]>(new u8[size]);
+    std::copy(s->d->original.begin(), s->d->original.begin() + size, data.get());
+    s->d->sav = pksm::Sav::getSave(data, (u32)size);
     if (!s->d->sav || GenNumber(s->d->sav->generation()) == 0) { error = "THIS SAVE IS NOT ONE THE HUB KNOWS"; return nullptr; }
     s->d->path = path;
     s->d->readOnly = romHack;
@@ -401,7 +406,9 @@ namespace
 bool WriteSave(Save& s, std::string& error)
 {
     s.d->sav->finishEditing();
-    const bool ok = WriteAtomic(s.d->path, s.d->sav->rawData().get(), s.d->sav->getLength());
+    std::vector<u8> out(s.d->sav->rawData().get(), s.d->sav->rawData().get() + s.d->sav->getLength());
+    out.insert(out.end(), s.d->tail.begin(), s.d->tail.end());
+    const bool ok = WriteAtomic(s.d->path, out.data(), out.size());
     s.d->sav->beginEditing();
     if (!ok) error = "CANNOT WRITE " + Upper(s.GameName()) + "'S SAVE";
     return ok;
