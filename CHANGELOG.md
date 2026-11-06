@@ -3,6 +3,9 @@
 
 ## Unreleased
 
+- **SoulSilver: the wild Pokémon's slide to the right of a wide battle follows the game's frames.** It was
+  timed by how many pictures were drawn, so the display rate, skipped frames or screenshots changed
+  when (and whether) it happened.
 - **SoulSilver and HeartGold battles: no more flash of the touch screen in the middle of a battle.** A wild
   Pokemon breaking out of a Poke Ball, an enemy's Vine Whip, or your own Pokemon being sent out after a
   switch, briefly ran code of the Bag and
