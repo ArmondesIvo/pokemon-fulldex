@@ -153,6 +153,7 @@ for f in "$FUNCS"/*.txt; do FILES+=("assets/funcs/$(basename "$f")=$f"); done
 # The licences: this program's (GPL-3) and, with the GBA games built in, mGBA's (MPL-2.0).
 FILES+=("assets/LICENSE.txt=$HERE/LICENSE")
 FILES+=("assets/LICENSE-Noto.txt=$HERE/LICENSE-Noto.txt")
+FILES+=("assets/FONT-LICENSES.txt=$HERE/frontend/fonts/FONT-LICENSES.txt")
 GBA_WORK="${GBAW_WORK:-$HOME/pokemon-gba-wide}"
 if [ -n "${SSR_GBA_DIR:-}" ]; then
     [ -f "$GBA_WORK/mgba/LICENSE" ] || fail "no mGBA in $GBA_WORK (Pokemon GBA Widescreen's setup.sh makes it; GBAW_WORK if elsewhere)"

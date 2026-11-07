@@ -122,6 +122,7 @@ strip -x "$APP/pokemon-ds-wide"
 cp -r "$DATA/funcs" "$APP/data/funcs"
 cp LICENSE "$APP/LICENSE.txt"
 cp LICENSE-Noto.txt "$APP/LICENSE-Noto.txt"
+cp frontend/fonts/FONT-LICENSES.txt "$APP/FONT-LICENSES.txt"
 GBA_DOCS=""
 if [ -n "${SSR_GBA_DIR:-}" ]; then
     MGBA_SRC="${GBAW_MGBA:-${GBAW_WORK:-$HOME/pokemon-gba-wide}/mgba}"
@@ -205,7 +206,7 @@ rm -rf "$DIST/Payload"
 SSR_SRC="$HERE" python3 - "$IPA" <<'PY'
 import re, sys, zipfile
 regional_codes = '|'.join(p['code'] for p in __import__('json').loads(__import__('pathlib').Path(__import__('os').environ['SSR_SRC'], 'tools/regions/profiles.json').read_text())['profiles'] if p['kind']=='functions')
-ok = re.compile(r'^Payload/(Pokemon Fulldex\.app/(pokemon-ds-wide|Info\.plist|LICENSE\.txt|LICENSE-mGBA\.txt|LICENSE-Noto\.txt|AppIcon[0-9.x@~a-z]+\.png|_CodeSignature/(CodeResources)?|data/|data/funcs/|data/funcs/(?:IREO|IRDO|IRBO|IRAO|CPUE|ADAE|APAE|ADAS|APAF|APAS|APAD|ADAD|ADAI|IRAS|CPUS|IREF|IRDF|CPUF|IRBF|IRAF|IRBS|IRES|IRDS|' + regional_codes + r')\.txt)?)?$')
+ok = re.compile(r'^Payload/(Pokemon Fulldex\.app/(pokemon-ds-wide|Info\.plist|LICENSE\.txt|LICENSE-mGBA\.txt|LICENSE-Noto\.txt|FONT-LICENSES\.txt|AppIcon[0-9.x@~a-z]+\.png|_CodeSignature/(CodeResources)?|data/|data/funcs/|data/funcs/(?:IREO|IRDO|IRBO|IRAO|CPUE|ADAE|APAE|ADAS|APAF|APAS|APAD|ADAD|ADAI|IRAS|CPUS|IREF|IRDF|CPUF|IRBF|IRAF|IRBS|IRES|IRDS|' + regional_codes + r')\.txt)?)?$')
 names = zipfile.ZipFile(sys.argv[1]).namelist()
 bad = [n for n in names if not ok.match(n)]
 if bad: sys.exit('unexpected files in the iOS download: %s' % bad)
