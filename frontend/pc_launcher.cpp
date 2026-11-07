@@ -781,6 +781,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     Launcher::PhoneUi() = true; // (a phone: bigger text and buttons, the Tiles layout)
 #endif
     if (getenv("SSR_LIST_PHONE")) Launcher::PhoneUi() = true; // (test)
+#ifdef __SWITCH__
+    Launcher::PhoneUi() = true; // (the Switch: the same bigger text and buttons as a phone, so the menus read in handheld)
+#endif
     const char* testShot = getenv("SSR_LIST_SHOT");
     const char* testPick = listsShown == 1 ? getenv("SSR_LIST_PICK") : nullptr;
     if (const char* t = getenv("SSR_LIST_TAB")) tab = std::max(0, std::min(Launcher::TabCount() - 1, atoi(t)));
@@ -2199,6 +2202,20 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     }
                     if (held) break;
                 }
+                // A page's detail panel upright (a phone): a finger dragged up or down scrolls what is in it.
+                if (Launcher::Glassy(canvas) && !guide && canvas.h > canvas.w && Launcher::Focus().page >= 0 && Launcher::Focus().pdY > 0 && Launcher::Focus().dMax > 0
+                    && !(Launcher::Focus().page == Launcher::SIDE_LAUNCHER && Launcher::LauncherMode() == 1 && Launcher::Look().edit >= 0))
+                {
+                    static bool dOn = false, dDrag = false; static int dY0 = 0, dS0 = 0;
+                    Launcher::GlassFocus& DF = Launcher::Focus();
+                    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) { dOn = my >= DF.pdY; dY0 = my; dS0 = DF.dScroll; dDrag = false; }
+                    else if (e.type == SDL_MOUSEMOTION && dOn)
+                    {
+                        if (!dDrag && std::abs(my - dY0) > 8 * s) { dDrag = true; dragging = true; }
+                        if (dDrag) { DF.dScroll = std::max(0, std::min(DF.dMax, dS0 - (my - dY0))); break; }
+                    }
+                    else if (e.type == SDL_MOUSEBUTTONUP && dOn) { dOn = false; if (dDrag) { dDrag = false; dragging = pressed = false; break; } }
+                }
                 // The ROMs, Hub and Launcher lists: a finger dragged up or down scrolls them (the chosen row stays where the list was put).
                 if (Launcher::Glassy(canvas) && !guide && (Launcher::Focus().page == Launcher::SIDE_ROMS || Launcher::Focus().page == Launcher::SIDE_HUB || Launcher::Focus().page == Launcher::SIDE_LAUNCHER || Launcher::Focus().page == Launcher::SIDE_ABOUT) && Launcher::Focus().rVis > 0)
                 {
@@ -2318,7 +2335,17 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                             if (!Launcher::OpenSide(sd)) note = std::string(Launcher::SideName(sd)) + ": COMING SOON";
                             break;
                         }
-                        const int hit = setMenu.SettingsItemAt(mx, my);
+                        // (A picture card of the preview tapped: that choice, stepping the row on until it shows.)
+                        bool cardHit = false;
+                        if (page.selected >= 0 && page.selected < (int)page.items.size() && page.items[page.selected].key && page.items[page.selected].key[0] != '!')
+                            for (const auto& r : setMenu.pickRects)
+                                if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3])
+                                {
+                                    for (size_t k = 0; k < page.items[page.selected].values.size() && page.ValueIndex(page.items[page.selected]) != r[4]; k++) change(1);
+                                    cardHit = true;
+                                    break;
+                                }
+                        const int hit = cardHit ? -1 : setMenu.SettingsItemAt(mx, my);
                         if (hit >= 0 && hit < (int)setMap.size())
                         {
                             const int item = setMap[hit];
@@ -2589,7 +2616,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
 #ifdef SSR_PHONE
         // Bound software composition work on high density phone displays. (Drawn at 1280 on the long side and
         // stretched 2.3 times on a 2992 wide phone, the writing and icons were soft: 1920 is sharper, 1.6 times.)
-        const double scale = std::min(1.0, 1920.0 / std::max(ow, oh));
+        const double scale = std::min(1.0, 3200.0 / std::max(ow, oh)); // (the phone's own pixels: as sharp as the screen can show)
         ow = std::max(1, (int)(ow * scale));
         oh = std::max(1, (int)(oh * scale));
 #endif
@@ -2640,7 +2667,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             {
                 // (The pause menu's glass settings pages, ui_settings.h, over the chosen game's picture blurred.)
                 setMenu.touchRows = Launcher::PhoneUi() ? 1.5f : 1.0f; // (a phone: rows big enough for a finger, the page larger)
-                setMenu.laneK = Launcher::PhoneUi() ? std::max(0.42f, canvas.h / 720.0f * 0.94f * 1.3f) : 0.0f;
+                setMenu.laneK = Launcher::PhoneUi() ? std::max(0.42f, Launcher::GU(canvas) * (480.0f / 720.0f) * 0.94f * 1.3f) : 0.0f; // (by the launcher's own unit: right upright too)
                 { static int lastSel = -99; if (page.selected != lastSel) { lastSel = page.selected; setMenu.freeScroll = false; } }
                 Launcher::BuildSettingsMenu(setMenu, setMap, page, onBack);
                 Launcher::PreviewFrames(canvas, games);
@@ -2679,7 +2706,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             // (A page opened on a phone held upright: the screen turns sideways for it, back again when it closes.)
             static int lastLand = 0;
             static const bool forceLand = getenv("SSR_ANDROID_LANDSCAPE") != nullptr; // (test)
-            const int wantLand = Launcher::Focus().page >= 0 || forceLand ? 1 : 0;
+            const int wantLand = forceLand ? 1 : 0; // (the pages stay upright now: they have their own upright layouts)
             if (wantLand != lastLand) { lastLand = wantLand; JavaVoid(wantLand ? "showPageOrientation" : "showLauncherOrientation"); }
             // Launcher > Camera Cutout: told to Android when it changes (and once at the start).
             static int lastCut = -1;

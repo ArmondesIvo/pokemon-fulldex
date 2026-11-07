@@ -229,6 +229,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
     padInitializeDefault(&pad);
     Canvas canvas;
     canvas.Resize(1280, 720);
+    Launcher::PhoneUi() = true; // (the same bigger text and buttons as a phone, so the menus read in handheld)
     // The list as shown (the glass launcher's, as the PC's): the games with the player's names,
     // pictures and Home (favourites), those taken off the list left out; kept beside the settings.
     // The chosen game is handed back as its place in gamesIn.
@@ -537,7 +538,17 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             // (The glass settings page: a tap chooses a row, again changes it; BACK goes back.)
             if (tapX >= 0 && Launcher::Glassy(canvas))
             {
-                const int hit = setMenu.SettingsItemAt(tapX, tapY);
+                // (A picture card of the preview tapped: that choice, stepping the row on until it shows.)
+                bool cardHit = false;
+                if (page.selected >= 0 && page.selected < (int)page.items.size() && page.items[page.selected].key && page.items[page.selected].key[0] != '!')
+                    for (const auto& r : setMenu.pickRects)
+                        if (tapX >= r[0] && tapX < r[0] + r[2] && tapY >= r[1] && tapY < r[1] + r[3])
+                        {
+                            for (size_t k = 0; k < page.items[page.selected].values.size() && page.ValueIndex(page.items[page.selected]) != r[4]; k++) change(1);
+                            cardHit = true;
+                            break;
+                        }
+                const int hit = cardHit ? -1 : setMenu.SettingsItemAt(tapX, tapY);
                 if (hit >= 0 && hit < (int)setMap.size())
                 {
                     const int item = setMap[hit];
@@ -1099,6 +1110,8 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                 setKey = keysOpen ? std::string() : setNow;
                 const u64 t0 = armGetSystemTick();
                 // (The pause menu's glass settings pages, ui_settings.h, over the chosen game's picture blurred.)
+                setMenu.touchRows = 1.5f; // (as on a phone: bigger rows, the page larger)
+                setMenu.laneK = std::max(0.42f, Launcher::GU(canvas) * (480.0f / 720.0f) * 0.94f * 1.3f);
                 Launcher::BuildSettingsMenu(setMenu, setMap, page, false);
                 Launcher::DrawSettingsPage(canvas, setMenu, games, tab, scroll, page.group < 0 ? "Settings" : Launcher::SettingsGroups()[page.group].name,
                                            page.group < 0 ? "A: OPEN    B: BACK" : "A: CHANGE    B: BACK", theme);
@@ -1896,9 +1909,23 @@ void ForceExit()
     for (;;) {}
 }
 
+extern "C" void SsrJitRelease();
+
 void Finish()
 {
     JitStarted(); // (an ordinary exit: the JIT did start)
+    SsrJitRelease(); // (the JIT's code memory given back: without that the Homebrew Menu cannot start the game list again)
+    // (A game chosen from the list: its own closing down traced, in exit-trace-game.txt beside the program.)
+    if (g_changeGame && !g_self.empty())
+    {
+        const size_t sl = g_self.find_last_of('/');
+        if (sl != std::string::npos)
+        {
+            snprintf(g_exitTrace, sizeof g_exitTrace, "%s/exit-trace-game.txt", g_self.substr(0, sl).c_str());
+            if (FILE* f = fopen(g_exitTrace, "w")) fclose(f);
+            ExitTrace("game: finish");
+        }
+    }
     // QUIT in the pause menu, for a game chosen from the game list: the Homebrew Menu's loader
     // starts the program again, which shows the list.
     if (g_changeGame && !g_self.empty())

@@ -238,7 +238,7 @@ struct Menu
     float listShare = 0.605f;
     // (Settings pages inside the launcher's own page: the whole area, the list's width and where the
     // preview starts; no panel, header or hint of their own. laneX -1: the usual panel.)
-    int laneX = -1, laneY = 0, laneW = 0, laneH = 0, laneListW = 0, lanePvX = 0;
+    int laneX = -1, laneY = 0, laneW = 0, laneH = 0, laneListW = 0, lanePvX = 0, laneListH = 0, lanePvY = 0; // (laneListH > 0: a tall window, the preview under the rows)
     float touchRows = 1.0f; // (phones: the settings rows this much larger, for a finger)
     float laneK = 0; // (the launcher's settings page on a phone: its own size for the page, 0 for the usual)
     bool freeScroll = false; // (a finger has scrolled the list: the chosen row need not be in view)

@@ -1785,6 +1785,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     {
         listX = px0 + K(14); listW = laneListW - K(28); listBottom = bottom;
         pvX = lanePvX; pvY = py0; pvW = px0 + W0 - pvX; pvH = H0;
+        if (laneListH > 0) { listBottom = py0 + laneListH - K(10); pvY = lanePvY; pvH = py0 + H0 - lanePvY; }
     }
 
     { const double t = MenuProfNow(); MenuProf()[1] += t - profT; profT = t; }
@@ -1846,6 +1847,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     }
     rowY.assign(n, -1);
     ctlW = KR(186);
+    if (c.h > c.w) ctlW = std::max(KR(110), (int)(listW * 0.33f)); // (upright: the value under a third of the row, so the name has room)
     ctlX = listX + listW - KR(14) - ctlW;
     bool firstSection = true;
     for (int i = 0; i < n; i++)

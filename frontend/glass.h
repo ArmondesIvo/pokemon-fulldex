@@ -525,7 +525,7 @@ enum Icon
     I_PLAY, I_SAVE, I_LOAD, I_CHEATS, I_FAST, I_TROPHY, I_GEAR, I_POWER,
     I_BACK, I_MONITOR, I_SCREENS, I_GLOBE, I_RATIO, I_LAYOUT, I_EXPAND, I_FULLSCREEN, I_GRID, I_LAYERS,
     I_PAD, I_GAUGE, I_WINDOW, I_PEOPLE, I_SPARKLE, I_INFO, I_CHEVRON_L, I_CHEVRON_R, I_CHEVRON_U, I_CHEVRON_D, I_POKEBALL, I_CHIP, I_SPEAKER, I_REWIND,
-    I_PAUSE, I_PREV, I_NEXT, I_NOTE, I_CHAT, I_SEARCH, I_SORT,
+    I_PAUSE, I_PREV, I_NEXT, I_NOTE, I_CHAT, I_SEARCH, I_SORT, I_HOME,
     I_COUNT
 };
 // A rhombus centred on (cx, cy), half width a and half height b (close to a true distance).
@@ -730,6 +730,14 @@ inline void DrawIcon(Canvas& c, int icon, float cx, float cy, float size, uint32
             const float tail = std::max(std::min(Segment(u, v, -0.42f, 0.42f, -0.52f, 0.8f, t / 2), Segment(u, v, -0.52f, 0.8f, -0.06f, 0.42f, t / 2)), -(v - 0.4f));
             const float dots = std::min(Circle(u, v, -0.34f, -0.12f, 0.1f), std::min(Circle(u, v, 0, -0.12f, 0.1f), Circle(u, v, 0.34f, -0.12f, 0.1f)));
             return std::min(bubble, std::min(tail, dots));
+        }
+        case I_HOME:
+        {
+            // (A house: a pitched roof over walls, with a door.)
+            const float roof = std::min(Segment(u, v, -0.84f, -0.02f, 0, -0.76f, t / 2), Segment(u, v, 0, -0.76f, 0.84f, -0.02f, t / 2));
+            const float walls = std::min(Segment(u, v, -0.62f, -0.22f, -0.62f, 0.72f, t / 2), std::min(Segment(u, v, 0.62f, -0.22f, 0.62f, 0.72f, t / 2), Segment(u, v, -0.62f, 0.72f, 0.62f, 0.72f, t / 2)));
+            const float door = std::min(Segment(u, v, -0.2f, 0.72f, -0.2f, 0.18f, t / 2), std::min(Segment(u, v, -0.2f, 0.18f, 0.2f, 0.18f, t / 2), Segment(u, v, 0.2f, 0.18f, 0.2f, 0.72f, t / 2)));
+            return std::min(roof, std::min(walls, door));
         }
         case I_POKEBALL:
         {
