@@ -90,7 +90,33 @@ public class GameActivity extends SDLActivity {
         @Override public void onChange(boolean selfChange) { applyScreenOrientation(); }
     };
 
+    // The launcher keeps clear of a camera hole or notch (the system leaves that strip black); a
+    // game runs across the whole screen. SDL asks for the whole screen itself, so this is applied
+    // again whenever the window gains focus.
+    private void applyCutoutMode() {
+        if (Build.VERSION.SDK_INT < 28) return;
+        runOnUiThread(() -> {
+            try {
+                android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                int want = playingGame
+                    ? android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    : android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER;
+                if (lp.layoutInDisplayCutoutMode != want) {
+                    lp.layoutInDisplayCutoutMode = want;
+                    getWindow().setAttributes(lp);
+                }
+            } catch (Exception ignored) { }
+        });
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) applyCutoutMode();
+    }
+
     private void applyScreenOrientation() {
+        applyCutoutMode();
         runOnUiThread(() -> {
             boolean autoRotate = Settings.System.getInt(getContentResolver(),
                 Settings.System.ACCELEROMETER_ROTATION, 0) != 0;
