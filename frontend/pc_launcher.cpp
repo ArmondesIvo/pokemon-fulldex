@@ -2594,6 +2594,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 setMenu.laneK = Launcher::PhoneUi() ? std::max(0.42f, canvas.h / 720.0f * 0.94f * 1.3f) : 0.0f;
                 { static int lastSel = -99; if (page.selected != lastSel) { lastSel = page.selected; setMenu.freeScroll = false; } }
                 Launcher::BuildSettingsMenu(setMenu, setMap, page, onBack);
+                Launcher::PreviewFrames(canvas, games);
                 Launcher::DrawSettingsPage(canvas, setMenu, games, tab, scroll, page.group < 0 ? "Settings" : Launcher::SettingsGroups()[page.group].name,
                                            padIn ? btn(Controls::A) + (page.group < 0 ? ": OPEN    " : ": CHANGE    ") + btn(Controls::B) + ": BACK"
                                                  : std::string(page.group < 0 ? "ENTER: OPEN    ESC: BACK" : "ENTER: CHANGE    ESC: BACK"), theme);

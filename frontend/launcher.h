@@ -7592,6 +7592,61 @@ inline void DrawSettingsPage(Canvas& c, Menu& m, const std::vector<Game>& games,
     m.Draw(c, title, std::string());
     m.laneX = -1;
 }
+// The settings previews draw their pictures from a game's two screens (Canvas::dsTop, dsBottom); the launcher has no
+// game running, so: the top is the game's own picture (the one played last, else the first with art), and the bottom
+// a plain stand-in drawn here (never bundled art). With no picture at all, both are stand-ins.
+inline void PreviewFrames(Canvas& c, const std::vector<Game>& games)
+{
+    int gi = -1;
+    for (size_t i = 0; i < games.size() && gi < 0; i++)
+        if (!games[i].art.empty() && !ContinueRom().empty() && games[i].rom == ContinueRom()) gi = (int)i;
+    for (size_t i = 0; i < games.size() && gi < 0; i++)
+        if (!games[i].art.empty()) gi = (int)i;
+    static std::string key;
+    const std::string k = gi >= 0 ? games[gi].rom : std::string("-");
+    if (c.dsTop.size() == 256 * 192 && c.dsBottom.size() == 256 * 192 && key == k) return;
+    key = k;
+    c.dsTop.assign(256 * 192, 0xFF000000u);
+    c.dsBottom.assign(256 * 192, 0xFF000000u);
+    auto mix = [](uint32_t a, uint32_t b, float t) {
+        uint32_t o = 0xFF000000u;
+        for (int s = 0; s <= 16; s += 8) o |= (uint32_t)((float)(a >> s & 255) * (1 - t) + (float)(b >> s & 255) * t) << s;
+        return o;
+    };
+    for (int y = 0; y < 192; y++)
+        for (int x = 0; x < 256; x++)
+        {
+            // (The top: sky, hills, a path.)
+            uint32_t p = mix(0xFF4F9AD8u, 0xFFBFE4F4u, y / 110.0f);
+            if (y >= 110)
+            {
+                p = mix(0xFF4E9B48u, 0xFF2F6B35u, (y - 110) / 82.0f);
+                if (std::abs(x - 128 - (y - 110) / 3) < 10 + (y - 110) / 5) p = 0xFFC9A66Bu;
+                if ((x / 24 + y / 16) % 7 == 0 && y > 150) p = mix(p, 0xFF000000u, 0.12f);
+            }
+            if ((x - 200) * (x - 200) + (y - 40) * (y - 40) < 18 * 18) p = 0xFFFFF2B8u;
+            if (y >= 92 && y < 110 && (x * 7 + 13) % 64 < 30) p = 0xFF2F7A3Au;
+            c.dsTop[(size_t)y * 256 + x] = p;
+            // (The bottom: a dark screen of rounded tiles and a bar.)
+            uint32_t q = mix(0xFF1B2A46u, 0xFF2C4A78u, y / 191.0f);
+            const int tx = (x - 16) % 76, ty = (y - 20) % 66;
+            if (x >= 16 && x < 240 && y >= 20 && y < 152 && tx < 68 && ty < 54) q = mix(q, 0xFFFFFFFFu, 0.22f);
+            if (y >= 168 && y < 184 && x >= 16 && x < 240) q = mix(q, 0xFFFFFFFFu, 0.30f);
+            c.dsBottom[(size_t)y * 256 + x] = q;
+        }
+    if (gi >= 0)
+    {
+        const Game& g = games[gi];
+        for (int y = 0; y < 192; y++)
+            for (int x = 0; x < 256; x++)
+            {
+                const int sx = std::min(Art - 1, x * Art / 256), sy = std::min(Art - 1, (Art - Art * 3 / 4) / 2 + y * (Art * 3 / 4) / 192);
+                const uint32_t px = g.art[(size_t)sy * Art + sx];
+                c.dsTop[(size_t)y * 256 + x] = mix(0xFF000000u, px | 0xFF000000u, (float)(px >> 24) / 255.0f);
+            }
+    }
+}
+
 inline void BuildSettingsMenu(Menu& m, std::vector<int>& map, const SettingsPage& p, bool onBack)
 {
     m.items.clear();
@@ -7628,6 +7683,13 @@ inline void BuildSettingsMenu(Menu& m, std::vector<int>& map, const SettingsPage
                 for (const auto& v : s.values) it.choices.push_back(v.second);
                 it.choice = vi;
             }
+        }
+        if (s.key && s.key[0] != '!' && p.group >= 0)
+        {
+            const std::string kk = s.key; // (the picture drawn for each choice: the choice's own number)
+            it.preview = kk == "view" ? Menu::P_LAYOUT : kk == "large_screen" ? Menu::P_LARGE : kk == "aspect" ? Menu::P_ASPECT : kk == "fullscreen" ? Menu::P_FULLSCREEN
+                       : kk == "smooth" ? Menu::P_SMOOTH : kk == "battle_buttons" ? Menu::P_BATTLE : kk == "show_fps" ? Menu::P_FPS : kk == "wide" ? Menu::P_WIDE
+                       : kk == "fps60" ? Menu::P_MOTION : -1;
         }
         m.items.push_back(it);
         map.push_back((int)i);
