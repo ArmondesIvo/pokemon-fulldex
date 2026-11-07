@@ -7437,24 +7437,8 @@ inline std::vector<Setting> SettingsList()
     // The interface's language (UiLang, ui_lang.h), the first group in the settings, LANGUAGE, on its own.
     l.insert(l.begin(), { "list_lang", "LANGUAGE", UiLang::Choices(), "auto",
                           "THE LANGUAGE OF THE GAME LIST, THE SETTINGS AND THE PAUSE MENU (NOT OF THE GAMES)." });
-#ifndef __SWITCH__
-    l.push_back({"list_sort","SORT",{{"original","ORIGINAL"},{"favourites","FAVOURITES FIRST"},{"recent","RECENTLY PLAYED"}},"original",
-        "KEEPS THE CONSOLE SECTIONS. ORIGINAL RETAINS THE EXISTING GAME ORDER."});
-    l.push_back({"!favourite","TOGGLE FAVOURITE",{},"","ADDS OR REMOVES THE SELECTED GAME. ALSO F ON A KEYBOARD OR X ON A CONTROLLER."});
-#endif
     size_t extraCount;const auto* extras=OptionalFeatures::Options(extraCount);
     for(size_t i=0;i<extraCount;i++)l.push_back({extras[i].key,extras[i].name,onOff,"0",extras[i].help});
-    // The game list's own look (GAME LIST: ThemeNamed, Background).
-    l.push_back({ "list_colour", "COLOUR", { { "red", "RED" }, { "blue", "BLUE" }, { "green", "GREEN" }, { "purple", "PURPLE" },
-                  { "gold", "GOLD" }, { "pink", "PINK" }, { "teal", "TEAL" } }, "red",
-                  "THE GAME LIST'S COLOUR: ITS LINES, THE FRAME ROUND THE CHOSEN GAME AND THE TABS." });
-#ifdef __SWITCH__
-    l.push_back({ "list_background", "BACKGROUND", { { "plain", "PLAIN" }, { "picture", "YOUR PICTURE" } }, "plain",
-                  "YOUR PICTURE: PUT A PICTURE NAMED BACKGROUND.JPG OR BACKGROUND.PNG IN /SWITCH/POKEMON-DS-WIDE/ (WITH YOUR SAVES). BEST AT 1280 X 720 OR 1920 X 1080 (16:9); ANY SIZE WORKS, CUT TO FILL THE SCREEN. IT IS SHOWN DARKENED BEHIND THE GAMES." });
-#else
-    l.push_back({ "list_background", "BACKGROUND", { { "plain", "PLAIN" }, { "picture", "YOUR PICTURE" } }, "plain",
-                  "YOUR PICTURE: PUT A PICTURE NAMED BACKGROUND.JPG OR BACKGROUND.PNG BESIDE YOUR SAVES FOLDER. BEST AT 1920 X 1080 (16:9); ANY SIZE WORKS, CUT TO FILL THE SCREEN. IT IS SHOWN DARKENED BEHIND THE GAMES." });
-#endif
 #if !defined(__SWITCH__)
     // RetroAchievements from the game list too (pc_launcher.cpp: the login, as the pause menu's).
     l.push_back({ "ra", "RETROACHIEVEMENTS", onOff, "0",
