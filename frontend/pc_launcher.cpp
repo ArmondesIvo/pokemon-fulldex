@@ -2171,6 +2171,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     }
                     else if (e.type == SDL_MOUSEBUTTONUP && lsOn) { lsOn = false; if (dragging) { dragging = pressed = false; break; } }
                 }
+                // The back arrow (a phone sideways): the same as Esc.
+                if (Launcher::Glassy(canvas) && e.type == SDL_MOUSEBUTTONUP && !dragging && Launcher::BackAt(mx, my))
+                {
+                    SDL_Event k; SDL_zero(k);
+                    k.type = SDL_KEYDOWN; k.key.state = SDL_PRESSED; k.key.keysym.sym = SDLK_ESCAPE; k.key.keysym.scancode = SDL_SCANCODE_ESCAPE;
+                    SDL_PushEvent(&k);
+                    break;
+                }
                 // The music bar: previous, play / pause, next.
                 if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging)
                 {

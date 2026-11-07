@@ -4224,6 +4224,15 @@ inline bool NotesScroll(int by)
     return true;
 }
 // B while a page is open: the sidebar first, then back to the games. (False: no page open.)
+// The small back arrow at the bottom right of a page on a phone held sideways (it does what Esc does).
+struct BackBtn { int x = 0, y = 0, s = 0; };
+inline BackBtn& BackRect() { static BackBtn b; return b; }
+inline bool BackAt(int mx, int my)
+{
+    const BackBtn& b = BackRect();
+    const int m = b.s / 4; // (a little more to hit than to see)
+    return b.s > 0 && mx >= b.x - m && mx < b.x + b.s + m && my >= b.y - m && my < b.y + b.s + m;
+}
 inline bool PageBack()
 {
     GlassFocus& F = Focus();
@@ -6451,6 +6460,14 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
 
     // A page of the sidebar (About) in place of the games.
     if (Focus().page >= 0 && !TilesOn()) DrawPage(c, sp, solid, ShortNow() ? u * 1.0f : u); // (a phone sideways: the pages are made for a tall screen, so smaller than the home)
+    BackRect().s = 0;
+    if (ShortNow() && Focus().page >= 0)
+    {
+        const int bs = (int)(34 * u), bx = c.w - (int)(16 * u) - bs, by = c.h - (int)(12 * u) - bs;
+        Glass::Round(c, bx, by, bs, bs, bs * 0.5f, 0x40000000u, 0x80FFFFFFu, 1.5f * u);
+        Glass::DrawIcon(c, Glass::I_BACK, bx + bs * 0.5f, by + bs * 0.5f, 9 * u, text);
+        BackRect() = { bx, by, bs };
+    }
 
     // The banner: the game played last, ready to carry on.
     if (Focus().page < 0 && cont >= 0 && cont < (int)games.size() && !PanelOn() && !TilesOn())
