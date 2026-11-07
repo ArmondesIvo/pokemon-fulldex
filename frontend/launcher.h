@@ -1033,6 +1033,7 @@ struct Grid
     int rowH() const { return tile + labelH + gap; }
     // A card's size and the steps between cards (the classic list: a tile with its name below).
     int cw = 0, ch = 0, colStep = 0, rowStep = 0;
+    bool horiz = false; // (a phone sideways: one row of cards that scrolls along, not down)
 };
 // The glass launcher (DrawGlass) on landscape screens with the clean font; the classic list otherwise.
 inline bool& GlassOn() { static bool on = true; return on; }
@@ -1041,6 +1042,7 @@ inline bool& PhoneUi() { static bool p = false; return p; }
 inline bool& PortraitNow() { static bool p = false; return p; }
 inline bool& ShortNow() { static bool p = false; return p; }
 inline void Orient(const Canvas& c) { PortraitNow() = c.h > c.w; ShortNow() = PhoneUi() && c.h <= c.w; }
+inline bool PhoneLook() { return PortraitNow() || ShortNow(); } // (a phone, or any upright window: the phone layouts, the Sidebar's own pieces made small)
 inline float GU(const Canvas& c) { return c.h > c.w ? c.w / 405.0f : PhoneUi() ? c.h / 480.0f : c.h / 720.0f; } // one design pixel (the designs are 1280 x 720)
 inline bool PanelOn(); // (the Panel layout: Launcher > Layout)
 inline bool PanelHome(); // (the Panel layout, on the home screen: the sidebar's pages keep their sidebar)
@@ -1109,6 +1111,26 @@ inline Grid Layout(const Canvas& c)
         g.tabsY = (int)(28 * u); g.tabsH = (int)(44 * u);
         g.panelX = (int)(204 * u); g.panelW = c.w - g.panelX - (int)(28 * u);
         g.top = (int)(304 * u); g.bottom = c.h - (int)(82 * u);
+        if (PhoneLook())
+        {
+            // A phone. Upright: two columns of cards under the banner, down; sideways: one row of cards under it, along.
+            g.labelH = 0; g.headH = 0;
+            if (c.h > c.w)
+            {
+                g.panelX = (int)(12 * u); g.panelW = c.w - 2 * g.panelX; g.gap = (int)(12 * u);
+                g.top = (int)(356 * u); g.bottom = c.h - (int)(12 * u) - (int)(62 * u) - (int)(6 * u);
+                g.cols = 2; g.cw = (g.panelW - g.gap) / 2; g.tile = g.cw - (int)(16 * u); g.ch = g.tile + (int)(38 * u);
+                g.gx = g.panelX; g.colStep = g.cw + g.gap; g.rowStep = g.ch + (int)(14 * u);
+            }
+            else
+            {
+                g.panelX = (int)(74 * u); g.panelW = c.w - g.panelX - (int)(14 * u); g.gap = (int)(14 * u);
+                g.top = (int)(196 * u); g.tile = (int)(190 * u); g.cw = g.tile + (int)(16 * u); g.ch = g.tile + (int)(38 * u); g.bottom = g.top + g.ch;
+                g.cols = std::max(1, (g.panelW + g.gap) / (g.cw + g.gap)); g.gx = g.panelX; g.colStep = g.cw + g.gap; g.rowStep = g.ch + g.gap;
+                g.horiz = true;
+            }
+            return g;
+        }
         if (PanelHome())
         {
             // The Panel home: one column of plain rows on the left of its panel, the preview on the right.
@@ -1191,6 +1213,12 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
                 if (games[i].platform == p && InTab(games, (int)i, tab)) mine.push_back((int)i);
         }
         if (mine.empty()) { v.heads.push_back({ 0, 0, true }); return v; }
+        if (g.horiz)
+        {
+            for (size_t k = 0; k < mine.size(); k++) v.spots.push_back({ mine[k], g.gx + (int)k * g.colStep, 0, games[mine[k]].platform });
+            v.height = (int)mine.size() * g.colStep;
+            return v;
+        }
         for (size_t k = 0; k < mine.size(); k++)
             v.spots.push_back({ mine[k], g.gx + (int)(k % g.cols) * g.colStep, (int)(k / g.cols) * g.rowStep, games[mine[k]].platform });
         v.height = (int)((mine.size() + g.cols - 1) / g.cols) * g.rowStep;
@@ -1233,14 +1261,14 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
 inline void FollowSelection(const View& v, int selected, int& scroll, bool follow = true)
 {
     const Grid& g = v.g;
-    const int viewH = g.bottom - g.top;
+    const int viewH = g.horiz ? g.panelW : g.bottom - g.top;
     const int k = follow ? v.SpotOf(selected) : -1;
     if (k >= 0)
     {
-        int top = v.spots[k].y;
+        int top = g.horiz ? v.spots[k].x - g.gx : v.spots[k].y;
         for (const View::Head& h : v.heads)
             if (!h.empty && h.platform == v.spots[k].section && top - h.y <= g.headH) top = h.y;
-        const int bottom = v.spots[k].y + g.ch;
+        const int bottom = g.horiz ? v.spots[k].x - g.gx + g.cw : v.spots[k].y + g.ch;
         if (top < scroll) scroll = top;
         if (bottom > scroll + viewH) scroll = bottom - viewH;
     }
@@ -1252,10 +1280,11 @@ inline int TileAt(const View& v, int scroll, int x, int y)
 {
     const Grid& g = v.g;
     if (y < g.top || y >= g.bottom) return -1;
+    if (g.horiz && x < g.panelX) return -1;
     for (const View::Spot& sp : v.spots)
     {
-        const int ty = g.top + sp.y - scroll;
-        if (x >= sp.x && x < sp.x + g.cw && y >= ty && y < ty + g.ch) return sp.game;
+        const int tx = g.horiz ? sp.x - scroll : sp.x, ty = g.horiz ? g.top + sp.y : g.top + sp.y - scroll;
+        if (x >= tx && x < tx + g.cw && y >= ty && y < ty + g.ch) return sp.game;
     }
     return -1;
 }
@@ -1371,6 +1400,7 @@ struct GlassSpots
     int secY = 0, secH = 0;
     std::vector<int> secX, secW; // (the Panel home's sections along the top)
     std::vector<int> secYv; // (the Tiles home's tiles, each its own top: two rows upright)
+    int navX = 0, navY = 0, navW = 0, navH = 0; // (a phone held upright: the bar of sections along the foot)
     int winX = 0, winY = 0, winW = 0, winH = 0, pageTop = 0, pageTitleY = 0, pageBottom = 0; // (the Tiles home's pages: a window over the home)
 };
 inline GlassSpots Spots(const Canvas& c)
@@ -1402,6 +1432,14 @@ inline GlassSpots Spots(const Canvas& c)
     const bool tls = TilesOn();
     if (tls) { s.sideW = 0; s.tabsX = (int)(28 * u); } // (no sidebar: the tabs start at the left edge)
     if (tls && c.h > c.w) { s.tabsX = (int)(12 * u); s.tabsH = (int)(40 * u); }
+    const bool phn = PhoneLook(), phPort = phn && c.h > c.w;
+    if (phn)
+    {
+        // A phone: held upright no sidebar (a bar of sections along the foot); sideways a slim sidebar of icons.
+        s.rowH = (int)(50 * u); s.rowGap = (int)(6 * u); s.firstRow = (int)(10 * u);
+        if (phPort) { s.sideW = 0; s.tabsX = (int)(12 * u); s.tabsY = (int)(10 * u); s.tabsH = (int)(40 * u); }
+        else { s.sideW = (int)(60 * u); s.tabsX = s.sideW + (int)(14 * u); s.tabsY = (int)(8 * u); s.tabsH = (int)(44 * u); }
+    }
     // (The tabs smaller as they grow in number, to leave room for + after them and Search and Sort.)
     const int room = pnl ? pb.x + pb.w - pb.pad - (int)(280 * u) - s.tabsX : c.h > c.w ? c.w - (int)(12 * u) - s.tabsX : c.w - (int)(28 * u) - (int)(470 * u) - s.tabsX;
     s.tabFont = 18 * u;
@@ -1419,6 +1457,26 @@ inline GlassSpots Spots(const Canvas& c)
     s.bannerX = s.tabsX; s.bannerY = (int)(90 * u); s.bannerW = c.w - s.bannerX - (int)(28 * u); s.bannerH = (int)(160 * u);
     s.contX = s.bannerX + (int)(168 * u); s.contY = s.bannerY + (int)(100 * u); s.contW = (int)(150 * u); s.contH = (int)(44 * u);
     s.headY = (int)(266 * u);
+    if (phn)
+    {
+        if (phPort)
+        {
+            s.bannerX = (int)(12 * u); s.bannerY = (int)(112 * u); s.bannerW = c.w - 2 * s.bannerX; s.bannerH = (int)(232 * u);
+            s.contW = (int)(140 * u); s.contH = (int)(42 * u);
+            s.contX = s.bannerX + s.bannerW - (int)(14 * u) - s.contW; s.contY = s.bannerY + s.bannerH - (int)(14 * u) - s.contH;
+            s.navX = (int)(12 * u); s.navW = c.w - 2 * s.navX; s.navH = (int)(62 * u); s.navY = c.h - (int)(12 * u) - s.navH;
+            s.secY = s.navY; s.secH = s.navH;
+            s.secX.assign(SIDES, 0); s.secW.assign(SIDES, 0); s.secYv.assign(SIDES, s.navY);
+            const int tw = (s.navW - (int)(12 * u)) / SIDES;
+            for (int i = 0; i < SIDES; i++) { s.secX[i] = s.navX + (int)(6 * u) + i * tw; s.secW[i] = tw; }
+        }
+        else
+        {
+            s.bannerX = s.tabsX; s.bannerY = (int)(66 * u); s.bannerW = c.w - s.bannerX - (int)(14 * u); s.bannerH = (int)(120 * u);
+            s.contW = (int)(150 * u); s.contH = (int)(44 * u);
+            s.contX = s.bannerX + s.bannerW - (int)(16 * u) - s.contW; s.contY = s.bannerY + (s.bannerH - s.contH) / 2;
+        }
+    }
     if (pnl)
     {
         // The Panel home: the preview's buttons at the foot of its panel.
@@ -1459,9 +1517,9 @@ inline bool Glassy(const Canvas& c);
 inline int SideAt(const Canvas& c, int x, int y)
 {
     if (!Glassy(c)) return -1;
-    if (PanelHome() || TilesHome())
+    if (PanelHome() || TilesHome() || (PhoneLook() && c.h > c.w && Focus().page < 0))
     {
-        // (The Panel home: the sections along the top of its panel; the Tiles home: its tiles.)
+        // (The Panel home: the sections along the top of its panel; the Tiles home: its tiles; a phone upright: its bar.)
         const GlassSpots ps = Spots(c);
         for (int i = 0; i < SIDES; i++)
         {
@@ -1489,7 +1547,7 @@ inline bool ContinueAt(const Canvas& c, int x, int y)
 }
 inline bool GameOptionsAt(const Canvas& c, int x, int y)
 {
-    if (!Glassy(c)) return false;
+    if (!Glassy(c) || PhoneLook()) return false; // (a phone: the banner has Continue only)
     const GlassSpots s = Spots(c);
     const float u = GU(c);
     const int ox = s.contX + s.contW + (int)(10 * u), ow = GW("Game Options", 18 * u, true) + (int)(36 * u);
@@ -1812,9 +1870,9 @@ inline void LookLoad()
     if (const char* e = getenv("SSR_LIST_LAYOUT")) l.layout = !strcmp(e, "panel") ? "panel" : !strcmp(e, "tiles") ? "tiles" : "sidebar"; // (test: shown, not kept)
     if (const char* e = getenv("SSR_LIST_MUSIC")) l.music = !strcmp(e, "top") ? "top" : "corner"; // (test)
 }
-inline bool PanelOn() { LookLoad(); return Look().layout == "panel"; }
+inline bool PanelOn() { LookLoad(); return Look().layout == "panel" && !PhoneLook(); }
 inline bool PanelHome() { return PanelOn() && Focus().page < 0; }
-inline bool TilesOn() { LookLoad(); return Look().layout == "tiles" || PortraitNow() || ShortNow(); }
+inline bool TilesOn() { LookLoad(); return Look().layout == "tiles" && !PhoneLook(); }
 inline bool TilesHome() { return TilesOn() && Focus().page < 0; }
 inline void LookSave()
 {
@@ -6120,9 +6178,11 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     static std::vector<uint32_t> base;
     static std::string baseKey;
     bool solid = c.backdrop.size() == c.px.size();
-    auto visible = [&](const View::Spot& s) { const int y = grid.top + s.y - scroll; return y >= grid.top - 2 && y + grid.ch <= grid.bottom + 2; };
+    auto visible = [&](const View::Spot& s) {
+        if (grid.horiz) { const int x = s.x - scroll; return x >= grid.panelX - 2 && x + grid.cw <= c.w; }
+        const int y = grid.top + s.y - scroll; return y >= grid.top - 2 && y + grid.ch <= grid.bottom + 2; };
     auto drawCard = [&](const View::Spot& s, bool sel) {
-        const int x = s.x, y = grid.top + s.y - scroll;
+        const int x = grid.horiz ? s.x - scroll : s.x, y = grid.horiz ? grid.top + s.y : grid.top + s.y - scroll;
         const Game& g = games[s.game];
         if (PanelHome())
         {
@@ -6170,7 +6230,9 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     auto drawSideRows = [&]() {
         for (int i = 0; i < SIDES; i++)
         {
-            const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + (int)(16 * u), rw = sp.sideW - (int)(32 * u);
+            const bool cmp = sp.sideW < (int)(100 * u); // (a phone sideways: icons only)
+            const int mg = cmp ? (int)(7 * u) : (int)(16 * u);
+            const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + mg, rw = sp.sideW - 2 * mg;
             const int fs = Focus().side;
             const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == (Focus().page >= 0 ? Focus().page : (int)SIDE_HOME);
             const bool lit = fs >= 0 ? i == fs : settingsChosen && i == SIDE_SETTINGS; // (chosen with the arrows)
@@ -6179,8 +6241,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 if (lit) Glass::Glow(c, rx, ry, rw, sp.rowH, 12 * u, u);
                 Glass::Round(c, rx, ry, rw, sp.rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
-            Glass::DrawIcon(c, SideIcon(i), rx + 27 * u, ry + sp.rowH * 0.5f, 12 * u, text);
-            GT(c, rx + (int)(52 * u), ry + sp.rowH * 0.5f, SideName(i), 19 * u, text, true);
+            Glass::DrawIcon(c, SideIcon(i), cmp ? rx + rw * 0.5f : rx + 27 * u, ry + sp.rowH * 0.5f, 12 * u, text);
+            if (!cmp) GT(c, rx + (int)(52 * u), ry + sp.rowH * 0.5f, SideName(i), 19 * u, text, true);
         }
     };
     auto drawSections = [&]() {
@@ -6244,6 +6306,20 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             GT(c, x + (w - GW(lbl, 15 * u, true)) / 2, y + h * 0.73f, lbl, 15 * u, ink, true);
         }
     };
+    auto drawNavBar = [&]() {
+        // (A phone upright: the sections along the foot, icon over name; the shown one in the Buttons' colour, the one chosen with the arrows framed.)
+        for (int i = 0; i < SIDES; i++)
+        {
+            const int x = sp.secX[i], w = sp.secW[i], py = sp.navY + (int)(5 * u), ph = sp.navH - (int)(10 * u);
+            const bool foc = Focus().page < 0 && Focus().side == i, cur = i == (Focus().page >= 0 ? Focus().page : (int)SIDE_HOME);
+            if (foc) { Glass::Glow(c, x, py, w, ph, 14 * u, u); Glass::Round(c, x, py, w, ph, 14 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u); }
+            else if (cur) Glass::Surface(c, 3, x, py, w, ph, 14 * u, Glass::Button());
+            const uint32_t ink = cur && !foc ? Glass::ButtonInk() : text;
+            Glass::DrawIcon(c, SideIcon(i), x + w * 0.5f, py + ph * 0.36f, 9 * u, ink);
+            const std::string lbl = SideName(i);
+            GT(c, x + (w - GW(lbl, 10 * u, true)) / 2, py + ph * 0.78f, lbl, 10 * u, ink, true);
+        }
+    };
     auto drawBannerButtons = [&]() {
         if (cont < 0 || cont >= (int)games.size() || Focus().page >= 0) return;
         const bool played = !ContinueRom().empty() && games[cont].rom == ContinueRom();
@@ -6251,6 +6327,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         Glass::Surface(c, 3, sp.contX, sp.contY, sp.contW, sp.contH, 12 * u, Glass::Button()); // (the Buttons: a colour or a picture)
         Glass::DrawIcon(c, Glass::I_PLAY, sp.contX + 30 * u, sp.contY + sp.contH * 0.5f, 8 * u, Glass::ButtonInk());
         GT(c, sp.contX + (int)(48 * u), sp.contY + sp.contH * 0.5f, played ? "Continue" : "Play", 18 * u, Glass::ButtonInk(), true);
+        if (PhoneLook()) return; // (a phone: Continue only; a game's menu is on its card)
         const int ox = sp.contX + sp.contW + (int)(10 * u), ow = GW("Game Options", 18 * u, true) + (int)(36 * u);
         if (Focus().banner == 2)
         {
@@ -6261,7 +6338,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         GT(c, ox + (int)(18 * u), sp.contY + sp.contH * 0.5f, "Game Options", 18 * u, text, true);
     };
     auto moreBelow = [&]() {
-        if (TilesHome()) return;
+        if (TilesHome() || grid.horiz) return;
         if (scroll + (grid.bottom - grid.top) < v.height - grid.gap)
             Glass::Round(c, (PanelHome() ? grid.gx : sp.tabsX) + grid.cols * grid.colStep / 2 - (int)(16 * u), grid.bottom + (int)(4 * u), (int)(32 * u), (int)(4 * u), 2 * u, 0x80FFFFFFu);
     };
@@ -6281,6 +6358,11 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         // The Panel home: one glass panel holds everything (no sidebar: its sections run along the top).
         const PanelBox pb = PanelGeometry(c);
         Menu::FrostBox(c, solid, pb.x, pb.y, pb.w, pb.h, 22 * u);
+    }
+    else if (PhoneLook() && c.h > c.w)
+    {
+        // A phone upright: one frosted bar along the foot holds the sections.
+        if (Focus().page < 0) Menu::FrostBox(c, solid, sp.navX, sp.navY, sp.navW, sp.navH, 26 * u);
     }
     else if (TilesOn())
     {
@@ -6323,29 +6405,46 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     }
 
     // A page of the sidebar (About) in place of the games.
-    if (Focus().page >= 0 && !TilesOn()) DrawPage(c, sp, solid, u);
+    if (Focus().page >= 0 && !TilesOn()) DrawPage(c, sp, solid, ShortNow() ? u * 0.72f : u); // (a phone sideways: the pages are made for a tall screen, so smaller than the home)
 
     // The banner: the game played last, ready to carry on.
     if (Focus().page < 0 && cont >= 0 && cont < (int)games.size() && !PanelOn() && !TilesOn())
     {
         const Game& g = games[cont];
         Menu::FrostBox(c, solid, sp.bannerX, sp.bannerY, sp.bannerW, sp.bannerH, 18 * u);
-        const int ax = sp.bannerX + (int)(16 * u), ay = sp.bannerY + (int)(16 * u), ah = sp.bannerH - (int)(32 * u), aw = ah;
+        const bool phP = PhoneLook() && c.h > c.w, phL = PhoneLook() && !phP; // (a phone: upright the cover wide over the name; sideways the cover wide beside it)
+        const int ax = sp.bannerX + (int)((phP ? 14 : 16) * u), ay = sp.bannerY + (int)((phP ? 14 : 16) * u);
+        const int ah = phP ? (int)(130 * u) : sp.bannerH - (int)(32 * u), aw = phP ? sp.bannerW - (int)(28 * u) : phL ? ah * 16 / 9 : ah;
         DrawCover(c, g, ax, ay, aw, ah, 12 * u);
-        const int tx = ax + aw + (int)(24 * u);
+        const int tx = phP ? ax : ax + aw + (int)(24 * u);
         const bool played = !ContinueRom().empty() && g.rom == ContinueRom();
         const std::string meta = std::string(played ? "Continue Playing" : "Ready To Play") + "   \xC2\xB7   " + PlatformName(g.platform)
                                + "   \xC2\xB7   " + (HubCloudOf(g) == 2 ? "Cloud Save: Changed On Both" : HubCloudOf(g) ? "Cloud Save" : g.hasSave ? "Save Found" : "New Game");
+        if (phP)
+        {
+            const std::string sv = HubCloudOf(g) == 2 ? "Cloud Save: Changed On Both" : HubCloudOf(g) ? "Cloud Save" : g.hasSave ? "Save Found" : "New Game";
+            GT(c, tx, ay + ah + 18 * u, played ? "Continue Playing" : "Ready To Play", 13 * u, hint, true);
+            GTFit(c, tx, ay + ah + 46 * u, ShortName(g), 28 * u, sp.contX - tx - (int)(10 * u), text, true);
+            GT(c, tx, ay + ah + 74 * u, std::string(PlatformName(g.platform)) + "   \xC2\xB7   " + sv, 13 * u, hint, true);
+        }
+        else if (phL)
+        {
+            GT(c, tx, sp.bannerY + 36 * u, meta, 14 * u, hint, true);
+            GTFit(c, tx, sp.bannerY + 70 * u, ShortName(g), 30 * u, sp.contX - tx - (int)(16 * u), text, true);
+        }
+        else
+        {
         GT(c, tx, sp.bannerY + 30 * u, meta, 16 * u, hint, true);
         GT(c, tx, sp.bannerY + 66 * u, ShortName(g), 36 * u, text, true);
+        }
         // (Continue and Game Options: drawBannerButtons, over the kept picture.)
     }
 
     if (Focus().page < 0)
     {
     // "Your Games" and how many.
-    if (!PanelOn() && !TilesOn()) GT(c, sp.tabsX, sp.headY + 14 * u, SearchText().empty() ? std::string("Your Games") : "Results For \"" + SearchText() + "\"", 24 * u, text, true);
-    if (!PanelOn() && !TilesOn())
+    if (!PanelOn() && !TilesOn() && !PhoneLook()) GT(c, sp.tabsX, sp.headY + 14 * u, SearchText().empty() ? std::string("Your Games") : "Results For \"" + SearchText() + "\"", 24 * u, text, true);
+    if (!PanelOn() && !TilesOn() && !PhoneLook())
     {
         const std::string n = std::to_string(v.spots.size()) + (v.spots.size() == 1 ? " Game" : " Games");
         GT(c, sp.bannerX + sp.bannerW - GW(n, 16 * u, true), sp.headY + 14 * u, n, 16 * u, hint, true);
@@ -6392,11 +6491,19 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 DrawMusicBar(c, (c.w - bw2) / 2, by2, bw2, bh2, u);
             }
         }
+    } else if (PhoneLook() && c.h > c.w)
+    {
+        if (Focus().page < 0)
+        {
+            drawNavBar(); drawBannerButtons();
+            // NOW PLAYING: a strip just over the bar of sections.
+            if (Music().shown && !Music().idle) { const int mh = (int)(36 * u); DrawMusicBar(c, sp.navX, sp.navY - (int)(8 * u) - mh, sp.navW, mh, u); }
+        }
     } else
     {
         drawSideRows(); drawBannerButtons();
         // NOW PLAYING: a square at the foot of the sidebar, almost to its edges.
-        if (Music().shown && !Music().idle && Look().music != "top")
+        if (Music().shown && !Music().idle && Look().music != "top" && !ShortNow())
         {
             const int m0 = (int)(10 * u), sz = sp.sideW - 2 * m0;
             DrawMusicSquare(c, sp.sideX + m0, c.h - m0 - sz, sz, u);
@@ -6485,7 +6592,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         tool(2, searchX, searchW, searchL, -1);
         tool(3, sortX, sortW, sortL, Glass::I_LAYERS);
         // NOW PLAYING along the top (Launcher > Music Player > Top): between the tabs and Search / Sort.
-        if (Look().music == "top" && !pnl && Music().shown && !Music().idle)
+        if ((Look().music == "top" || ShortNow()) && !pnl && Music().shown && !Music().idle)
         {
             const int mx = sp.tabX[last] + sp.tabW[last] + (int)(10 * u) + bh + (int)(14 * u), avail = searchX - (int)(14 * u) - mx;
             if (avail >= (int)(200 * u)) { const int mw = std::min(avail, (int)(400 * u)); DrawMusicBar(c, mx + (avail - mw) / 2, by, mw, bh, u); }
@@ -6497,8 +6604,9 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         if (k >= 0 && visible(v.spots[k]) && Focus().page < 0 && !TilesOn())
         {
             const View::Spot& s = v.spots[k];
-            const int m = (int)(7 * u), x0 = std::max(0, s.x - m), x1 = std::min(c.w, s.x + grid.cw + m);
-            const int y = grid.top + s.y - scroll, y0 = std::max(0, y - m), y1 = std::min(c.h, y + grid.ch + m);
+            const int sx = grid.horiz ? s.x - scroll : s.x;
+            const int m = (int)(7 * u), x0 = std::max(0, sx - m), x1 = std::min(c.w, sx + grid.cw + m);
+            const int y = grid.horiz ? grid.top + s.y : grid.top + s.y - scroll, y0 = std::max(0, y - m), y1 = std::min(c.h, y + grid.ch + m);
             if (solid && !PanelHome())
                 for (int yy = y0; yy < y1; yy++)
                     std::copy(c.backdrop.begin() + (size_t)yy * c.w + x0, c.backdrop.begin() + (size_t)yy * c.w + x1, c.px.begin() + (size_t)yy * c.w + x0);
@@ -6516,7 +6624,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         {
             static const int icons[] = { Glass::I_PLAY, Glass::I_POKEBALL, Glass::I_SPARKLE, Glass::I_WINDOW, Glass::I_SAVE, Glass::I_LAYERS, Glass::I_BACK };
             const Game& g = games[selected];
-            const int cx = v.spots[k].x, cyy = grid.top + v.spots[k].y - scroll;
+            const int cx = grid.horiz ? v.spots[k].x - scroll : v.spots[k].x, cyy = grid.horiz ? grid.top + v.spots[k].y : grid.top + v.spots[k].y - scroll;
             const int n = PopupCount(), rowH = (int)(44 * u), rg = (int)(4 * u), pad = (int)(8 * u), pw = (int)(250 * u);
             const int ph = n * rowH + (n - 1) * rg + 2 * pad;
             int px = cx + grid.cw + (int)(12 * u);

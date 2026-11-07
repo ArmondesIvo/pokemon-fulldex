@@ -2232,6 +2232,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     // (The glass settings page: a tap or click chooses a row, again changes it; BACK goes back.)
                     if (e.type == SDL_MOUSEBUTTONUP)
                     {
+                        // (A section of the sidebar: the settings close and it opens, no Back first.)
+                        const int sd = Launcher::SideAt(canvas, mx, my);
+                        if (sd >= 0 && sd != Launcher::SIDE_SETTINGS)
+                        {
+                            guide = false; onBack = false; Launcher::Focus().side = -1;
+                            if (!Launcher::OpenSide(sd)) note = std::string(Launcher::SideName(sd)) + ": COMING SOON";
+                            break;
+                        }
                         const int hit = setMenu.SettingsItemAt(mx, my);
                         if (hit >= 0 && hit < (int)setMap.size())
                         {
@@ -2293,21 +2301,23 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 // A finger (or the mouse, held) dragged up or down scrolls the list; it chooses
                 // nothing and plays nothing.
                 const bool leftDown = e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT;
+                const bool hz = Launcher::Glassy(canvas) && Launcher::Layout(canvas).horiz; // (a phone sideways: the row of cards scrolls along)
                 if (leftDown && my >= (Launcher::Glassy(canvas) ? Launcher::Layout(canvas).top : 22 * s))
                 {
-                    downY = my;
+                    downY = hz ? mx : my;
                     downScroll = scroll;
                     pressed = true;
                     dragging = false;
                 }
                 else if (e.type == SDL_MOUSEMOTION && pressed)
                 {
-                    if (!dragging && std::abs(my - downY) > 8 * s) dragging = true;
+                    const int curP = hz ? mx : my;
+                    if (!dragging && std::abs(curP - downY) > 8 * s) dragging = true;
                     if (dragging)
                     {
                         follow = false;
                         tapPlay = -1;
-                        scroll = std::max(0, downScroll - (my - downY));
+                        scroll = std::max(0, downScroll - (curP - downY));
                         break;
                     }
                 }
