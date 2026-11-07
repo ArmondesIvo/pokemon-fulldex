@@ -1089,9 +1089,9 @@ inline TilesBox TilesGeometry(const Canvas& c)
     else if (ShortNow())
     {
         // A phone sideways: everything smaller down the screen.
-        b.coverY = (int)(60 * u); b.cover = (int)(140 * u);
-        b.nameY = (int)(224 * u); b.metaY = (int)(246 * u); b.btnY = (int)(262 * u);
-        b.tileH = (int)(74 * u); b.tileY = c.h - (int)(68 * u) - b.tileH; b.musicH = (int)(30 * u);
+        b.coverY = (int)(84 * u); b.cover = (int)(150 * u);
+        b.nameY = (int)(258 * u); b.metaY = (int)(279 * u); b.btnY = (int)(296 * u);
+        b.tileH = (int)(74 * u); b.tileY = c.h - (int)(20 * u) - b.tileH; b.musicH = (int)(34 * u);
     }
     return b;
 }
@@ -6652,7 +6652,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             Glass::DrawIcon(c, Glass::I_INFO, x0 + 9 * u, cy, 9 * u, text);
             GT(c, x0 + (int)(26 * u), cy, n, 16 * u, text, true);
         }
-        else if (c.h <= c.w) // (not upright: it is a touch screen)
+        else if (c.h <= c.w && !ShortNow()) // (not upright or a phone sideways: it is a touch screen)
         {
             const std::string all = !hintText.empty() ? hintText : "A: PLAY    Y: SETTINGS    L / R: TABS    +: QUIT";
             struct Item { std::string key, act; };

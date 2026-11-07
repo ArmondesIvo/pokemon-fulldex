@@ -2116,6 +2116,26 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     }
                     break;
                 }
+                // The Tiles home: a finger flicked sideways over the covers goes along the games.
+                if (Launcher::Glassy(canvas) && !guide && Launcher::TilesHome())
+                {
+                    static bool swOn = false;
+                    static int swX = 0, swY = 0;
+                    const Launcher::TilesBox tb = Launcher::TilesGeometry(canvas);
+                    const float su = Launcher::GU(canvas);
+                    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) { swOn = my >= tb.coverY - (int)(10 * su) && my < tb.tileY; swX = mx; swY = my; }
+                    else if (e.type == SDL_MOUSEBUTTONUP && swOn)
+                    {
+                        swOn = false;
+                        const int dx = mx - swX, dy = my - swY;
+                        if (std::abs(dx) > (int)(48 * su) && std::abs(dx) > std::abs(dy) * 3 / 2)
+                        {
+                            move(dx < 0 ? 2 : 1); // (left: the next game)
+                            tapPlay = -1; pressed = dragging = false;
+                            break;
+                        }
+                    }
+                }
                 // The Updates page's What's New: a click chooses it (again: the release page), dragging scrolls it.
                 if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_UPDATES)
                 {
