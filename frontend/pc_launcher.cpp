@@ -666,6 +666,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     // The program's own icon (resource 1, when it was built with one) for its windows.
     SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");
     SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
+    // Windows' own screen scaling (150% on a 4K screen) otherwise draws the window small and stretches it, soft:
+    // asked for as it is, per monitor, the launcher draws at the screen's real pixels. (A hint older SDL ignores.)
+    SDL_SetHint("SDL_WINDOWS_DPI_AWARENESS", "permonitorv2");
     #endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0)
     {
@@ -673,6 +676,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         return -1;
     }
     UiLang::DetectSystem();
+#ifdef _WIN32
+    // (Real pixels now, so a window of 1280 x 720 would show smaller on a scaled screen: as big as it was.)
+    if (!fullscreen)
+    {
+        float ddpi = 96.0f;
+        if (SDL_GetDisplayDPI(0, &ddpi, nullptr, nullptr) == 0 && ddpi > 96.0f) { winW = (int)(winW * ddpi / 96.0f); winH = (int)(winH * ddpi / 96.0f); }
+    }
+#endif
     SDL_Window* window = SDL_CreateWindow("Pokémon Fulldex", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winW, winH,
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
     if (!window)
@@ -2576,8 +2587,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         SDL_GetRendererOutputSize(renderer, &ow, &oh);
 #endif
 #ifdef SSR_PHONE
-        // Bound software composition work on high density phone displays.
-        const double scale = std::min(1.0, 1280.0 / std::max(ow, oh));
+        // Bound software composition work on high density phone displays. (Drawn at 1280 on the long side and
+        // stretched 2.3 times on a 2992 wide phone, the writing and icons were soft: 1920 is sharper, 1.6 times.)
+        const double scale = std::min(1.0, 1920.0 / std::max(ow, oh));
         ow = std::max(1, (int)(ow * scale));
         oh = std::max(1, (int)(oh * scale));
 #endif
