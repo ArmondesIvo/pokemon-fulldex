@@ -646,7 +646,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "0");
     fullscreen = true;
     // No ROM folder yet, or no access to files: the list asks for them (GameActivity).
-    bool needFolder = fo.roms.empty() || !JavaBool("canUseFiles");
+    bool needFolder = (fo.roms.empty() || !JavaBool("canUseFiles")) && !getenv("SSR_ANDROID_ROMS");
     bool wasPicking = false;
     Uint32 lastFolderCheck = 0;
 #elif defined(SSR_IOS)
@@ -761,6 +761,10 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     // (after the pick, the next time) in that picture and closes it.
     static int listsShown = 0;
     listsShown++;
+#if defined(__ANDROID__) || defined(SSR_IOS)
+    Launcher::PhoneUi() = true; // (a phone: bigger text and buttons, the Tiles layout)
+#endif
+    if (getenv("SSR_LIST_PHONE")) Launcher::PhoneUi() = true; // (test)
     const char* testShot = getenv("SSR_LIST_SHOT");
     const char* testPick = listsShown == 1 ? getenv("SSR_LIST_PICK") : nullptr;
     if (const char* t = getenv("SSR_LIST_TAB")) tab = std::max(0, std::min(Launcher::TabCount() - 1, atoi(t)));
@@ -2424,7 +2428,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         {
             lastFolderCheck = SDL_GetTicks();
             SetRomFolder(fo);
-            needFolder = fo.roms.empty() || !JavaBool("canUseFiles");
+            needFolder = (fo.roms.empty() || !JavaBool("canUseFiles")) && !getenv("SSR_ANDROID_ROMS");
             if (!needFolder)
             {
                 MakeDir(fo.saves);
@@ -2555,6 +2559,15 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         else
         {
             FillUpdateStatus();
+#ifdef __ANDROID__
+        {
+            // (A page opened on a phone held upright: the screen turns sideways for it, back again when it closes.)
+            static int lastLand = 0;
+            static const bool forceLand = getenv("SSR_ANDROID_LANDSCAPE") != nullptr; // (test)
+            const int wantLand = Launcher::Focus().page >= 0 || forceLand ? 1 : 0;
+            if (wantLand != lastLand) { lastLand = wantLand; JavaVoid(wantLand ? "showGameOrientation" : "showLauncherOrientation"); }
+        }
+#endif
             // NOW PLAYING: the music app's song, now and then, for the bar on the home screen (SSR_LIST_NOWPLAYING: a made-up song, for the test picture).
             {
                 Launcher::MusicBar& MB = Launcher::Music();
@@ -2804,6 +2817,20 @@ bool Start(int& argc, char**& argv)
         const char* own = SDL_AndroidGetInternalStoragePath();
         fo.dir = ext ? ext : own ? own : ".";
     }
+    // (Test: <the app's folder>/test-env.txt, lines NAME=value, set as environment variables: the SSR_LIST_* test hooks, and
+    // SSR_ANDROID_ROMS=<a folder> to use it as the ROMs folder without the picker.)
+    if (FILE* tf = fopen((fo.dir + "/test-env.txt").c_str(), "r"))
+    {
+        char ln[512];
+        while (fgets(ln, sizeof ln, tf))
+        {
+            std::string t = ln;
+            while (!t.empty() && (t.back() == '\n' || t.back() == '\r')) t.pop_back();
+            const size_t eq = t.find('=');
+            if (eq != std::string::npos && eq > 0 && t[0] != '#') setenv(t.substr(0, eq).c_str(), t.substr(eq + 1).c_str(), 1);
+        }
+        fclose(tf);
+    }
     fo.funcs = fo.dir + "/data/funcs";
     fo.cfg = fo.dir + "/settings.cfg";
     MakeDir(fo.dir);
@@ -2811,6 +2838,7 @@ bool Start(int& argc, char**& argv)
     MakeDir(fo.funcs);
     ExtractFuncs(fo);
     SetRomFolder(fo);
+    if (const char* ar = getenv("SSR_ANDROID_ROMS")) { fo.roms = ar; fo.saves = fo.roms + "/saves"; fo.art = fo.roms; MakeDir(fo.roms); }
     if (!fo.roms.empty()) MakeDir(fo.saves);
 #else
     fo.dir = ProgramDir();

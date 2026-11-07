@@ -1036,6 +1036,12 @@ struct Grid
 };
 // The glass launcher (DrawGlass) on landscape screens with the clean font; the classic list otherwise.
 inline bool& GlassOn() { static bool on = true; return on; }
+// A phone: its text and buttons bigger (the design 480 high sideways, 405 wide upright), the Tiles layout whichever way it is held.
+inline bool& PhoneUi() { static bool p = false; return p; }
+inline bool& PortraitNow() { static bool p = false; return p; }
+inline bool& ShortNow() { static bool p = false; return p; }
+inline void Orient(const Canvas& c) { PortraitNow() = c.h > c.w; ShortNow() = PhoneUi() && c.h <= c.w; }
+inline float GU(const Canvas& c) { return c.h > c.w ? c.w / 405.0f : PhoneUi() ? c.h / 480.0f : c.h / 720.0f; } // one design pixel (the designs are 1280 x 720)
 inline bool PanelOn(); // (the Panel layout: Launcher > Layout)
 inline bool PanelHome(); // (the Panel layout, on the home screen: the sidebar's pages keep their sidebar)
 inline bool TilesOn(); // (the Tiles layout: Launcher > Layout)
@@ -1048,7 +1054,7 @@ struct PanelBox
 };
 inline PanelBox PanelGeometry(const Canvas& c)
 {
-    const float u = c.h / 720.0f;
+    const float u = GU(c);
     PanelBox b;
     b.pad = (int)(16 * u);
     b.x = (int)(28 * u); b.y = (int)(24 * u); b.w = c.w - 2 * b.x; b.h = c.h - (int)(70 * u) - b.y;
@@ -1062,25 +1068,43 @@ inline PanelBox PanelGeometry(const Canvas& c)
 }
 // The Tiles home: the chosen game's cover large in the middle of a row of covers, its name and the buttons under it,
 // a row of tiles (one per section) along the foot.
-struct TilesBox { int coverY, cover, nameY, metaY, btnY, tileY, tileH; };
+struct TilesBox { int coverY, cover, nameY, metaY, btnY, tileY, tileH; int cols = 7, rows = 1, gapT = 14, musicH = 46; };
 inline TilesBox TilesGeometry(const Canvas& c)
 {
-    const float u = c.h / 720.0f;
+    const float u = GU(c);
     TilesBox b;
     b.coverY = (int)(90 * u); b.cover = (int)(250 * u);
     b.nameY = (int)(378 * u); b.metaY = (int)(408 * u); b.btnY = (int)(432 * u);
     b.tileH = (int)(96 * u); b.tileY = c.h - (int)(70 * u) - b.tileH;
+    b.musicH = (int)(46 * u);
+    Orient(c);
+    if (c.h > c.w)
+    {
+        // Held upright: the tiles two rows of four.
+        b.coverY = (int)(112 * u); b.cover = (int)(190 * u);
+        b.nameY = b.coverY + b.cover + (int)(28 * u); b.metaY = b.nameY + (int)(28 * u); b.btnY = b.metaY + (int)(24 * u);
+        b.cols = 4; b.rows = 2; b.gapT = (int)(8 * u); b.tileH = (int)(76 * u);
+        b.tileY = c.h - (int)(64 * u) - b.rows * b.tileH - (b.rows - 1) * b.gapT;
+    }
+    else if (ShortNow())
+    {
+        // A phone sideways: everything smaller down the screen.
+        b.coverY = (int)(60 * u); b.cover = (int)(140 * u);
+        b.nameY = (int)(224 * u); b.metaY = (int)(246 * u); b.btnY = (int)(262 * u);
+        b.tileH = (int)(74 * u); b.tileY = c.h - (int)(68 * u) - b.tileH; b.musicH = (int)(30 * u);
+    }
     return b;
 }
-inline bool Glassy(const Canvas& c) { return GlassOn() && c.w > c.h && Menu::Clean; } // (Menu::Clean, not UseClean: Japanese and Korean are drawn smooth here too, with the launcher's CJK font)
+inline bool Glassy(const Canvas& c) { Orient(c); return GlassOn() && Menu::Clean; } // (Menu::Clean, not UseClean: Japanese and Korean are drawn smooth here too, with the launcher's CJK font)
 inline int GlassTabAt(const Canvas& c, int x, int y);
 inline Grid Layout(const Canvas& c)
 {
+    Orient(c);
     Grid g;
     g.s = std::max(1, std::min(c.w, c.h) / 240); // the font's scale: 3 at 720 lines
     if (Glassy(c))
     {
-        const float u = c.h / 720.0f;
+        const float u = GU(c);
         g.gap = (int)(14 * u); g.labelH = 0; g.headH = 0;
         g.tabsY = (int)(28 * u); g.tabsH = (int)(44 * u);
         g.panelX = (int)(204 * u); g.panelW = c.w - g.panelX - (int)(28 * u);
@@ -1298,7 +1322,6 @@ inline int SideIcon(int i)
     static const int ic[] = { Glass::I_POKEBALL, Glass::I_PEOPLE, Glass::I_CHIP, Glass::I_LOAD, Glass::I_GEAR, Glass::I_LAYOUT, Glass::I_INFO };
     return ic[i];
 }
-inline float GU(const Canvas& c) { return c.h / 720.0f; } // one design pixel (the designs are 1280 x 720)
 inline int GPx(float px) { return std::max(6, (int)(px + 0.5f)); }
 // (Each in the player's language: LauncherText.)
 inline int GW(const std::string& s, float px, bool bold) { return CleanFont::Width(LauncherText::Tr(s), GPx(px), bold); }
@@ -1347,10 +1370,12 @@ struct GlassSpots
     int headY;
     int secY = 0, secH = 0;
     std::vector<int> secX, secW; // (the Panel home's sections along the top)
+    std::vector<int> secYv; // (the Tiles home's tiles, each its own top: two rows upright)
     int winX = 0, winY = 0, winW = 0, winH = 0, pageTop = 0, pageTitleY = 0, pageBottom = 0; // (the Tiles home's pages: a window over the home)
 };
 inline GlassSpots Spots(const Canvas& c)
 {
+    Orient(c);
     const float u = GU(c);
     GlassSpots s;
     // (The sidebar flush with the screen's left, top and bottom edges; its rows start level with the tabs.)
@@ -1376,12 +1401,13 @@ inline GlassSpots Spots(const Canvas& c)
     }
     const bool tls = TilesOn();
     if (tls) { s.sideW = 0; s.tabsX = (int)(28 * u); } // (no sidebar: the tabs start at the left edge)
+    if (tls && c.h > c.w) { s.tabsX = (int)(12 * u); s.tabsH = (int)(40 * u); }
     // (The tabs smaller as they grow in number, to leave room for + after them and Search and Sort.)
-    const int room = pnl ? pb.x + pb.w - pb.pad - (int)(280 * u) - s.tabsX : c.w - (int)(28 * u) - (int)(470 * u) - s.tabsX;
+    const int room = pnl ? pb.x + pb.w - pb.pad - (int)(280 * u) - s.tabsX : c.h > c.w ? c.w - (int)(12 * u) - s.tabsX : c.w - (int)(28 * u) - (int)(470 * u) - s.tabsX;
     s.tabFont = 18 * u;
     float pad = 40 * u;
     auto total = [&]() { int w = 0; for (int t = 0; t < TabCount(); t++) w += GW(TabLabel(t), s.tabFont, true) + (int)pad + (int)(2 * u); return w; };
-    while (total() > room && s.tabFont > 12 * u) { s.tabFont -= u; pad = std::max(20 * u, pad - 2 * u); }
+    while (total() > room && s.tabFont > (c.h > c.w ? 11 : 12) * u) { s.tabFont -= u; pad = std::max((c.h > c.w ? 8 : 20) * u, pad - 2 * u); }
     int x = s.tabsX + (int)(4 * u);
     s.tabX.assign(TabCount(), 0); s.tabW.assign(TabCount(), 0);
     for (const int t : TabOrder()) // (in the order shown; each kept at its own number)
@@ -1404,9 +1430,17 @@ inline GlassSpots Spots(const Canvas& c)
         // The Tiles home: a tile for each section along the foot, the buttons centred under the chosen game.
         const TilesBox tb = TilesGeometry(c);
         s.secY = tb.tileY; s.secH = tb.tileH;
-        s.secX.assign(SIDES, 0); s.secW.assign(SIDES, 0);
-        const int m = (int)(28 * u), gap = (int)(14 * u), tw = (c.w - 2 * m - (SIDES - 1) * gap) / SIDES;
-        for (int i = 0; i < SIDES; i++) { s.secX[i] = m + i * (tw + gap); s.secW[i] = tw; }
+        s.secX.assign(SIDES, 0); s.secW.assign(SIDES, 0); s.secYv.assign(SIDES, tb.tileY);
+        if (tb.rows > 1)
+        {
+            const int m = (int)(12 * u), gap = tb.gapT, tw = (c.w - 2 * m - (tb.cols - 1) * gap) / tb.cols;
+            for (int i = 0; i < SIDES; i++) { s.secX[i] = m + (i % tb.cols) * (tw + gap); s.secW[i] = tw; s.secYv[i] = tb.tileY + (i / tb.cols) * (tb.tileH + gap); }
+        }
+        else
+        {
+            const int m = (int)(28 * u), gap = (int)(14 * u), tw = (c.w - 2 * m - (SIDES - 1) * gap) / SIDES;
+            for (int i = 0; i < SIDES; i++) { s.secX[i] = m + i * (tw + gap); s.secW[i] = tw; }
+        }
         s.contH = (int)(44 * u); s.contW = (int)(150 * u);
         const int ow = GW("Game Options", 18 * u, true) + (int)(36 * u);
         s.contX = (c.w - (s.contW + (int)(10 * u) + ow)) / 2; s.contY = tb.btnY;
@@ -1429,9 +1463,11 @@ inline int SideAt(const Canvas& c, int x, int y)
     {
         // (The Panel home: the sections along the top of its panel; the Tiles home: its tiles.)
         const GlassSpots ps = Spots(c);
-        if (y >= ps.secY && y < ps.secY + ps.secH)
-            for (int i = 0; i < SIDES; i++)
-                if (x >= ps.secX[i] && x < ps.secX[i] + ps.secW[i]) return i;
+        for (int i = 0; i < SIDES; i++)
+        {
+            const int ty = i < (int)ps.secYv.size() ? ps.secYv[i] : ps.secY;
+            if (y >= ty && y < ty + ps.secH && x >= ps.secX[i] && x < ps.secX[i] + ps.secW[i]) return i;
+        }
         return -1;
     }
     const GlassSpots s = Spots(c);
@@ -1778,7 +1814,7 @@ inline void LookLoad()
 }
 inline bool PanelOn() { LookLoad(); return Look().layout == "panel"; }
 inline bool PanelHome() { return PanelOn() && Focus().page < 0; }
-inline bool TilesOn() { LookLoad(); return Look().layout == "tiles"; }
+inline bool TilesOn() { LookLoad(); return Look().layout == "tiles" || PortraitNow() || ShortNow(); }
 inline bool TilesHome() { return TilesOn() && Focus().page < 0; }
 inline void LookSave()
 {
@@ -6168,7 +6204,9 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const TilesBox tb = TilesGeometry(c);
         const int k = v.SpotOf(selected);
         if (k < 0) return;
-        const int S = tb.cover, cx = c.w / 2, cyc = tb.coverY + S / 2, nearW = (int)(168 * u), farW = (int)(112 * u), sp1 = (int)(24 * u), sp2 = (int)(16 * u);
+        const int S = tb.cover, cx = c.w / 2, cyc = tb.coverY + S / 2;
+        const float ks = std::min(1.0f, S / (250.0f * u)); // (the covers either side smaller with the middle one)
+        const int nearW = (int)(168 * u * ks), farW = (int)(112 * u * ks), sp1 = (int)(24 * u * ks), sp2 = (int)(16 * u * ks);
         for (int d = -2; d <= 2; d++)
         {
             const int j = k + d;
@@ -6196,14 +6234,14 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         // (The Tiles home's row of tiles, the chosen one with the arrows framed; its glass is in the kept picture.)
         for (int i = 0; i < SIDES; i++)
         {
-            const int x = sp.secX[i], y = sp.secY, w = sp.secW[i], h = sp.secH, r = (int)(16 * u);
+            const int x = sp.secX[i], y = sp.secYv[i], w = sp.secW[i], h = sp.secH, r = (int)(16 * u);
             const bool foc = Focus().page < 0 && Focus().side == i, cur = i == (Focus().page >= 0 ? Focus().page : (int)SIDE_HOME);
             if (foc) { Glass::Glow(c, x, y, w, h, r, u); Glass::Round(c, x, y, w, h, r, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u); }
             else if (cur) Glass::Surface(c, 3, x, y, w, h, r, Glass::Button());
             const uint32_t ink = cur && !foc ? Glass::ButtonInk() : text;
-            Glass::DrawIcon(c, SideIcon(i), x + w * 0.5f, y + 36 * u, 13 * u, ink);
+            Glass::DrawIcon(c, SideIcon(i), x + w * 0.5f, y + h * 0.375f, 13 * u, ink);
             const std::string lbl = i == SIDE_HOME ? "Library" : SideName(i);
-            GT(c, x + (w - GW(lbl, 15 * u, true)) / 2, y + 70 * u, lbl, 15 * u, ink, true);
+            GT(c, x + (w - GW(lbl, 15 * u, true)) / 2, y + h * 0.73f, lbl, 15 * u, ink, true);
         }
     };
     auto drawBannerButtons = [&]() {
@@ -6247,7 +6285,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     else if (TilesOn())
     {
         // The Tiles home: no sidebar; a frosted tile for each section along the foot.
-        for (int i = 0; i < SIDES; i++) Menu::FrostBox(c, solid, sp.secX[i], sp.secY, sp.secW[i], sp.secH, 16 * u);
+        for (int i = 0; i < SIDES; i++) Menu::FrostBox(c, solid, sp.secX[i], sp.secYv[i], sp.secW[i], sp.secH, 16 * u);
     }
     else
     {
@@ -6262,7 +6300,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     // The tabs, as pills: the shown one white.
     {
         // (A bar along the top, flush with the screen's top and right edges, meeting the sidebar.)
-        const int barX = sp.sideX + sp.sideW, barW = c.w - barX, barH = sp.tabsY * 2 + sp.tabsH, line = std::max(1, (int)u);
+        const int barX = sp.sideX + sp.sideW, barW = c.w - barX, barH = sp.tabsY * 2 + sp.tabsH + (c.h > c.w ? (int)(44 * u) : 0), line = std::max(1, (int)u);
         if (!PanelHome())
         {
         if (solid) Glass::Frost(c, barX, 0, barW, barH, 0);
@@ -6346,10 +6384,10 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         {
             drawTiles(); drawBannerButtons();
             // NOW PLAYING: centred above the tile row, under the buttons.
-            if (Music().shown && !Music().idle && Look().music != "top")
+            if (Music().shown && !Music().idle && (Look().music != "top" || c.h > c.w))
             {
                 const TilesBox tb = TilesGeometry(c);
-                const int bh2 = (int)(46 * u), bw2 = std::min((int)(480 * u), c.w - (int)(120 * u));
+                const int bh2 = tb.musicH, bw2 = std::min((int)(480 * u), c.w - (int)((c.h > c.w ? 24 : 120) * u));
                 const int by2 = (tb.btnY + (int)(44 * u) + tb.tileY) / 2 - bh2 / 2;
                 DrawMusicBar(c, (c.w - bw2) / 2, by2, bw2, bh2, u);
             }
@@ -6411,8 +6449,9 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     {
         const bool pnl = PanelHome();
         const PanelBox pb = PanelGeometry(c);
-        const int barH = sp.tabsY * 2 + sp.tabsH, bh = (int)(40 * u), by = pnl ? sp.tabsY + (sp.tabsH - bh) / 2 : (barH - bh) / 2;
-        const int toolR = pnl ? pb.x + pb.w - pb.pad : c.w - (int)(28 * u);
+        const bool prt = c.h > c.w; // (upright: Search and Sort on a row of their own under the tabs)
+        const int barH = sp.tabsY * 2 + sp.tabsH, bh = prt ? (int)(36 * u) : (int)(40 * u), by = prt ? sp.tabsY + sp.tabsH + (int)(8 * u) : pnl ? sp.tabsY + (sp.tabsH - bh) / 2 : (barH - bh) / 2;
+        const int toolR = pnl ? pb.x + pb.w - pb.pad : c.w - (int)((prt ? 12 : 28) * u);
         const bool pnlTool = pnl;
         auto tool = [&](int k, int bx, int bw, const std::string& label, int icon) {
             GlassFocus& F = Focus();
@@ -6442,7 +6481,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const std::string searchL = q.empty() ? std::string("Search") : "\"" + q + "\"";
         const int searchW = GW(searchL, tpx, true) + (int)(pnl ? 26 : 36) * u, searchX = sortX - (int)(10 * u) - searchW;
         const int last = LastTab();
-        tool(1, sp.tabX[last] + sp.tabW[last] + (int)(10 * u), bh, "+", -1);
+        tool(1, prt ? (int)(12 * u) : sp.tabX[last] + sp.tabW[last] + (int)(10 * u), bh, "+", -1);
         tool(2, searchX, searchW, searchL, -1);
         tool(3, sortX, sortW, sortL, Glass::I_LAYERS);
         // NOW PLAYING along the top (Launcher > Music Player > Top): between the tabs and Search / Sort.
@@ -6613,7 +6652,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             Glass::DrawIcon(c, Glass::I_INFO, x0 + 9 * u, cy, 9 * u, text);
             GT(c, x0 + (int)(26 * u), cy, n, 16 * u, text, true);
         }
-        else
+        else if (c.h <= c.w) // (not upright: it is a touch screen)
         {
             const std::string all = !hintText.empty() ? hintText : "A: PLAY    Y: SETTINGS    L / R: TABS    +: QUIT";
             struct Item { std::string key, act; };
