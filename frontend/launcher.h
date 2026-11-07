@@ -1865,7 +1865,7 @@ inline void LookFrom(const std::map<std::string, std::string>& p)
     l.fontSize = std::max(85, std::min(120, atoi(get("font_size", "100").c_str())));
     l.badges = get("badges", "on") != "off";
     { const std::string lv = get("layout", l.layout); l.layout = lv == "panel" || lv == "tiles" ? lv : "sidebar"; }
-    { const std::string mv = get("music", l.music); l.music = mv == "top" || mv == "compact" || mv == "off" ? mv : "corner"; }
+    { const std::string mv = get("music", l.music); l.music = mv == "top" || mv == "compact" || mv == "compactb" || mv == "off" ? mv : "corner"; }
     LookApply();
 }
 inline void LookLoad()
@@ -1876,7 +1876,7 @@ inline void LookLoad()
     l.from = HubDir();
     LookFrom(ReadPairs(HubDir() + "/fulldex-look.txt"));
     if (const char* e = getenv("SSR_LIST_LAYOUT")) l.layout = !strcmp(e, "panel") ? "panel" : !strcmp(e, "tiles") ? "tiles" : "sidebar"; // (test: shown, not kept)
-    if (const char* e = getenv("SSR_LIST_MUSIC")) l.music = !strcmp(e, "top") || !strcmp(e, "compact") || !strcmp(e, "off") ? e : "corner"; // (test)
+    if (const char* e = getenv("SSR_LIST_MUSIC")) l.music = !strcmp(e, "top") || !strcmp(e, "compact") || !strcmp(e, "compactb") || !strcmp(e, "off") ? e : "corner"; // (test)
 }
 inline bool PanelOn() { LookLoad(); return Look().layout == "panel" && !PhoneLook(); }
 inline bool PanelHome() { return PanelOn() && Focus().page < 0; }
@@ -3048,7 +3048,7 @@ inline int LookDo(int row, int dir)
     {
         // (The menu: Layout, Theme Editor, My Themes, Theme Gallery.)
         if (row == 0) { l.layout = l.layout == "tiles" ? "sidebar" : "tiles"; LookSave(); Hub().version++; return 0; }
-        if (row == 4) { l.music = l.music == "corner" ? "top" : l.music == "top" ? "compact" : l.music == "compact" ? "off" : "corner"; LookSave(); Hub().version++; return 0; }
+        if (row == 4) { l.music = l.music == "corner" ? "top" : l.music == "top" ? "compact" : l.music == "compact" ? "compactb" : l.music == "compactb" ? "off" : "corner"; LookSave(); Hub().version++; return 0; }
         if (row == 1) LauncherMode() = 1;
         else if (row == 2) { LauncherMode() = 2; ThemesRefresh(); }
         else { LauncherMode() = 5; Focus().prow = 0; Focus().rScroll = 0; Themes().msg.clear(); GalleryOpen(); } // (the Theme Gallery)
@@ -5097,24 +5097,24 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 row(1, Glass::I_SPARKLE, "Theme Editor", "Colours, pictures, blur and the rest of the launcher's look", "");
                 row(2, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
                 row(3, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Online");
-                row(4, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits, a slim set of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact" : Look().music == "off" ? "Off" : "Bottom Left");
+                row(4, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: full size, a small pill of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact Top" : Look().music == "compactb" ? "Compact Bottom" : Look().music == "off" ? "Off" : "Bottom Left");
                 static const char* const titles[5] = { "Layout", "Theme Editor", "My Themes", "Theme Gallery", "Music Player" };
                 static const char* const about[5] = {
                     "How the home screen is set out. Sidebar: the Continue Playing banner above a grid of games. Tiles: one game at a time in a carousel, with a row of tiles for the sections under it. Choose it to switch.",
                     "Change the launcher's look: the accent, the panels, the sidebar and the top bar, the buttons, the background, its blur and dim, and the glass's grain. Each can be a colour or a picture.",
                     "Keep the look you have now as a theme, with its pictures, and switch between your themes. Each is one .zip file you can send to a friend.",
                     "Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.",
-                    "Shows the song playing on your device with previous, play and next. Bottom Left: a square at the foot of the sidebar. Top: a bar along the top. Compact: just previous, play and next in a small pill. Off: no player. Its buttons use your Buttons look from the Theme Editor." };
+                    "Shows the song playing on your device with previous, play and next. Bottom Left: a square at the foot of the sidebar. Top: a bar along the top. Compact Top and Compact Bottom: just previous, play and next in a small pill, along the top or at the foot of the sidebar. Off: no player. Its buttons use your Buttons look from the Theme Editor." };
                 GT(c, ix, y + 14 * u, titles[F.prow], 22 * u, text, true);
                 y += (int)(44 * u);
                 para(about[F.prow], text, 14 * u);
                 if (F.prow == 4)
                 {
                     // (A small picture of each choice, the chosen one outlined.)
-                    static const char* const keys[4] = { "corner", "top", "compact", "off" };
-                    static const char* const names[4] = { "Bottom Left", "Top", "Compact", "Off" };
-                    const int gp = (int)(10 * u), tw = (iw - 3 * gp) / 4, th = (int)(tw * 0.64f);
-                    for (int k = 0; k < 4; k++)
+                    static const char* const keys[5] = { "corner", "top", "compact", "compactb", "off" };
+                    static const char* const names[5] = { "Bottom Left", "Top", "Compact Top", "Compact Bottom", "Off" };
+                    const int gp = (int)(8 * u), tw = (iw - 4 * gp) / 5, th = (int)(tw * 0.64f);
+                    for (int k = 0; k < 5; k++)
                     {
                         const int tx = ix + k * (tw + gp), ty = y + (int)(6 * u);
                         const bool on = Look().music == keys[k];
@@ -5132,10 +5132,15 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                         if (k == 0) Glass::Round(c, sx + (int)(2 * u), sy + sh - sw + (int)(2 * u), sw - (int)(4 * u), sw - (int)(4 * u), 3 * u, lit, 0, 0);
                         else if (k == 1) Glass::Round(c, gx + gw / 4, sy + (int)(bh * 0.2f), gw / 2, (int)(bh * 0.6f), bh * 0.3f, lit, 0, 0);
                         else if (k == 2) Glass::Round(c, gx + gw - gw / 4 - (int)(2 * u), sy + (int)(bh * 0.2f), gw / 4, (int)(bh * 0.6f), bh * 0.3f, lit, 0, 0);
-                        const float lp = 12 * u;
-                        GT(c, tx + (tw - GW(names[k], lp, on)) / 2, ty + th + (int)(10 * u), names[k], lp, on ? text : hint, on);
+                        else if (k == 3) { const int pw = sw - (int)(4 * u), ph = std::max(2, (int)(pw * 0.4f)); Glass::Round(c, sx + (int)(2 * u), sy + sh - ph - (int)(2 * u), pw, ph, ph * 0.5f, lit, 0, 0); }
+                        const float lp = 11 * u;
+                        const std::string nm = names[k];
+                        const size_t sp1 = nm.find(' ');
+                        const std::string l1 = sp1 == std::string::npos ? nm : nm.substr(0, sp1), l2 = sp1 == std::string::npos ? std::string() : nm.substr(sp1 + 1);
+                        GT(c, tx + (tw - GW(l1, lp, on)) / 2, ty + th + (int)(10 * u), l1, lp, on ? text : hint, on);
+                        if (!l2.empty()) GT(c, tx + (tw - GW(l2, lp, on)) / 2, ty + th + (int)(24 * u), l2, lp, on ? text : hint, on);
                     }
-                    y += (int)(6 * u) + th + (int)(30 * u);
+                    y += (int)(6 * u) + th + (int)(40 * u);
                 }
             }
             else
@@ -6702,7 +6707,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 const TilesBox tb = TilesGeometry(c);
                 const int bh2 = tb.musicH, bw2 = std::min((int)(480 * u), c.w - (int)((c.h > c.w ? 24 : 120) * u));
                 const int by2 = (tb.btnY + (int)(44 * u) + tb.tileY) / 2 - bh2 / 2;
-                if (Look().music == "compact") { const int mw2 = 3 * (int)(bh2 * 0.9f); DrawMusicButtons(c, (c.w - mw2) / 2, by2, mw2, bh2, u); }
+                if (Look().music == "compact" || Look().music == "compactb") { const int mw2 = 3 * (int)(bh2 * 0.9f); DrawMusicButtons(c, (c.w - mw2) / 2, by2, mw2, bh2, u); }
                 else DrawMusicBar(c, (c.w - bw2) / 2, by2, bw2, bh2, u);
             }
         }
@@ -6715,7 +6720,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             if (Music().shown && !Music().idle && Look().music != "off")
             {
                 const int mh = (int)(36 * u);
-                if (Look().music == "compact") { const int mw = 3 * (int)(mh * 0.9f); DrawMusicButtons(c, sp.navX + (sp.navW - mw) / 2, sp.navY - (int)(8 * u) - mh, mw, mh, u); }
+                if (Look().music == "compact" || Look().music == "compactb") { const int mw = 3 * (int)(mh * 0.9f); DrawMusicButtons(c, sp.navX + (sp.navW - mw) / 2, sp.navY - (int)(8 * u) - mh, mw, mh, u); }
                 else DrawMusicBar(c, sp.navX, sp.navY - (int)(8 * u) - mh, sp.navW, mh, u);
             }
         }
@@ -6727,6 +6732,11 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         {
             const int m0 = (int)(10 * u), sz = sp.sideW - 2 * m0;
             DrawMusicSquare(c, sp.sideX + m0, c.h - m0 - sz, sz, u);
+        }
+        else if (Music().shown && !Music().idle && Look().music == "compactb" && !ShortNow())
+        {
+            const int m0 = (int)(10 * u), pw = sp.sideW - 2 * m0, ph = std::min((int)(44 * u), pw * 10 / 27);
+            DrawMusicButtons(c, sp.sideX + m0, c.h - m0 - ph, pw, ph, u);
         }
     }
     // The Panel home's preview: the chosen game beside the list (its buttons: drawBannerButtons).
