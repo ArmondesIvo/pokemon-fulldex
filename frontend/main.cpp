@@ -377,6 +377,8 @@ static int KeyFromName(const std::string& n)
 }
 
 // Script lines: "<first frame> <last frame> KEY [KEY...]" or "<first> <last> touch <x> <y>"
+static std::vector<int> g_touchOnlyFuncs; // functions of screens played only by touch (see their lookup)
+
 static std::vector<ScriptEvent> LoadScript(const std::string& path)
 {
     std::vector<ScriptEvent> out;
@@ -1168,6 +1170,7 @@ struct AutoFocus
     int pending = 0;           // frames the opposite decision has been stable
     std::vector<const RcApp*> bottomApps;
     std::vector<const RcApp*> athlonApps;
+    std::vector<const RcApp*> touchOnlyApps; // played only by touch: the stick touch cursor comes on there
 
     void Init()
     {
@@ -1187,6 +1190,10 @@ struct AutoFocus
         for (unsigned i = 0; i < rc_num_apps; i++)
             if (!strcmp(rc_apps[i].name, "PokeathlonCourse") || !strcmp(rc_apps[i].name, "PokeathlonUnkApp"))
                 athlonApps.push_back(&rc_apps[i]);
+        // The Ruins of Alph's sliding puzzle takes no buttons at all, not even to quit (GitHub #108).
+        for (unsigned i = 0; i < rc_num_apps; i++)
+            if (!strcmp(rc_apps[i].name, "AlphPuzzle") || !strcmp(rc_apps[i].name, "TrainerCardSignature"))
+                touchOnlyApps.push_back(&rc_apps[i]);
     }
 
     // A HeartGold/SoulSilver text box on the top screen: white across its middle rows and the
@@ -2776,6 +2783,7 @@ int main(int argc, char** argv)
     // (worked out each frame before the scene is chosen).
     bool appBottomNow = false;
     bool athlonNow = false;   // a Pokeathlon course or its Pokemon chooser is running
+    bool touchOnlyNow = false; // a touch-only game (the Ruins of Alph puzzle) is running
     // The command strip's own cursor: d-pad presses seen by the frontend this frame, and the
     // selection they have moved it to (reset whenever the ROM's published selection changes).
     std::string stripNav; int stripSel = 0, stripPubSel = -1, stripPubMenu = 0;
@@ -2868,6 +2876,19 @@ int main(int argc, char** argv)
                 bw2.weatherObj.push_back(bw2Find((std::string(w) + phase).c_str()));
         bw1.Init(opt.rom, funcWatch, bw2Names, opt.config); // Pokemon Black and White: their own functions too
         pt.Init(opt.rom, funcWatch, bw2Names);              // Pokemon Platinum: its own functions
+        // Screens played only by touch, with no buttons at all: there the stick touch cursor comes
+        // on by itself (GitHub #108). Diamond, Pearl and Platinum: cooking Poffins, digging in the
+        // Underground, the contests' dressing up, the Ball Capsules' seals and the Trainer Card's
+        // signature; Black and White: the Musical's dressing up (Nimbasa City, in the story) and
+        // the signature. (HeartGold and SoulSilver's are applications: AutoFocus::touchOnlyApps.)
+        g_touchOnlyFuncs.clear();
+        for (const char* n : { "PoffinBerrySelection_RunPoffinCookingApp", "Mining_GameTask", "VisualCompetition_Main",
+                               "CapsuleMenu_Main", "SignatureApp_Main", "MUSICAL_DRESSUP_SYS_Main",
+                               "TRCARD_SYS_StateWaitEditProc" })
+        {
+            const int f = funcWatch.Find(n);
+            if (f >= 0) g_touchOnlyFuncs.push_back(f);
+        }
         // (Platinum has functions with Black 2's names, StartMenu_Main and CARD_WaitBackupAsync
         // among them: Black 2's layouts must not pick them up.)
         if (pt.on) bw2 = Bw2Funcs();
@@ -9162,7 +9183,7 @@ int main(int argc, char** argv)
             // The Pokeathlon is played only by touch: there the stick touch cursor is on whatever
             // the setting says (for a controller with no mouse or touch screen). The setting itself
             // is not changed, so it is back as it was once the course ends.
-            const bool padTouchNow = cfg.padTouch || athlonNow;
+            const bool padTouchNow = cfg.padTouch || athlonNow || touchOnlyNow;
             // (SWAP SCREENS given a button of its own in CONTROLS works without the touch cursor.)
             if (!padTouchNow && cfg.controls.pad[Controls::SWAP] >= 0 && pressed(PAD_RS)) focus.manualFlip = !focus.manualFlip;
             if (padTouchNow)
@@ -10083,15 +10104,21 @@ int main(int argc, char** argv)
                 if (appActive(app->name)) athlon = true;
             if (focus.AthlonBottom(athlon, top, bot)) appBottom = true;
             athlonNow = athlon;
-            // The stick touch cursor came on for the course (the setting is off): say how it is used,
-            // where there is no touch screen to tap instead.
+            bool touchOnly = false;
+            for (const RcApp* app : focus.touchOnlyApps)
+                if (appActive(app->name)) touchOnly = true;
+            for (int f : g_touchOnlyFuncs)
+                if (funcWatch.Ran(f, 2)) touchOnly = true;
+            touchOnlyNow = touchOnly;
+            // The stick touch cursor came on for the course or the puzzle (the setting is off): say
+            // how it is used, where there is no touch screen to tap instead.
             static bool prevAthlon = false;
-            if (athlon && !prevAthlon && !cfg.padTouch && SDL_GetNumTouchDevices() == 0)
+            if ((athlon || touchOnly) && !prevAthlon && !cfg.padTouch && SDL_GetNumTouchDevices() == 0)
             {
                 toast = "RIGHT STICK: MOVE THE CURSOR / LEFT TRIGGER: TOUCH";
                 toastUntil = frame + 300;
             }
-            prevAthlon = athlon;
+            prevAthlon = athlon || touchOnly;
         }
         appBottomNow = appBottom;
         {
