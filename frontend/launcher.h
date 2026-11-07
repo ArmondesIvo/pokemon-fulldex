@@ -253,6 +253,7 @@ struct Game
     std::string where;
     // A game on its way (AddComingSoon): its tile says so and it cannot be played.
     bool comingSoon = false;
+    long long soonAt = 0; // (UTC seconds) a game coming on a set day: its tile counts down to it
     bool favourite = false;
     std::string customName; // the player's own name for it (Rename; fulldex-names.txt), empty: its own
     // Its own picture as found (art, hasIcon), kept so Change Picture can put it back (ApplyArt).
@@ -445,7 +446,43 @@ inline void AddComingSoon(std::vector<Game>& games)
     g.rom = "coming-soon:ECRA"; // (never a file: so never the last game played, nor started)
     g.name = "POKEMON OMEGA RUBY";
     g.comingSoon = true;
+    g.soonAt = 1794441600LL; // (12 November 2026, 00:00 UTC: Omega Ruby and Alpha Sapphire come together)
     games.push_back(std::move(g));
+    // Alpha Sapphire, the same day.
+    Game a;
+    a.platform = N3DS;
+    a.code = "ECLA";
+    a.rom = "coming-soon:ECLA";
+    a.name = "POKEMON ALPHA SAPPHIRE";
+    a.comingSoon = true;
+    a.soonAt = 1794441600LL;
+    games.push_back(std::move(a));
+}
+
+// The day it comes, as "Release: 12 Nov 2026" ("" without a day, or once it has come).
+inline std::string ComingSoonDate(const Game& g)
+{
+    if (!g.comingSoon || g.soonAt <= 0 || g.soonAt <= (long long)std::time(nullptr)) return "";
+    long long z = g.soonAt / 86400 + 719468; // (days to a calendar date, in UTC)
+    const long long era = (z >= 0 ? z : z - 146096) / 146097, doe = z - era * 146097;
+    const long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365, doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const long long mp = (5 * doy + 2) / 153, day = doy - (153 * mp + 2) / 5 + 1, mon = mp < 10 ? mp + 3 : mp - 9;
+    const long long year = yoe + era * 400 + (mon <= 2 ? 1 : 0);
+    static const char* const names[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+    return "Release: " + std::to_string(day) + " " + names[mon - 1] + " " + std::to_string(year);
+}
+// What goes over the picture of a game on its way: Coming Soon, or the time left when it has a day
+// (soonAt), by the minute: 4d 9h 12m. Once the day has come: Coming Soon again.
+inline std::string ComingSoonText(const Game& g)
+{
+    if (!g.comingSoon) return "";
+    const long long left = g.soonAt > 0 ? g.soonAt - (long long)std::time(nullptr) : 0;
+    if (left <= 0) return "Coming Soon";
+    const long long mins = (left + 59) / 60;
+    const long long d = mins / 1440, h = (mins % 1440) / 60, m = mins % 60;
+    if (d > 0) return std::to_string(d) + "d " + std::to_string(h) + "h " + std::to_string(m) + "m";
+    if (h > 0) return std::to_string(h) + "h " + std::to_string(m) + "m";
+    return std::to_string(m) + "m";
 }
 
 // The games this program plays, in the order the list shows them.
@@ -1363,6 +1400,15 @@ inline void GT(Canvas& c, int x, float cy, const std::string& s, float px, uint3
     CleanFont::Draw(c, x, (int)(cy + CleanFont::CapHeight(GPx(px), bold) * 0.5f), LauncherText::Tr(s), GPx(px), col, bold);
 }
 // Text kept within w: a little smaller first, then cut with "..." (the longer languages' lines).
+// Coming Soon over a picture, centred on cx, cy: with a day, the release date over the countdown.
+inline void DrawComingSoon(Canvas& c, const Game& g, int cx, float cy, float px, uint32_t col)
+{
+    const std::string count = ComingSoonText(g), date = ComingSoonDate(g);
+    if (date.empty()) { GT(c, cx - GW(count, px, true) / 2, cy, count, px, col, true); return; }
+    const float small = px * 0.8f;
+    GT(c, cx - GW(date, small, true) / 2, cy - px * 0.75f, date, small, col, true);
+    GT(c, cx - GW(count, px, true) / 2, cy + px * 0.6f, count, px, col, true);
+}
 inline void GTFit(Canvas& c, int x, float cy, const std::string& s0, float px, int w, uint32_t col, bool bold)
 {
     std::string s = LauncherText::Tr(s0);
@@ -6490,7 +6536,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                     + "/t" + Focus().pageTitle + "/h" + HubSig() + (Focus().page == SIDE_HUB ? std::to_string(Mover().open) + std::to_string(HubMode()) + "," + std::to_string(Focus().pact) + "," + std::to_string(Focus().rScroll) : std::string()) + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
                     + (Focus().page == SIDE_ROMS ? "/r" + std::to_string(Focus().pact) + "," + std::to_string(RomList().size()) + ","
                        + std::to_string(std::count_if(RomList().begin(), RomList().end(), [](const Game& g) { return g.hidden; })) : std::string());
-    for (const Game& g : games) key += "|" + g.rom + g.customName + (g.favourite ? "*" : "") + sig(g);
+    for (const Game& g : games) key += "|" + g.rom + g.customName + (g.favourite ? "*" : "") + sig(g) + (g.soonAt ? ComingSoonText(g) : std::string());
     static std::vector<uint32_t> base;
     static std::string baseKey;
     bool solid = c.backdrop.size() == c.px.size();
@@ -6523,7 +6569,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         if (g.comingSoon)
         {
             Glass::Round(c, ix, iy, iw, ih, 10 * u, 0x99000000u);
-            GT(c, ix + (iw - GW("Coming Soon", 14 * u, true)) / 2, iy + ih * 0.5f, "Coming Soon", 14 * u, text, true);
+            DrawComingSoon(c, g, ix + iw / 2, iy + ih * 0.5f, 14 * u, text);
         }
         const float cy = iy + ih + 16 * u;
         std::string name = ShortName(g);
@@ -6597,7 +6643,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             DrawCover(c, g, x, y, w, w, (d == 0 ? 20 : 14) * u);
             if (g.comingSoon) Glass::Round(c, x, y, w, w, (d == 0 ? 20 : 14) * u, 0x99000000u);
             else if (d != 0) Glass::Round(c, x, y, w, w, 14 * u, a == 1 ? 0x70000000u : 0xA0000000u);
-            if (d == 0 && g.comingSoon) GT(c, x + (w - GW("Coming Soon", 16 * u, true)) / 2, y + w * 0.5f, "Coming Soon", 16 * u, text, true);
+            if (d == 0 && g.comingSoon) DrawComingSoon(c, g, x + w / 2, y + w * 0.5f, 16 * u, text);
             if (d == 0 && g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - 18 * u, y + 18 * u, 8 * u, 0xFFFFFFFFu);
         }
         const Game& g = games[v.spots[k].game];
@@ -6882,7 +6928,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             if (g.comingSoon)
             {
                 Glass::Round(c, ix + (iw - cov) / 2, py0 + (ph - cov) / 2, cov, cov, 12 * u, 0x99000000u);
-                GT(c, ix + (iw - GW("Coming Soon", 16 * u, true)) / 2, py0 + ph * 0.5f, "Coming Soon", 16 * u, text, true);
+                DrawComingSoon(c, g, ix + iw / 2, py0 + ph * 0.5f, 16 * u, text);
             }
             float ty = (float)(py0 + ph + 34 * u);
             GTFit(c, ix, ty, ShortName(g), 34 * u, iw, text, true);
@@ -7272,7 +7318,8 @@ inline void DrawClassic(Canvas& c, const std::vector<Game>& games, int tab, int 
                     uint32_t& p = c.px[(size_t)(y + py) * c.w + x + px];
                     p = 0xFF000000u | ((p >> 1) & 0x7F7F7F);
                 }
-            const std::string soon = "COMING SOON";
+            std::string soon = ComingSoonText(g);
+            for (char& ch : soon) ch = (char)toupper((unsigned char)ch);
             const int bs = Canvas::TextWidth(soon, s) + 8 * s <= tile ? s : std::max(1, s - 1);
             c.Fill(x, y + tile / 2 - 8 * bs, tile, 16 * bs, th.band);
             c.Text(x + (tile - Canvas::TextWidth(soon, bs)) / 2, y + tile / 2 - 4 * bs, soon, bs, th.title);

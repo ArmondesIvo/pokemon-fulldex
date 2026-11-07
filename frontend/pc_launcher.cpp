@@ -515,8 +515,9 @@ std::vector<Launcher::Game> FindGames(const Folders& fo, std::map<std::string, s
     }
 #endif
     Launcher::AddComingSoon(games);
+    for (Launcher::Game& g : games)
     {
-        Launcher::Game& g = games.back();
+        if (!g.comingSoon) continue;
         auto it = artCache.find("coming-soon:" + g.code);
         if (it == artCache.end())
         {
