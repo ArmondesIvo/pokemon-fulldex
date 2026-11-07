@@ -800,7 +800,15 @@ void Stop()
     // (On the Switch, letting it go (detach) never returned: the program stopped there for good
     // when it ended. The thread is kept instead, in an object never destroyed, so that nothing
     // waits for it: the program's end takes it down.)
-    if (g_worker.joinable()) new std::thread(std::move(g_worker));
+    // (Idle, it ends by itself the moment it is told to quit: joined, so no thread of ours is
+    // still running when the program hands back to the Homebrew Menu. In a request, given two
+    // seconds, then kept as before.)
+    if (g_worker.joinable())
+    {
+        for (int i = 0; i < 40 && g_busy.load(); i++) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!g_busy.load()) g_worker.join();
+        else new std::thread(std::move(g_worker));
+    }
 #else
     if (g_worker.joinable()) g_worker.detach();
 #endif
