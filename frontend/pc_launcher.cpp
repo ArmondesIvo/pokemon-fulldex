@@ -1496,8 +1496,11 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     auto dialogClose = [&]() { Launcher::Focus().dialog = 0; kb.open = false; SDL_StopTextInput(); };
     auto dialogAct = [&]() {
         Launcher::GlassFocus& F = Launcher::Focus();
-        if (selected < 0 || selected >= (int)games.size()) { dialogClose(); return; }
-        const std::string rom = games[selected].rom;
+        const bool noGame = selected < 0 || selected >= (int)games.size();
+        // (A tab's menu, and the keyboard for a tab's name, a new tab or the search, need no game: a tab with none in it is where they are wanted.)
+        const bool tabOnly = F.dialog == 8 || F.dialog == 9 || F.dialog == 13 || F.dialog == 14 || (F.dialog == 3 && F.kbFor);
+        if (noGame && !tabOnly) { dialogClose(); return; }
+        const std::string rom = noGame ? std::string() : games[selected].rom;
         auto settle = [&]() { const Launcher::View v = view(); if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v); };
         if (F.dialog == 1)
         {
@@ -1556,7 +1559,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         if (F.dialog >= 5)
         {
             const std::string pick = F.drow >= 0 && F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
-            const std::string save = fo.saves + "/" + games[selected].saveName;
+            const std::string save = noGame ? std::string() : fo.saves + "/" + games[selected].saveName;
             if (pick == "#close" || pick.empty()) { dialogClose(); return; }
             if (F.dialog == 8 || F.dialog == 9 || F.dialog == 13 || F.dialog == 14)
             {
