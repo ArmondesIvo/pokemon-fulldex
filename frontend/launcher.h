@@ -1341,15 +1341,15 @@ inline int FirstIn(const View& v) { return v.spots.empty() ? -1 : v.spots[0].gam
 // and the tab's games as cards below it, all drawn with the pause menu's own glass (glass.h,
 // Menu::FrostBox) and clean font over the chosen game's picture, blurred. Used on landscape
 // screens with the clean font (Glassy); otherwise the classic list (DrawClassic).
-enum Side { SIDE_HOME, SIDE_HUB, SIDE_ROMS, SIDE_UPDATES, SIDE_SETTINGS, SIDE_LAUNCHER, SIDE_ABOUT, SIDES }; // (Library is Home: its tabs, Sort)
+enum Side { SIDE_HOME, SIDE_HUB, SIDE_ROMS, SIDE_SETTINGS, SIDE_LAUNCHER, SIDE_ABOUT, SIDES }; // (Library is Home: its tabs, Sort)
 inline const char* SideName(int i)
 {
-    static const char* n[] = { "Home", "Hub", "ROMs", "Updates", "Settings", "Launcher", "About" };
+    static const char* n[] = { "Home", "Hub", "ROMs", "Settings", "Launcher", "About" };
     return n[i];
 }
 inline int SideIcon(int i)
 {
-    static const int ic[] = { Glass::I_HOME, Glass::I_PEOPLE, Glass::I_CHIP, Glass::I_LOAD, Glass::I_GEAR, Glass::I_LAYOUT, Glass::I_INFO };
+    static const int ic[] = { Glass::I_HOME, Glass::I_PEOPLE, Glass::I_CHIP, Glass::I_GEAR, Glass::I_LAYOUT, Glass::I_INFO };
     return ic[i];
 }
 inline int GPx(float px) { return std::max(6, (int)(px + 0.5f)); }
@@ -4072,6 +4072,7 @@ inline int ThemePick(const std::string& pick)
 }
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
+static const char* const kReleasesUrl = "https://github.com/mamesj/pokemon-fulldex/releases";
 inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 4 : HubMode() == 2 ? TradeRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
@@ -4312,7 +4313,7 @@ inline void OpenSupportAsk()
     F.dItems = { "Buy Me A Coffee", "PayPal", "Close" };
     F.dPaths = { "#open:https://buymeacoffee.com/mamesj", "#open:https://paypal.me/mamesj", "#close" };
 }
-inline int PageRows(int page) { return page == SIDE_LAUNCHER ? LauncherRows() : page == SIDE_ABOUT ? 5 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
+inline int PageRows(int page) { return page == SIDE_LAUNCHER ? LauncherRows() : page == SIDE_ABOUT ? 5 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
 // The cards of the About page that open a page when tapped, as drawn (cleared each frame it is drawn).
 struct AboutLink { int x, y, w, h; const char* url; };
 inline std::vector<AboutLink>& AboutLinks() { static std::vector<AboutLink> v; return v; }
@@ -4329,7 +4330,6 @@ inline std::string AboutUrl(int row)
 // The page a row of a page opens (none: "").
 inline std::string PageUrl(int page, int row)
 {
-    if (page == SIDE_UPDATES) return row >= 1 ? "https://github.com/mamesj/pokemon-fulldex/releases" : "";
     if (page == SIDE_HUB) return HubTop() && row == 3 ? kDiscordUrl : "";
     return page == SIDE_ABOUT ? AboutUrl(row) : "";
 }
@@ -4390,19 +4390,6 @@ inline bool PageMove(int dir)
         else if (dir == 2 && n > 0 && na > 0) F.pact = 0;
         return true;
     }
-    if (F.page == SIDE_UPDATES)
-    {
-        // (What's New, left of the column: up and down scroll it.)
-        if (F.prow == 2)
-        {
-            if (dir == 3) F.nScroll = std::max(0, F.nScroll - 2);
-            else if (dir == 4) F.nScroll = std::min(F.nMax, F.nScroll + 2);
-            else if (dir == 1) F.side = F.page;
-            else if (dir == 2) F.prow = 0;
-            return true;
-        }
-        if (dir == 1) { F.prow = 2; return true; }
-    }
     if (dir == 3) F.prow = std::max(0, F.prow - 1);
     else if (dir == 4) F.prow = std::min(PageRows(F.page) - 1, F.prow + 1);
     else if (dir == 1) F.side = F.page;
@@ -4412,14 +4399,13 @@ inline bool PageMove(int dir)
 inline bool NotesAt(int x, int y)
 {
     const GlassFocus& f = Focus();
-    return f.page == SIDE_UPDATES && f.nH > 0 && x >= f.nX && x < f.nX + f.nW && y >= f.nY && y < f.nY + f.nH;
+    (void)f; (void)x; (void)y;
+    return false; // (The Updates page is gone: Settings > Updates holds it now.)
 }
 inline bool NotesScroll(int by)
 {
-    GlassFocus& f = Focus();
-    if (f.page != SIDE_UPDATES) return false;
-    f.nScroll = std::max(0, std::min(f.nMax, f.nScroll + by));
-    return true;
+    (void)by;
+    return false;
 }
 // B while a page is open: the sidebar first, then back to the games. (False: no page open.)
 // The small back arrow at the bottom right of a page on a phone held sideways (it does what Esc does).
@@ -4639,7 +4625,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const int barH = portP ? (int)(44 * u) : sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)((portP ? 10 : 18) * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : PhoneLook() && c.h > c.w && sp.navY > 0 ? sp.navY - (int)(12 * u) : c.h - (int)((ShortNow() ? 14 : 64) * u); // (a phone sideways: the panels run to the foot of the screen, the back button is in the bar)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
-    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     if (!ShortNow() && !portP) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -6172,123 +6158,6 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         }
         return;
     }
-    if (F.page == SIDE_UPDATES)
-    {
-        const bool stkP = PhoneLook() && c.h > c.w; const int rw = stkP ? R - L : (int)(360 * u), gap = (int)(18 * u), lw2 = stkP ? R - L : R - L - rw - gap, lhP = stkP ? (int)((bottom - top) * 0.55f) : bottom - top, dTopP = stkP ? top + lhP + gap : top, dHP = stkP ? bottom - dTopP : bottom - top, ip = (int)(22 * u), pad = (int)(12 * u);
-        // The state, and what an update keeps.
-        Menu::FrostBox(c, solid, L, top, lw2, lhP, 18 * u);
-        const std::string have = F.upHave.empty() ? std::string("Unknown") : F.upHave;
-        std::string title, sub;
-        switch (F.upState)
-        {
-        case 0: title = "Not Checked Yet"; sub = "This Version: " + have; break;
-        case 1: title = "Checking..."; sub = "This Version: " + have; break;
-        case 2: title = "Fulldex Is Up To Date"; sub = "Version " + have; break;
-        case 3: title = "A New Version Is Ready"; sub = "You Have " + have + "   \xC2\xB7   New: " + F.upNew; break;
-        case 4: title = "Downloading..."; sub = "New: " + F.upNew; break;
-        case 5: title = "Installed"; sub = "The new version starts when you close the list"; break;
-        case 6: title = "Could Not Check"; sub = CleanFont::Title(F.upText); break;
-        default: title = "Check For Updates"; sub = "Fulldex looks for a new version on GitHub"; break;
-        }
-        const int cx = L + ip, cy = top + ip, cw = lw2 - 2 * ip, ch = (int)(96 * u);
-        Glass::Round(c, cx, cy, cw, ch, 14 * u, SettingsArt::Row, 0x3DFFFFFF, 1.0f * u);
-        Glass::Round(c, cx + (int)(20 * u), cy + (int)(20 * u), (int)(56 * u), (int)(56 * u), 16 * u, 0x2EFFFFFFu, 0x4DFFFFFFu, 1.0f * u);
-        Glass::DrawIcon(c, Glass::I_LOAD, cx + 48 * u, cy + 48 * u, 14 * u, text);
-        GT(c, cx + (int)(96 * u), cy + 36 * u, title, 22 * u, text, true);
-        float fs = 14 * u;
-        while (fs > 9 * u && GW(sub, fs, true) > cw - (int)(112 * u)) fs -= u;
-        GT(c, cx + (int)(96 * u), cy + 66 * u, sub, fs, hint, true);
-        int y = cy + ch + (int)(28 * u);
-        GT(c, cx, y, "What's New", 18 * u, text, true);
-        y += (int)(24 * u);
-        // (The newest release's notes from GitHub; without any, what an update keeps.)
-        std::vector<std::string> points = ReleasePoints(F.upNotes);
-        const bool fromRelease = !points.empty();
-        if (!fromRelease)
-            points = { "The changes in each version are listed on its release page on GitHub.",
-                       "Your ROMs, saves and settings stay when Fulldex updates.",
-                       "The version before is kept, in case you need to go back." };
-        if (F.upState == 3 && !F.upCan) points.push_back("On this device, Open Download takes you to the release page to get it.");
-        // (All of them, a line at a time: up and down while it is chosen, a finger or the mouse
-        // dragging it, the wheel. Its rows: nScroll the first shown, nMax the last that can be.)
-        struct NoteLine { std::string s; bool first, last, note; };
-        std::vector<NoteLine> lines;
-        for (const std::string& pnt : points)
-        {
-            const std::vector<std::string> ls = WrapLines(pnt, 15 * u, cw - (int)(64 * u));
-            for (size_t k = 0; k < ls.size(); k++) lines.push_back({ ls[k], k == 0, k + 1 == ls.size(), false });
-        }
-        if (fromRelease) lines.push_back({ "The rest, and the downloads, are on the release page.", true, true, true });
-        const int lineH = (int)(22 * u), gapH = (int)(12 * u), topPad = (int)(26 * u), cardBottom = (top + lhP) - ip;
-        auto stepOf = [&](size_t k) { return lineH + (lines[k].last ? gapH : 0); };
-        int total = 0;
-        for (size_t k = 0; k < lines.size(); k++) total += stepOf(k);
-        const int room = cardBottom - y - topPad;
-        int maxStart = 0;
-        if (total > room)
-        {
-            int hh = 0;
-            size_t k = lines.size();
-            while (k > 0 && hh + stepOf(k - 1) <= room) { hh += stepOf(k - 1); k--; }
-            maxStart = (int)k;
-        }
-        F.nMax = maxStart;
-        F.nScroll = std::max(0, std::min(F.nScroll, maxStart));
-        const bool chosen = F.prow == 2 && F.side < 0;
-        const int cardH = total > room ? cardBottom - y : std::min(total + topPad, cardBottom - y);
-        if (chosen)
-        {
-            Glass::Glow(c, cx, y, cw, cardH, 14 * u, u);
-            Glass::Round(c, cx, y, cw, cardH, 14 * u, 0x24FFFFFFu, Glass::ChosenEdge(), 1.5f * u);
-        }
-        else Glass::Round(c, cx, y, cw, cardH, 14 * u, 0x14FFFFFFu);
-        F.nX = cx; F.nY = y; F.nW = cw; F.nH = cardH; F.nLine = lineH;
-        int py = y + topPad;
-        for (size_t k = (size_t)F.nScroll; k < lines.size(); k++)
-        {
-            if (py + lineH / 2 > y + cardH - (int)(6 * u)) break;
-            if (lines[k].first && !lines[k].note) Glass::Round(c, cx + (int)(18 * u), py - (int)(3 * u), (int)(6 * u), (int)(6 * u), 3 * u, 0xE6FFFFFFu);
-            GT(c, cx + (int)(36 * u), py, lines[k].s, 15 * u, lines[k].note ? hint : text, lines[k].note);
-            py += stepOf(k);
-        }
-        if (maxStart > 0)
-        {
-            // (The scroll bar.)
-            const int tx = cx + cw - (int)(14 * u), ty = y + (int)(14 * u), th = cardH - (int)(28 * u);
-            Glass::Round(c, tx, ty, (int)(4 * u), th, 2 * u, 0x26FFFFFFu);
-            const int thumbH = std::max((int)(24 * u), (int)((long long)th * room / std::max(1, total)));
-            const int thumbY = ty + (int)((long long)(th - thumbH) * F.nScroll / maxStart);
-            Glass::Round(c, tx, thumbY, (int)(4 * u), thumbH, 2 * u, 0xCCFFFFFFu);
-        }
-        // What to do.
-        const int rx0 = stkP ? L : R - rw, rowH = (int)(50 * u), rg = (int)(6 * u);
-        Menu::FrostBox(c, solid, rx0, dTopP, rw, dHP, 18 * u);
-        static int dKey = -1; { const int nk = F.page * 100000 + F.prow * 100 + LauncherMode() * 10 + HubMode() + (Look().edit + 1) * 10000000; if (nk != dKey) { dKey = nk; F.dScroll = 0; } }
-        F.dScroll = std::min(F.dScroll, F.dMax); TextLow() = 0; F.pdY = stkP ? dTopP : 0;
-        const int dTopC = dTopP - (stkP ? F.dScroll : 0);
-        ClipGuard clipG(c, F, stkP ? dTopP : 0, stkP ? bottom : c.h, (int)(16 * u));
-        const std::string action = F.upState == 1 || F.upState == 4 ? "Working..." : F.upState == 3 ? (F.upCan ? "Install Now" : "Open Download") : "Check Now";
-        const std::string rows[2] = { action, "Release Page" };
-        const int icons[2] = { Glass::I_LOAD, Glass::I_GLOBE };
-        F.pX = rx0 + pad; F.pY = dTopC + pad; F.pW = rw - 2 * pad; F.pRow = rowH + rg;
-        for (int i = 0; i < 2; i++)
-        {
-            const int rx = rx0 + pad, ry = dTopC + pad + i * (rowH + rg), rww = rw - 2 * pad;
-            if (i == F.prow)
-            {
-                if (F.side < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
-                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
-            }
-            Glass::DrawIcon(c, icons[i], rx + 24 * u, ry + rowH * 0.5f, 10 * u, text);
-            GT(c, rx + (int)(48 * u), ry + rowH * 0.5f, rows[i], 17 * u, text, true);
-        }
-        int hy = dTopC + pad + 2 * (rowH + rg) + (int)(16 * u);
-        for (const std::string& l : WrapLines(fromRelease ? "Fulldex checks once each time it starts. Your ROMs, saves and settings stay when it updates, and the version before is kept."
-                                                          : "Fulldex checks once each time it starts.", 14 * u, rw - 2 * pad - (int)(16 * u)))
-        { GT(c, rx0 + pad + (int)(8 * u), hy, l, 14 * u, hint, false); hy += (int)(20 * u); }
-        GT(c, rx0 + pad + (int)(8 * u), hy + 6 * u, "github.com/mamesj/pokemon-fulldex/releases", 13 * u, hint, true);
-        return;
-    }
     // The sections.
     const bool stkA = PhoneLook() && c.h > c.w;
     const int lw = stkA ? R - L : (int)(300 * u), pad = (int)(12 * u), rowH = (int)((stkA ? 40 : 50) * u), rg = (int)((stkA ? 4 : 6) * u);
@@ -6619,7 +6488,6 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
                     + "/t" + Focus().pageTitle + "/h" + HubSig() + (Focus().page == SIDE_HUB ? std::to_string(Mover().open) + std::to_string(HubMode()) + "," + std::to_string(Focus().pact) + "," + std::to_string(Focus().rScroll) : std::string()) + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
-                    + (Focus().page == SIDE_UPDATES ? "/u" + std::to_string(Focus().upState) + std::to_string(Focus().upCan) + Focus().upHave + "/" + Focus().upNew + "/" + Focus().upText + "/" + Focus().upNotes + "/" + std::to_string(Focus().nScroll) : std::string())
                     + (Focus().page == SIDE_ROMS ? "/r" + std::to_string(Focus().pact) + "," + std::to_string(RomList().size()) + ","
                        + std::to_string(std::count_if(RomList().begin(), RomList().end(), [](const Game& g) { return g.hidden; })) : std::string());
     for (const Game& g : games) key += "|" + g.rom + g.customName + (g.favourite ? "*" : "") + sig(g);
@@ -7478,6 +7346,11 @@ inline std::vector<Setting> SettingsList()
                   "CHECKS GITHUB FOR A NEW VERSION. CHOOSE AGAIN TO INSTALL IT: IT IS CHECKED AGAINST THE RELEASE SHA256SUMS.TXT "
                   "AND THE OLD VERSION IS KEPT IN THE UPDATE FOLDER. YOUR ROMS / SAVES AND SETTINGS STAY AS THEY ARE." });
 #endif
+    l.push_back({ "!releases", "RELEASE PAGE", { { "", "OPEN" } }, "",
+                  "OPENS THE LIST OF RELEASES ON GITHUB: THE CHANGES IN EACH VERSION, AND THE DOWNLOADS." });
+    l.push_back({ nullptr, "RELEASE NOTES", {}, "",
+                  "THE CHANGES IN EACH VERSION ARE LISTED ON ITS RELEASE PAGE ON GITHUB. YOUR ROMS / SAVES AND SETTINGS STAY WHEN FULDEX UPDATES. "
+                  "THE VERSION BEFORE IS KEPT, IN CASE YOU NEED TO GO BACK." });
 
 #ifdef __SWITCH__
     // (The first start's 60 FPS and WORLD DETAIL depend on the game: SoulSilver and HeartGold
@@ -7640,7 +7513,7 @@ inline const std::vector<SettingsGroup>& SettingsGroups()
         { "!group5", "SHORTCUTS", "" },
         { "!group6", "GAME LIST", "" },
         { "!group7", "RETROACHIEVEMENTS", "" },
-        { "!group8", "HELP", "" },
+        { "!group8", "UPDATES", "" },
         { "!group9", "OPTIONAL FEATURES", "" },
     };
     return g;
@@ -7648,9 +7521,9 @@ inline const std::vector<SettingsGroup>& SettingsGroups()
 // Which group an option is in (SettingsGroups).
 inline int GroupOf(const Setting& s)
 {
-    if (s.key && !strcmp(s.key, "!updates")) return 8;
+    if (s.key && (!strcmp(s.key, "!updates") || !strcmp(s.key, "!releases"))) return 8;
     if (s.key && !strcmp(s.key,"!favourite")) return 6;
-    if (!s.key) return !strcmp(s.name, "KEYS AND BUTTONS") ? 3 : 7;
+    if (!s.key) return !strcmp(s.name, "KEYS AND BUTTONS") ? 3 : !strcmp(s.name, "RELEASE NOTES") ? 8 : 7;
     if (!strncmp(s.key,"extra_",6)) return 9;
     if (!strcmp(s.key, "list_lang")) return 0;
     if (!strncmp(s.key, "list_", 5)) return 6;
@@ -7988,7 +7861,7 @@ inline int SettingIcon(const Setting& s, int group)
         { "wide_map", Glass::I_GLOBE }, { "wide_lines", Glass::I_LAYERS }, { "busy_detail", Glass::I_GAUGE }, { "ff_low_res", Glass::I_FAST },
         { "wide_gpu", Glass::I_CHIP }, { "volume", Glass::I_SPEAKER }, { "start_button", Glass::I_PAD }, { "buttons", Glass::I_PAD },
         { "pad_touch", Glass::I_PAD }, { "!keys", Glass::I_PAD }, { "!shortcuts", Glass::I_WINDOW }, { "!forwarders", Glass::I_WINDOW },
-        { "list_lang", Glass::I_GLOBE }, { "ra", Glass::I_TROPHY }, { "!ra_login", Glass::I_PEOPLE }, { "!updates", Glass::I_LOAD } };
+        { "list_lang", Glass::I_GLOBE }, { "ra", Glass::I_TROPHY }, { "!ra_login", Glass::I_PEOPLE }, { "!updates", Glass::I_LOAD }, { "!releases", Glass::I_GLOBE } };
     for (const auto& o : own)
         if (!strcmp(s.key, o.first)) return o.second;
     if (!strncmp(s.key, "list_", 5)) return Glass::I_GRID;

@@ -1125,6 +1125,13 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             return;
         }
 #endif
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+        if (key && !strcmp(key, "!releases"))
+        {
+            if (SDL_OpenURL(Launcher::kReleasesUrl) != 0) fprintf(stderr, "[launcher] could not open the release page: %s\n", SDL_GetError());
+            return;
+        }
+#endif
 #ifdef __ANDROID__
         if (key && !strcmp(key, "!updates")) { JavaVoid("checkUpdates"); return; }
 #elif defined(SSR_UPDATER)
@@ -1237,17 +1244,6 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     const std::string said = Launcher::HubDo(F.prow, F.pact);
                     if (!said.empty()) note = said;
                     if (F.dialog == 3) SDL_StartTextInput(); // (the Trade page's code)
-                    return;
-                }
-                if (F.page == Launcher::SIDE_UPDATES && F.prow == 0)
-                {
-#ifdef __ANDROID__
-                    JavaVoid("checkUpdates");
-#elif defined(SSR_UPDATER)
-                    // (Checks, installs what it found, or gives the page to open.)
-                    const std::string page = Updater::Choose();
-                    if (!page.empty() && SDL_OpenURL(page.c_str()) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", page.c_str(), SDL_GetError());
-#endif
                     return;
                 }
                 if (F.page == Launcher::SIDE_ABOUT && F.prow == 0) { Launcher::OpenSupportAsk(); return; } // (Buy Me A Coffee or PayPal)
@@ -2181,26 +2177,6 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                             break;
                         }
                     }
-                }
-                // The Updates page's What's New: a click chooses it (again: the release page), dragging scrolls it.
-                if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_UPDATES)
-                {
-                    static bool held = false, moved = false;
-                    static int y0 = 0, s0 = 0;
-                    Launcher::GlassFocus& NF = Launcher::Focus();
-                    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT && Launcher::NotesAt(mx, my)) { held = true; moved = false; y0 = my; s0 = NF.nScroll; }
-                    else if (e.type == SDL_MOUSEMOTION && held && NF.nLine > 0)
-                    {
-                        if (std::abs(my - y0) > 8 * s) moved = true;
-                        if (moved) NF.nScroll = std::max(0, std::min(NF.nMax, s0 - (my - y0) / NF.nLine));
-                    }
-                    else if (e.type == SDL_MOUSEBUTTONUP && held)
-                    {
-                        held = false;
-                        if (!moved) { const bool again = NF.prow == 2 && NF.side < 0; NF.side = -1; NF.prow = 2; if (again) choose(); }
-                        break;
-                    }
-                    if (held) break;
                 }
                 // A page's detail panel upright (a phone): a finger dragged up or down scrolls what is in it.
                 if (Launcher::Glassy(canvas) && !guide && canvas.h > canvas.w && Launcher::Focus().page >= 0 && Launcher::Focus().pdY > 0 && Launcher::Focus().dMax > 0

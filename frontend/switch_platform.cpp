@@ -328,6 +328,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
     auto change = [&](int d) {
         const char* key = page.Change(d);
         if (key && !strncmp(key, "list_", 5)) Launcher::LoadLook(cfgPath, listDir, theme, background);
+        if (key && !strcmp(key, "!releases")) { page.items[page.selected].values[0].second = "PHONE OR PC"; return; } // (No browser here: the release page is for another device.)
         if (key && !strcmp(key, "!keys"))
         {
             ctl.Load(cfgPath);
@@ -909,7 +910,6 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                             if (F.pact < 0) { if (!Launcher::HubEnter(F.prow) && !Launcher::HubActions(F.prow).empty()) F.pact = 0; else if (Launcher::HubTop() && F.prow == 3) note = "SCAN THE CODE WITH YOUR PHONE"; }
                             else { const std::string said = Launcher::HubDo(F.prow, F.pact); if (!said.empty()) note = said; if (F.dialog == 3) { kbLayer = 0; kbBuild(); } }
                         }
-                        else if (F.page == Launcher::SIDE_UPDATES && F.prow == 0) pageUpdateWork = true;
                         else if (!Launcher::PageUrl(F.page, F.prow).empty()) note = "OPEN IT ON YOUR PHONE OR PC";
                     }
                     if (bDown) Launcher::PageBack();
