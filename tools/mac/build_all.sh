@@ -82,6 +82,17 @@ say "Compiling for the Mac ($ARCH)"
 # Apple silicon on an Intel Mac. melonDS takes its JIT, ARM64 or x86-64, from the compiler's target.)
 OPTS=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DSSR_JIT=ON -DSSR_PC_ALL_GAMES=ON -DSSR_PNG=OFF -DSSR_GPU3D=OFF
       -DSSR_GENERATED_DIR="$TABLES" -DCMAKE_OSX_ARCHITECTURES="$ARCH" -DSSR_PORTABLE_X86=ON)
+# (On GitHub these come with the inputs: online.env and fulldex-google-client.txt beside the tables.)
+if [ -f "$(dirname "$TABLES")/online.env" ]; then . "$(dirname "$TABLES")/online.env"; fi
+if [ -z "${FULLDEX_GOOGLE_CLIENT_FILE:-}" ] && [ -f "$(dirname "$TABLES")/fulldex-google-client.txt" ]; then
+    FULLDEX_GOOGLE_CLIENT_FILE="$(cd "$(dirname "$TABLES")" && pwd)/fulldex-google-client.txt"; fi
+# The launcher's online parts, when given: the Hub (cloud saves, moving Pokemon), the theme Gallery's
+# relay and the Google sign-in client for cloud saves (a file of two lines; never in the repository).
+ONLINE=()
+[ "${SSR_POKEMON_HUB:-}" = ON ] && ONLINE+=(-DSSR_POKEMON_HUB=ON)
+[ -n "${FULLDEX_RELAY_URL:-}" ] && ONLINE+=(-DFULLDEX_RELAY_URL="$FULLDEX_RELAY_URL")
+[ -n "${FULLDEX_GOOGLE_CLIENT_FILE:-}" ] && ONLINE+=(-DFULLDEX_GOOGLE_CLIENT_FILE="$FULLDEX_GOOGLE_CLIENT_FILE")
+OPTS+=(${ONLINE[@]+"${ONLINE[@]}"})
 [ -n "$ART" ] && OPTS+=(-DSSR_PC_ART="$ART")
 if [ -n "${SSR_GBA_DIR:-}" ]; then
     [ -f "$SSR_GBA_DIR/frontend/embed.h" ] || fail "SSR_GBA_DIR: not Pokemon GBA Widescreen: $SSR_GBA_DIR"

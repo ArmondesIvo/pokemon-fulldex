@@ -87,6 +87,17 @@ BUILD="build-ios-$TARGET"
 OPTS=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT="$SDK"
       -DCMAKE_OSX_ARCHITECTURES="$ARCH" -DCMAKE_OSX_DEPLOYMENT_TARGET="$MIN_IOS"
       -DSSR_JIT=OFF -DSSR_PC_ALL_GAMES=ON -DSSR_PNG=OFF -DSSR_GPU3D=OFF -DSSR_GENERATED_DIR="$TABLES")
+# (On GitHub these come with the inputs: online.env and fulldex-google-client.txt beside the tables.)
+if [ -f "$(dirname "$TABLES")/online.env" ]; then . "$(dirname "$TABLES")/online.env"; fi
+if [ -z "${FULLDEX_GOOGLE_CLIENT_FILE:-}" ] && [ -f "$(dirname "$TABLES")/fulldex-google-client.txt" ]; then
+    FULLDEX_GOOGLE_CLIENT_FILE="$(cd "$(dirname "$TABLES")" && pwd)/fulldex-google-client.txt"; fi
+# The launcher's online parts, when given: the Hub (cloud saves, moving Pokemon), the theme Gallery's
+# relay and the Google sign-in client for cloud saves (a file of two lines; never in the repository).
+ONLINE=()
+[ "${SSR_POKEMON_HUB:-}" = ON ] && ONLINE+=(-DSSR_POKEMON_HUB=ON)
+[ -n "${FULLDEX_RELAY_URL:-}" ] && ONLINE+=(-DFULLDEX_RELAY_URL="$FULLDEX_RELAY_URL")
+[ -n "${FULLDEX_GOOGLE_CLIENT_FILE:-}" ] && ONLINE+=(-DFULLDEX_GOOGLE_CLIENT_FILE="$FULLDEX_GOOGLE_CLIENT_FILE")
+OPTS+=(${ONLINE[@]+"${ONLINE[@]}"})
 [ -n "$ART" ] && OPTS+=(-DSSR_PC_ART="$ART")
 if [ -n "${SSR_GBA_DIR:-}" ]; then
     [ -f "$SSR_GBA_DIR/frontend/embed.h" ] || fail "SSR_GBA_DIR: not Pokemon GBA Widescreen: $SSR_GBA_DIR"

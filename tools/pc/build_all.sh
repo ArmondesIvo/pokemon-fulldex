@@ -130,6 +130,13 @@ python3 tools/regions/package_profiles.py --funcs "$DATA/funcs" --portable "$HER
 # (SSR_PORTABLE_X86), so that it runs on any 64-bit PC.
 COMMON=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DSSR_JIT=ON -DSSR_PC_ALL_GAMES=ON -DSSR_PNG=OFF -DSSR_GPU3D=ON
         -DSSR_PORTABLE_X86=ON -DSSR_GENERATED_DIR="$HERE/build-gen-tables")
+# The launcher's online parts, when given: the Hub (cloud saves, moving Pokemon), the theme Gallery's
+# relay and the Google sign-in client for cloud saves (a file of two lines; never in the repository).
+ONLINE=()
+[ "${SSR_POKEMON_HUB:-}" = ON ] && ONLINE+=(-DSSR_POKEMON_HUB=ON)
+[ -n "${FULLDEX_RELAY_URL:-}" ] && ONLINE+=(-DFULLDEX_RELAY_URL="$FULLDEX_RELAY_URL")
+[ -n "${FULLDEX_GOOGLE_CLIENT_FILE:-}" ] && ONLINE+=(-DFULLDEX_GOOGLE_CLIENT_FILE="$FULLDEX_GOOGLE_CLIENT_FILE")
+COMMON+=(${ONLINE[@]+"${ONLINE[@]}"})
 ART="${SSR_PC_ART:-}"
 [ -n "$ART" ] && { [ -d "$ART" ] || fail "SSR_PC_ART: no such folder: $ART"; ART="$(realpath "$ART")"; say "Pictures for the game list: $ART"; }
 COMMON+=(-DSSR_PC_ART="$ART")

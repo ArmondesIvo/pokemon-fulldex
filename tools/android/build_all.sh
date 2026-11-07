@@ -118,6 +118,12 @@ if [ ! -f "$DEPS/$SDL_NAME/CMakeLists.txt" ]; then
     tar -xzf "$DEPS/$SDL_NAME.tar.gz" -C "$DEPS"
 fi
 
+# The launcher's online parts, when given: the Hub (cloud saves, moving Pokemon), the theme Gallery's
+# relay and the Google sign-in client for cloud saves (a file of two lines; never in the repository).
+ONLINE=()
+[ "${SSR_POKEMON_HUB:-}" = ON ] && ONLINE+=(-DSSR_POKEMON_HUB=ON)
+[ -n "${FULLDEX_RELAY_URL:-}" ] && ONLINE+=(-DFULLDEX_RELAY_URL="$FULLDEX_RELAY_URL")
+[ -n "${FULLDEX_GOOGLE_CLIENT_FILE:-}" ] && ONLINE+=(-DFULLDEX_GOOGLE_CLIENT_FILE="$FULLDEX_GOOGLE_CLIENT_FILE")
 STRIP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 FILES=()
 for abi in $ABIS; do
@@ -136,7 +142,7 @@ for abi in $ABIS; do
     # the building machine's AVX2.
     cmake -S . -B "build-android-all-$abi" "${ARGS[@]}" -DSDL2_DIR="$SDL_PREFIX/lib/cmake/SDL2" \
         -DSSR_JIT=ON -DSSR_PC_ALL_GAMES=ON -DSSR_PNG=OFF -DSSR_GPU3D=OFF -DSSR_PORTABLE_X86=ON \
-        -DSSR_GENERATED_DIR="$HERE/build-gen-tables" -DSSR_PC_ART="$ART" -DSSR_GBA_DIR="${SSR_GBA_DIR:-}" >/dev/null
+        -DSSR_GENERATED_DIR="$HERE/build-gen-tables" -DSSR_PC_ART="$ART" -DSSR_GBA_DIR="${SSR_GBA_DIR:-}" ${ONLINE[@]+"${ONLINE[@]}"} >/dev/null
     ninja -C "build-android-all-$abi" ssrecomp
     mkdir -p "build-android-dist/lib/$abi"
     "$STRIP" -o "build-android-dist/lib/$abi/libmain.so" "build-android-all-$abi/libmain.so"
