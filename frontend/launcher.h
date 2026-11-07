@@ -6446,7 +6446,7 @@ inline std::vector<Setting> SettingsList()
     l.push_back({ "!forwarders", "HOME MENU ICONS", { { "", "INSTALL" } }, "",
                   "PUTS AN ICON FOR EACH GAME IN THIS LIST ON THE HOME MENU WITH ITS PICTURE. IT STARTS THAT GAME STRAIGHT AWAY. MADE ON THIS CONSOLE: NO PC OR KEYS FILE NEEDED. LIKE ANY FORWARDER THE ICONS NEED SIGPATCHES TO START. INSTALL AGAIN AFTER ADDING GAMES. REMOVE ONE IN THE HOME MENU (OPTIONS / DELETE SOFTWARE)." });
 #endif
-    // The interface's language (UiLang, ui_lang.h), shown first among DISPLAY's options.
+    // The interface's language (UiLang, ui_lang.h), the first group in the settings, LANGUAGE, on its own.
     l.insert(l.begin(), { "list_lang", "LANGUAGE", UiLang::Choices(), "auto",
                           "THE LANGUAGE OF THE GAME LIST, THE SETTINGS AND THE PAUSE MENU (NOT OF THE GAMES)." });
 #ifndef __SWITCH__
@@ -6517,38 +6517,39 @@ inline const std::vector<SettingsGroup>& SettingsGroups()
 {
     static const std::vector<SettingsGroup> g = {
         // (What each holds is listed under it: its options' names, ShowGroups.)
-        { "!group0", "DISPLAY", "" },
-        { "!group1", "SOUND", "" },
-        { "!group2", "GRAPHICS", "" },
-        { "!group3", "CONTROLS", "" },
-        { "!group4", "SHORTCUTS", "" },
-        { "!group5", "GAME LIST", "" },
-        { "!group6", "RETROACHIEVEMENTS", "" },
-        { "!group7", "HELP", "" },
-        { "!group8", "OPTIONAL FEATURES", "" },
+        { "!group0", "LANGUAGE", "" },
+        { "!group1", "DISPLAY", "" },
+        { "!group2", "SOUND", "" },
+        { "!group3", "GRAPHICS", "" },
+        { "!group4", "CONTROLS", "" },
+        { "!group5", "SHORTCUTS", "" },
+        { "!group6", "GAME LIST", "" },
+        { "!group7", "RETROACHIEVEMENTS", "" },
+        { "!group8", "HELP", "" },
+        { "!group9", "OPTIONAL FEATURES", "" },
     };
     return g;
 }
 // Which group an option is in (SettingsGroups).
 inline int GroupOf(const Setting& s)
 {
-    if (s.key && !strcmp(s.key, "!updates")) return 7;
-    if (s.key && !strcmp(s.key,"!favourite")) return 5;
+    if (s.key && !strcmp(s.key, "!updates")) return 8;
+    if (s.key && !strcmp(s.key,"!favourite")) return 6;
     if (!s.key) return !strcmp(s.name, "KEYS AND BUTTONS") ? 3 : 7;
-    if (!strncmp(s.key,"extra_",6)) return 8;
+    if (!strncmp(s.key,"extra_",6)) return 9;
     if (!strcmp(s.key, "list_lang")) return 0;
-    if (!strncmp(s.key, "list_", 5)) return 5;
-    if (!strcmp(s.key, "ra") || !strcmp(s.key, "!ra_login")) return 6;
+    if (!strncmp(s.key, "list_", 5)) return 6;
+    if (!strcmp(s.key, "ra") || !strcmp(s.key, "!ra_login")) return 7;
     static const char* display[] = { "view", "large_screen", "fullscreen", "smooth", "battle_buttons", "show_fps" };
     static const char* controls[] = { "start_button", "buttons", "pad_touch" };
     for (const char* k : display)
-        if (!strcmp(s.key, k)) return 0;
-    if (!strcmp(s.key, "volume")) return 1;
+        if (!strcmp(s.key, k)) return 1;
+    if (!strcmp(s.key, "volume")) return 2;
     for (const char* k : controls)
-        if (!strcmp(s.key, k)) return 3;
-    if (!strcmp(s.key, "!keys")) return 3;
-    if (s.key[0] == '!') return 4; // (DESKTOP SHORTCUTS, HOME MENU ICONS)
-    return 2;
+        if (!strcmp(s.key, k)) return 4;
+    if (!strcmp(s.key, "!keys")) return 4;
+    if (s.key[0] == '!') return 5; // (DESKTOP SHORTCUTS, HOME MENU ICONS)
+    return 3;
 }
 
 struct SettingsPage
@@ -6557,7 +6558,7 @@ struct SettingsPage
     std::vector<Setting> all = SettingsList();
     std::vector<Setting> items; // what is shown: the groups, or one group's options
     int group = -1;             // the group shown, -1: the list of groups
-    std::string groupText[9];   // (the groups' lines: their options' names)
+    std::string groupText[10];   // (the groups' lines: their options' names)
     std::vector<std::string> lines; // the file, as it is
     int selected = 0, scroll = 0;
     // Draw keeps the chosen option in view while follow is set (the keys and the D-pad); a
@@ -6861,9 +6862,9 @@ inline std::string SettingSentence(const std::string& s)
 // The icon a settings row has on the glass page: its group's for a group, else its own (or its group's).
 inline int SettingIcon(const Setting& s, int group)
 {
-    static const int groupIcon[] = { Glass::I_MONITOR, Glass::I_SPEAKER, Glass::I_LAYERS, Glass::I_PAD, Glass::I_WINDOW,
+    static const int groupIcon[] = { Glass::I_GLOBE, Glass::I_MONITOR, Glass::I_SPEAKER, Glass::I_LAYERS, Glass::I_PAD, Glass::I_WINDOW,
                                      Glass::I_GRID, Glass::I_TROPHY, Glass::I_INFO, Glass::I_SPARKLE };
-    if (s.key && !strncmp(s.key, "!group", 6)) { const int g = atoi(s.key + 6); return g >= 0 && g < 9 ? groupIcon[g] : Glass::I_GEAR; }
+    if (s.key && !strncmp(s.key, "!group", 6)) { const int g = atoi(s.key + 6); return g >= 0 && g < 10 ? groupIcon[g] : Glass::I_GEAR; }
     if (!s.key) return Glass::I_INFO;
     static const std::pair<const char*, int> own[] = {
         { "view", Glass::I_LAYOUT }, { "large_screen", Glass::I_EXPAND }, { "fullscreen", Glass::I_FULLSCREEN }, { "smooth", Glass::I_SCREENS },
