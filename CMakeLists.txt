@@ -111,6 +111,7 @@ set(SSRECOMP_SOURCES
     frontend/hub_link.cpp
     frontend/theme_pack.cpp
     frontend/launcher_fonts.cpp
+    frontend/launcher_cjk.cpp
     frontend/trade_evolutions.cpp
     frontend/platform.cpp
     runtime/recomp_rt.cpp

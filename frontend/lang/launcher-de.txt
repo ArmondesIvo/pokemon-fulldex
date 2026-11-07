@@ -1,4 +1,4 @@
-# Fulldex launcher: Deutsch. One line each: the English, a tab, the German. {} stands for a name or number.
+# Fulldex launcher: Deutsch. One line each: the English, a tab, the Deutsch. {} stands for a name or number.
 Game Options	Spieloptionen
 A theme of your own.	Ein eigenes Design.
 Apply	Anwenden
@@ -187,7 +187,6 @@ Themes other players have shared, ready to try	Von anderen Spielern geteilte Des
 Soon	Bald
 Change the launcher's look: the accent, the panels, the sidebar and the top bar, the buttons, the background, its blur and dim, and the glass's grain. Each can be a colour or a picture.	Ändere das Aussehen des Launchers: Akzent, Felder, Seitenleiste und obere Leiste, Tasten, Hintergrund mit Unschärfe und Abdunklung sowie die Körnung des Glases. Alles kann eine Farbe oder ein Bild sein.
 Keep the look you have now as a theme, with its pictures, and switch between your themes. Each is one .zip file you can send to a friend.	Speichere dein jetziges Aussehen mit seinen Bildern als Design und wechsle zwischen deinen Designs. Jedes ist eine .zip-Datei, die du einem Freund schicken kannst.
-Browse themes other players have shared, see each one on a Home screen, and try one on before you keep it. Coming soon.	Stöbere in Designs anderer Spieler, sieh jedes auf einem Startbildschirm und probiere es aus, bevor du es behältst. Bald verfügbar.
 Save This Look	Dieses Aussehen speichern
 Keep the look you have now as a theme	Speichere dein jetziges Aussehen als Design
 Import A Theme	Design importieren
@@ -518,3 +517,42 @@ Serif	Serifen
 Press A to use a font. B goes back to the Theme Editor.	Drücke A, um eine Schrift zu verwenden. B führt zurück zum Design-Editor.
 Choose a font to use it. Back goes to the Theme Editor.	Wähle eine Schrift, um sie zu verwenden. Zurück führt zum Design-Editor.
 FONT: {}	Schrift: {}
+Enter A Theme Code	Design-Code eingeben
+Share A Theme	Ein Design teilen
+Share	Teilen
+Try It	Ausprobieren
+Keep	Behalten
+Go Back	Zurück
+Keep This Theme?	Dieses Design behalten?
+Choose a theme to try it on. You keep it or go back.	Wähle ein Design zum Ausprobieren. Du behältst es oder gehst zurück.
+LOADING...	LADEN...
+NO GALLERY ADDRESS IS SET UP IN THIS BUILD	DIESE VERSION HAT KEINE GALERIE-ADRESSE
+COULD NOT REACH THE GALLERY	GALERIE NICHT ERREICHBAR
+NOTHING SHARED YET. BE THE FIRST: SHARE A THEME	NOCH NICHTS GETEILT. SEI DER ERSTE: TEILE EIN DESIGN
+A CODE IS 8 LETTERS AND NUMBERS, LIKE K7QM-X2RD	EIN CODE HAT 8 BUCHSTABEN UND ZAHLEN, WIE K7QM-X2RD
+DOWNLOADING...	WIRD HERUNTERGELADEN...
+THAT CODE DOES NOT WORK	DIESER CODE FUNKTIONIERT NICHT
+THAT THEME IS WAITING TO BE APPROVED. TRY AGAIN LATER.	DIESES DESIGN WARTET AUF FREIGABE. VERSUCH ES SPÄTER NOCH MAL.
+THAT THEME WAS NOT APPROVED	DIESES DESIGN WURDE NICHT FREIGEGEBEN
+THAT THEME WAS TAKEN DOWN	DIESES DESIGN WURDE ZURÜCKGEZOGEN
+THE GALLERY GAVE AN ANSWER IT SHOULD NOT	DIE GALERIE HAT UNERWARTET GEANTWORTET
+COULD NOT SAVE IT	KONNTE NICHT GESPEICHERT WERDEN
+TRYING: {}	PROBIERE: {}
+BACK TO YOUR OWN LOOK	ZURÜCK BEI DEINEM LOOK
+KEPT IN MY THEMES: {}	IN MEINE DESIGNS GESPEICHERT: {}
+SHARING...	WIRD GETEILT...
+SHARED. YOUR CODE: {}. IT SHOWS FOR EVERYONE ONCE APPROVED.	GETEILT. DEIN CODE: {}. ER ERSCHEINT FÜR ALLE, SOBALD ES FREIGEGEBEN IST.
+TOO MANY SHARES FOR NOW. TRY AGAIN LATER.	ZURZEIT ZU VIELE EINSENDUNGEN. VERSUCH ES SPÄTER NOCH MAL.
+NOT ACCEPTED: {}	NICHT ANGENOMMEN: {}
+THE GALLERY DID NOT TAKE IT ({})	DIE GALERIE HAT ES NICHT ANGENOMMEN ({})
+SAVE A THEME FIRST: LAUNCHER, MY THEMES, SAVE THIS LOOK	SPEICHERE ZUERST EIN DESIGN: LAUNCHER, MEINE DESIGNS, DIESEN LOOK SPEICHERN
+Pick one of your themes. It is looked at before it shows for others. Share only pictures that are yours.	Wähle eines deiner Designs. Es wird geprüft, bevor andere es sehen. Teile nur Bilder, die dir gehören.
+By {}. Try It puts it on your launcher; then you keep it or go back.	Von {}. Ausprobieren legt es auf deinen Launcher; dann behältst du es oder gehst zurück.
+{} is on. Keep it in My Themes, or go back to your own look.	{} ist aktiv. Behalte es in Meine Designs oder geh zurück zu deinem Look.
+THEME CODE	DESIGN-CODE
+A Theme Code	Ein Design-Code
+Get It	Holen
+Online	Online
+Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	Stöbere in Designs, die andere Spieler geteilt haben, probiere sie aus, bevor du sie behältst, gib den Design-Code eines Freundes ein oder teile eines von dir.
+The launcher's fonts	Die Schriften des Launchers
+Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	Der Urheberrechtshinweis jeder Schrift und der volle Lizenztext stehen in FONT-LICENSES.txt, im Ordner fonts des Downloads und auf der GitHub-Seite.

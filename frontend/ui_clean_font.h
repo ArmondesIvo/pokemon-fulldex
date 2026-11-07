@@ -12,6 +12,7 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 #include "ui_clean_font_data.h"
+#include "launcher_cjk.h"
 
 namespace CleanFont
 {
@@ -44,6 +45,26 @@ inline Face& GetFace(int id, bool bold)
     return faces.emplace(key, f).first->second;
 }
 inline Face& Get(bool bold) { return GetFace(FontId(), bold); }
+
+// Japanese and Korean letters Noto Sans lacks: the launcher's own cut of Noto Sans JP and KR (launcher_cjk.h).
+// Cjk(): the launcher sets it while it draws, so its Japanese and Korean text is drawn smooth too.
+inline bool& Cjk() { static bool on = false; return on; }
+inline Face& CjkFace(uint32_t cp)
+{
+    static Face jp, kr;
+    static bool made = false;
+    if (!made)
+    {
+        made = true;
+        jp.ok = stbtt_InitFont(&jp.info, kCjkJp, stbtt_GetFontOffsetForIndex(kCjkJp, 0)) != 0;
+        if (jp.ok) stbtt_GetFontVMetrics(&jp.info, &jp.ascent, &jp.descent, &jp.gap);
+        kr.ok = stbtt_InitFont(&kr.info, kCjkKr, stbtt_GetFontOffsetForIndex(kCjkKr, 0)) != 0;
+        if (kr.ok) stbtt_GetFontVMetrics(&kr.info, &kr.ascent, &kr.descent, &kr.gap);
+    }
+    const bool hangul = (cp >= 0x1100 && cp <= 0x11FF) || (cp >= 0x3130 && cp <= 0x318F) || (cp >= 0xAC00 && cp <= 0xD7AF);
+    if (hangul && kr.ok && stbtt_FindGlyphIndex(&kr.info, (int)cp)) return kr;
+    return jp;
+}
 
 // Next code point of UTF-8 text (bad bytes are taken as Latin-1).
 inline uint32_t Next(const std::string& s, size_t& i)
@@ -81,6 +102,7 @@ inline const Glyph& Get(bool bold, int px, uint32_t cp)
     Glyph g;
     Face* fp = &GetFace(id, bold);
     if (id > 0 && fp->ok && !stbtt_FindGlyphIndex(&fp->info, (int)cp)) fp = &GetFace(0, bold); // (not in that font: Noto Sans's)
+    if (cp >= 0x2010 && fp->ok && !stbtt_FindGlyphIndex(&fp->info, (int)cp)) fp = &CjkFace(cp); // (nor there: Japanese or Korean)
     Face& f = *fp;
     if (f.ok)
     {
