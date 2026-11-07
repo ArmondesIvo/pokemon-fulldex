@@ -135,6 +135,10 @@ struct Scene
     // HP boxes that run off the screen carry on to the edge of the view instead of
     // stopping at black.
     bool edgeFill = false;
+    // With edgeFill: the rows of a text box on the top screen widened to the view (WideBoxFind,
+    // WideBoxPixel): its frame's ends at the edges, the border and the white carried on between.
+    // -1: none.
+    int wideBox[2] = { -1, -1 };
     // With `wide`: 2D reaching the top screen's edge is continued beside it only where it is
     // a fill (the same colour for 8 pixels: a wipe, a flash, a window), not a picture (a
     // snapshot of the world shown in 2D, which would turn into streaks), and a translucent
@@ -225,6 +229,87 @@ inline uint32_t EdgeFillColour(const ScreenImage& top, int y, int side)
         if (((c >> 16) & 0xFF) > 8 || ((c >> 8) & 0xFF) > 8 || (c & 0xFF) > 8) return c;
     }
     return row[side ? 255 : 0];
+}
+
+// How many of a row's outermost columns EdgeFillColour went past as black (at most 2): those are
+// covered with the fill's colour too, after the screen is drawn, or the game's own black column
+// (SoulSilver's evolution, its right side) shows as a thin black line between the screen and the
+// bar. 0 when the row has no colour near the edge at all (a black row stays as it is).
+inline int EdgeFillInset(const ScreenImage& top, int y, int side)
+{
+    const uint32_t* row = top.pixels + y * 256;
+    for (int i = 0; i < 4; i++)
+    {
+        const uint32_t c = row[side ? 255 - i : i];
+        if (((c >> 16) & 0xFF) > 8 || ((c >> 8) & 0xFF) > 8 || (c & 0xFF) > 8) return std::min(i, 2);
+    }
+    return 0;
+}
+
+// A HeartGold/SoulSilver text box (the message window under an evolution) widened to the view.
+// Its frame is a border line from column 2 to 253 on its first and last rows and down columns 2
+// and 253, outside it the screen's background: y0, y1 are those rows.
+inline bool WideBoxFind(const ScreenImage& top, int& y0, int& y1)
+{
+    const uint32_t* p = top.pixels;
+    auto rgb = [&](int x, int y) { return p[y * 256 + x] & 0xFFFFFF; };
+    auto line = [&](int y) {
+        const uint32_t c = rgb(2, y);
+        if (rgb(0, y) == c || rgb(255, y) == c) return false;
+        for (int x = 3; x <= 253; x++)
+            if (rgb(x, y) != c) return false;
+        return true;
+    };
+    for (int a = 96; a < 176; a++)
+    {
+        if (!line(a)) continue;
+        const uint32_t c = rgb(2, a);
+        for (int b = 191; b > a + 16; b--)
+        {
+            if (!line(b) || rgb(2, b) != c) continue;
+            bool sides = true;
+            for (int y = a; y <= b && sides; y++) sides = rgb(2, y) == c && rgb(253, y) == c;
+            if (!sides) continue;
+            y0 = a;
+            y1 = b;
+            return true;
+        }
+    }
+    return false;
+}
+
+// The widened box: the screen's columns up to WideBoxLeft (the frame and its shading on the
+// left) moved out by `shift`, the columns from WideBoxRight on moved out as far the other way,
+// and the gaps between filled from the box: on a border row its pattern, which repeats every 8
+// pixels (so `shift` is a multiple of 8 and it joins up on both sides), on the rows of the
+// text the box's own colour there (WideBoxFill). The text itself stays where it is.
+constexpr int WideBoxLeft = 12, WideBoxRight = 236;
+inline int WideBoxShift(float originX, float unit) { return (int)(originX / unit) / 8 * 8; }
+// The colour a gap of a text row is filled with: the box's white from a column the text never
+// reaches (it starts at column 16 and the shading on the right at 235; the column right beside a
+// gap can be the faint shading of the rows next to the border, which would run across it as a line).
+struct WideBoxRow { uint32_t fill[2]; };
+inline WideBoxRow WideBoxFill(const ScreenImage& top, int sy)
+{
+    const uint32_t* row = top.pixels + sy * 256;
+    return { { row[WideBoxLeft + 3], row[WideBoxRight - 3] } };
+}
+inline uint32_t WideBoxPixel(const ScreenImage& top, int sy, int vx, int shift, const WideBoxRow& f)
+{
+    const uint32_t* row = top.pixels + sy * 256;
+    if (vx < WideBoxLeft - shift) return row[std::clamp(vx + shift, 0, 255)];
+    if (vx < WideBoxLeft)
+    {
+        const bool pattern = std::equal(row + WideBoxLeft, row + WideBoxLeft + 8, row + WideBoxLeft + 8);
+        return pattern ? row[WideBoxLeft + ((vx - (WideBoxLeft - shift)) & 7)] : f.fill[0];
+    }
+    if (vx < WideBoxRight) return row[vx];
+    if (vx < WideBoxRight + shift)
+    {
+        const bool pattern = std::equal(row + WideBoxRight - 8, row + WideBoxRight, row + WideBoxRight - 16);
+        return pattern ? row[WideBoxRight - 8 + ((vx - WideBoxRight) & 7)] : f.fill[1];
+    }
+    return row[std::clamp(vx - shift, 0, 255)];
 }
 
 // The colour of the weather particle beside the top screen at base x bx (outside 0..255) and
@@ -343,9 +428,23 @@ inline void MergedPrepareEdgeWindows(Scene& scene, const ScreenImage* screens)
     }
 }
 
+// The column whose colour goes on beside the screen: the outermost one, or the next in when the
+// outermost is the 3D world alone and the 2D layer is flat from there (a background scrolled by
+// one pixel, as in the Fly animation's sky). The same choice as the one in GPU2D_Soft.cpp.
+inline int MergedEdgeColumn(const ScreenImage& top, int sy, int side)
+{
+    const int x = side ? 255 : 0, dir = side ? -1 : 1;
+    if (!top.flags || LayerClass(top.flags[sy * 256 + x]) != LAYER_3D) return x;
+    const uint8_t flag = top.flags[sy * 256 + x + dir];
+    if (LayerClass(flag) == LAYER_3D) return x;
+    for (int k = 2; k < 9; k++)
+        if (top.flags[sy * 256 + x + dir * k] != flag) return x;
+    return x + dir;
+}
+
 inline EdgeContinuation MergedEdgeContinuation(const Scene& scene, const ScreenImage& top, int sy, int side)
 {
-    const int sx = side ? 255 : 0;
+    const int sx = MergedEdgeColumn(top, sy, side);
     const EdgeContinuation none = { 0, 0, 16 };
     // (Nor where the piece leaves the screen out: that part is drawn elsewhere.)
     if (scene.items[0].Skips(sx, sy) || scene.edgeWindow[side][sy]) return none;
@@ -394,6 +493,18 @@ inline EdgeContinuation MergedEdgeContinuation(const Scene& scene, const ScreenI
     // Not mixed with the 3D world: as the screen shows it (with any fade or brightening).
     if (evb == 0) return finished;
     return { top.edge[sy * 2 + side] & 0xFFFFFF, eva, evb };
+}
+
+// Whether row sy of the top screen is nothing but black backdrop across its whole width: the 3D
+// layer is switched off there, as a door's wipe does while it opens or closes. The widescreen
+// world, which knows nothing of that, would show through the whole row (the 4:3 middle appeared
+// at once while the sides were still being wiped), so the row is black across the view.
+inline bool MergedBlankRow(const ScreenImage& top, int sy)
+{
+    if (!top.flags || !top.pixels || sy < 0 || sy >= 192) return false;
+    for (int x = 0; x < 256; x++)
+        if (LayerClass(top.flags[sy * 256 + x]) != LAYER_BACKDROP || (top.pixels[sy * 256 + x] & 0xFFFFFF)) return false;
+    return true;
 }
 
 // Whether the weather's particles are repeated beside the top screen in row sy (see
@@ -460,6 +571,74 @@ inline Element FullScreen(int screen)
 inline Element Crop(int screen, int sx, int sy, int sw, int sh)
 {
     return { screen, sx, sy, sw, sh, 0, 0, 1.0f, 0, 255, false };
+}
+
+// A battle's question ("Use next Pokemon?") stays at full size on the top screen. The two
+// answers from the touch screen sit at the right end of the message bar, under the text,
+// so nothing covers the battle or the question.
+inline Scene BattleChoiceScene(float viewWidth)
+{
+    Scene sc;
+    sc.name = "battle-choice";
+    sc.wide = viewWidth >= 300;
+    sc.smartEdges = true;
+    sc.items = { FullScreen(0) };
+    const float right = 128 + viewWidth / 2 - 4;    // the bar's right end
+    const float room = right - 170;                 // the question's text ends near x 166
+    const float k = std::max(0.3f, std::min(0.42f, room / 252));
+    const float h = 47 * k, gap = 2;
+    float y = 148 + (41 - (2 * h + gap)) / 2;       // the bar: rows 147 to 189
+    for (int top : { 33, 80 })                      // SWITCH POKEMON, then KEEP BATTLING
+    {
+        Element b = Crop(1, 2, top, 252, 47); // with the red cursor brackets
+        b.scale = k;
+        b.dx = right - 252 * k;
+        b.dy = y;
+        sc.items.push_back(b);
+        y += h + gap;
+    }
+    return sc;
+}
+
+// Black and Black 2's Bag: the touch screen alone while browsing the pockets; once an item is
+// chosen (its card on the top screen), both screens side by side.
+inline Scene BagScene(float viewWidth, const ScreenImage* screens)
+{
+    const float viewLeft = 128 - viewWidth / 2, viewRight = 128 + viewWidth / 2;
+    int text = 0;
+    if (screens && screens[0].pixels)
+        for (int y = 28; y < 152; y += 2)
+            for (int x = 8; x < 248; x += 2)
+            {
+                const uint32_t c = screens[0].pixels[y * 256 + x];
+                text += ((c >> 16) & 0xFF) > 200 && ((c >> 8) & 0xFF) > 200 && (c & 0xFF) > 200;
+            }
+    Scene sc;
+    sc.name = "bag";
+    Element list = FullScreen(1);
+    sc.items = { list };
+    if (text >= 12)
+    {
+        // An item chosen: both screens side by side, as the DS shows them (the card on the
+        // top screen, the message and the choices on the touch screen), so that neither covers
+        // the other; the rest of the view in the card's own blue.
+        const float k = std::min(1.0f, viewWidth / 512);
+        Element top = Crop(0, 0, 0, 256, 192), touch = Crop(1, 0, 0, 256, 192);
+        top.scale = touch.scale = k;
+        top.dx = 128 - 256 * k;
+        touch.dx = 128;
+        top.dy = touch.dy = 96 - 96 * k;
+        top.crisp = touch.crisp = k == 1.0f;
+        sc.name = "bag";
+        sc.items = { top, touch };
+        const uint32_t blue = screens && screens[0].pixels ? screens[0].pixels[100 * 256 + 4] & 0xFFFFFF : 0x103070;
+        sc.items.insert(sc.items.begin(), FillRect(viewLeft - 1, -1, (int)std::ceil(viewWidth) + 3, 194, blue));
+        return sc;
+    }
+    sc.bgScreen = 1;
+    sc.bgX = 2;
+    sc.bgY = 2;
+    return sc;
 }
 
 // Arranges crops as one column (or one row), scaled together to fill the view.
@@ -970,12 +1149,16 @@ inline void MergedCompose(const Scene& scene, const ScreenImage screens[2], int 
                     int sy = (int)((y - v.originY) / v.unit);
                     if (sy >= 0 && sy < 192)
                     {
+                        if (MergedBlankRow(top, sy)) std::fill(dst, dst + outW, 0xFF000000);
                         const int left = (int)v.originX, right = (int)(v.originX + 256 * v.unit);
                         for (int side = 0; side < 2; side++)
                         {
                             const EdgeContinuation c = MergedEdgeContinuation(scene, top, sy, side);
                             if (c.none()) continue;
-                            const int xa = side ? std::max(right, 0) : 0, xb = side ? outW : std::min(left, outW);
+                            // (Continued from the next column in, the outermost column, the 3D world
+                            // alone, is covered too: no slit at the screen's edge.)
+                            const int cover = MergedEdgeColumn(top, sy, side) != (side ? 255 : 0) ? (int)std::ceil(v.unit) : 0;
+                            const int xa = side ? std::max(right - cover, 0) : 0, xb = side ? outW : std::min(left + cover, outW);
                             if (c.pattern)
                             {
                                 for (int x = xa; x < xb; x++)
@@ -1154,7 +1337,14 @@ inline void MergedCompose(const Scene& scene, const ScreenImage screens[2], int 
                             MergedWideCovers(*wide, v, outW, outH, srcX, srcY))
                             continue;
                         uint32_t c = src.pixels[si];
-                        if (MergedKeyed(el, c & 0xFFFFFF)) continue;
+                        // (As in the nearest-pixel path and the GPU compose.)
+                        if (el.dropSpriteCorner > 0 && src.flags && LayerClass(src.flags[si]) == LAYER_OBJ &&
+                            std::min(srcX - el.sx, el.sx + el.sw - 1 - srcX) < el.dropSpriteCorner &&
+                            std::min(srcY - el.sy, el.sy + el.sh - 1 - srcY) < el.dropSpriteCorner)
+                            continue;
+                        if (MergedKeyed(el, c & 0xFFFFFF) &&
+                            (!el.keyRing || std::min({ srcX - el.sx, el.sx + el.sw - 1 - srcX, srcY - el.sy, el.sy + el.sh - 1 - srcY }) < el.keyRing))
+                            continue;
                         acc[0] += ((c >> 16) & 0xFF) * wt[k];
                         acc[1] += ((c >> 8) & 0xFF) * wt[k];
                         acc[2] += (c & 0xFF) * wt[k];
@@ -1170,6 +1360,45 @@ inline void MergedCompose(const Scene& scene, const ScreenImage screens[2], int 
                     d = 0xFF000000 | ((uint32_t)dr << 16) | ((uint32_t)dg << 8) | (uint32_t)db;
                 }
             }
+        }
+        // Beside an edge fill, the screen's own black outermost columns take the bar's colour
+        // (EdgeFillInset).
+        if (!useWide && scene.edgeFill && v.originX > 0 && !scene.items.empty() && scene.items[0].screen >= 0)
+        {
+            const ScreenImage& top = screens[scene.items[0].screen];
+            const int left = (int)v.originX, right = (int)(v.originX + 256 * v.unit);
+            for (int y = ya; y < yb; y++)
+            {
+                const int sy = (int)((y - v.originY) / v.unit);
+                if (sy < 0 || sy >= 192 || y < v.originY) continue;
+                for (int side = 0; side < 2; side++)
+                {
+                    const int inset = EdgeFillInset(top, sy, side);
+                    if (!inset) continue;
+                    const uint32_t c = 0xFF000000 | EdgeFillColour(top, sy, side);
+                    const int w = (int)(inset * v.unit + 0.5f);
+                    const int x0 = std::max(side ? right - w : left, 0), x1 = std::min(side ? right : left + w, outW);
+                    std::fill(&out[(size_t)y * outW + x0], &out[(size_t)y * outW + x1], c);
+                }
+            }
+            // A text box widened to the view (Scene::wideBox).
+            const int shift = scene.wideBox[0] >= 0 ? WideBoxShift(v.originX, v.unit) : 0;
+            if (shift > 0)
+                for (int y = ya; y < yb; y++)
+                {
+                    if (y < v.originY) continue;
+                    const int sy = (int)((y - v.originY) / v.unit);
+                    if (sy < scene.wideBox[0] || sy > scene.wideBox[1] || sy >= 192) continue;
+                    uint32_t* dst = &out[(size_t)y * outW];
+                    const WideBoxRow f = WideBoxFill(top, sy);
+                    const int xa = std::max(0, (int)(v.originX - shift * v.unit)), xb = std::min(outW, (int)(v.originX + (256 + shift) * v.unit + 0.5f));
+                    for (int x = xa; x < xb; x++)
+                    {
+                        const int vx = (int)std::floor((x - v.originX) / v.unit);
+                        if (vx >= WideBoxLeft && vx < WideBoxRight) continue;
+                        dst[x] = 0xFF000000 | WideBoxPixel(top, sy, vx, shift, f);
+                    }
+                }
         }
     };
 
