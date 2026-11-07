@@ -86,6 +86,11 @@ public class GameActivity extends SDLActivity {
     // The launcher and both game engines share one activity. Keep its orientation tied to
     // the current screen, including when SDL recreates its window with a stale size/hint.
     private static volatile boolean playingGame;
+    // A launcher page (Settings, Launcher, ...) is shown sideways, but it is still the launcher: it
+    // turns the screen, not the camera cutout, to the game's way.
+    private static volatile boolean landscapeOnly;
+    // Launcher > Camera Cutout: ON keeps the launcher's screens clear of the camera hole.
+    private static volatile boolean avoidCutout = true;
     private final ContentObserver rotationObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
         @Override public void onChange(boolean selfChange) { applyScreenOrientation(); }
     };
@@ -98,7 +103,7 @@ public class GameActivity extends SDLActivity {
         runOnUiThread(() -> {
             try {
                 android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
-                int want = playingGame
+                int want = playingGame || !avoidCutout
                     ? android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
                     : android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER;
                 if (lp.layoutInDisplayCutoutMode != want) {
@@ -120,7 +125,7 @@ public class GameActivity extends SDLActivity {
         runOnUiThread(() -> {
             boolean autoRotate = Settings.System.getInt(getContentResolver(),
                 Settings.System.ACCELEROMETER_ROTATION, 0) != 0;
-            setRequestedOrientation(playingGame
+            setRequestedOrientation(playingGame || landscapeOnly
                 ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 : autoRotate ? ActivityInfo.SCREEN_ORIENTATION_FULL_USER
                              : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
@@ -129,6 +134,7 @@ public class GameActivity extends SDLActivity {
 
     public static void showLauncherOrientation() {
         playingGame = false;
+        landscapeOnly = false;
         setDsRunning(false);
         if (self != null) self.applyScreenOrientation();
     }
@@ -136,6 +142,18 @@ public class GameActivity extends SDLActivity {
     public static void showGameOrientation() {
         playingGame = true;
         if (self != null) self.applyScreenOrientation();
+    }
+
+    // A page of the launcher opened on an upright phone: sideways, with the cutout kept as the launcher has it.
+    public static void showPageOrientation() {
+        playingGame = false;
+        landscapeOnly = true;
+        if (self != null) self.applyScreenOrientation();
+    }
+
+    public static void setAvoidCutout(boolean avoid) {
+        avoidCutout = avoid;
+        if (self != null) self.applyCutoutMode();
     }
 
     @Override

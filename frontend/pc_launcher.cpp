@@ -260,6 +260,11 @@ void JavaVoid(const char* method)
     CallActivity(method, "()V", [&](JNIEnv* env, jclass c, jmethodID m) { env->CallStaticVoidMethod(c, m); });
 }
 
+void JavaBoolArg(const char* method, bool value)
+{
+    CallActivity(method, "(Z)V", [&](JNIEnv* env, jclass c, jmethodID m) { env->CallStaticVoidMethod(c, m, value ? JNI_TRUE : JNI_FALSE); });
+}
+
 // The ROM folder the player chose (GameActivity.romFolder), with the saves in a folder inside
 // it; until one is chosen, the app's own folder.
 void SetRomFolder(Folders& fo)
@@ -2663,7 +2668,12 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             static int lastLand = 0;
             static const bool forceLand = getenv("SSR_ANDROID_LANDSCAPE") != nullptr; // (test)
             const int wantLand = Launcher::Focus().page >= 0 || forceLand ? 1 : 0;
-            if (wantLand != lastLand) { lastLand = wantLand; JavaVoid(wantLand ? "showGameOrientation" : "showLauncherOrientation"); }
+            if (wantLand != lastLand) { lastLand = wantLand; JavaVoid(wantLand ? "showPageOrientation" : "showLauncherOrientation"); }
+            // Launcher > Camera Cutout: told to Android when it changes (and once at the start).
+            static int lastCut = -1;
+            Launcher::LookLoad();
+            const int wantCut = Launcher::Look().avoidCutout ? 1 : 0;
+            if (wantCut != lastCut) { lastCut = wantCut; JavaBoolArg("setAvoidCutout", wantCut != 0); }
         }
 #endif
             // NOW PLAYING: the music app's song, now and then, for the bar on the home screen (SSR_LIST_NOWPLAYING: a made-up song, for the test picture).

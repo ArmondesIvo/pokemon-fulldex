@@ -1630,6 +1630,7 @@ struct LookPrefs
     int fontSize = 100;                          // percent, 85 to 120
     bool badges = true;
     std::string music = "corner";                 // corner (sidebar foot), top (Launcher > Music Player)
+    bool avoidCutout = true;                      // Android: the launcher's screens keep clear of the camera cutout (Launcher > Camera Cutout)
     std::string layout = "sidebar";              // sidebar, tiles (panel is kept as a file value only) (Launcher > Layout)
     bool loaded = false;
     std::string from;
@@ -1708,7 +1709,12 @@ inline void ThemesRefresh()
         return x < y;
     });
 }
-inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 11 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : 5; }
+#ifdef __ANDROID__
+static const int kLauncherMenuRows = 6; // (Layout, Theme Editor, My Themes, Theme Gallery, Music Player, Camera Cutout)
+#else
+static const int kLauncherMenuRows = 5;
+#endif
+inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 11 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : kLauncherMenuRows; }
 // A on a theme: Apply, Show In Folder (a PC), Delete.
 inline void OpenThemeMenu(int i)
 {
@@ -1866,6 +1872,7 @@ inline void LookFrom(const std::map<std::string, std::string>& p)
     l.badges = get("badges", "on") != "off";
     { const std::string lv = get("layout", l.layout); l.layout = lv == "panel" || lv == "tiles" ? lv : "sidebar"; }
     { const std::string mv = get("music", l.music); l.music = mv == "top" || mv == "compact" || mv == "compactb" || mv == "off" ? mv : "corner"; }
+    l.avoidCutout = get("cutout", "on") != "off";
     LookApply();
 }
 inline void LookLoad()
@@ -1895,6 +1902,7 @@ inline void LookSave()
         }
         fprintf(f, "text\t%s\n", l.col[10].c_str());
         fprintf(f, "background\t%s\nsoftness\t%d\ndim\t%d\ngrain\t%d\nbadges\t%s\nfont\t%s\nfont_size\t%d\nlayout\t%s\nmusic\t%s\n", l.backdrop.c_str(), l.blur, l.dim, l.grain, l.badges ? "on" : "off", l.font.c_str(), l.fontSize, l.layout.c_str(), l.music.c_str());
+        fprintf(f, "cutout\t%s\n", l.avoidCutout ? "on" : "off");
         fclose(f);
     }
 }
@@ -3049,6 +3057,7 @@ inline int LookDo(int row, int dir)
         // (The menu: Layout, Theme Editor, My Themes, Theme Gallery.)
         if (row == 0) { l.layout = l.layout == "tiles" ? "sidebar" : "tiles"; LookSave(); Hub().version++; return 0; }
         if (row == 4) { l.music = l.music == "corner" ? "top" : l.music == "top" ? "compact" : l.music == "compact" ? "compactb" : l.music == "compactb" ? "off" : "corner"; LookSave(); Hub().version++; return 0; }
+        if (row == 5) { l.avoidCutout = !l.avoidCutout; LookSave(); Hub().version++; return 0; } // (Android: Camera Cutout)
         if (row == 1) LauncherMode() = 1;
         else if (row == 2) { LauncherMode() = 2; ThemesRefresh(); }
         else { LauncherMode() = 5; Focus().prow = 0; Focus().rScroll = 0; Themes().msg.clear(); GalleryOpen(); } // (the Theme Gallery)
@@ -5098,13 +5107,17 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 row(2, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
                 row(3, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Online");
                 row(4, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: full size, a small pill of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact Top" : Look().music == "compactb" ? "Compact Bottom" : Look().music == "off" ? "Off" : "Bottom Left");
-                static const char* const titles[5] = { "Layout", "Theme Editor", "My Themes", "Theme Gallery", "Music Player" };
-                static const char* const about[5] = {
+#ifdef __ANDROID__
+                row(5, Glass::I_FULLSCREEN, "Camera Cutout", "Keep every launcher screen clear of the camera hole, or fill the whole screen", Look().avoidCutout ? "Avoid" : "Fill");
+#endif
+                static const char* const titles[6] = { "Layout", "Theme Editor", "My Themes", "Theme Gallery", "Music Player", "Camera Cutout" };
+                static const char* const about[6] = {
                     "How the home screen is set out. Sidebar: the Continue Playing banner above a grid of games. Tiles: one game at a time in a carousel, with a row of tiles for the sections under it. Choose it to switch.",
                     "Change the launcher's look: the accent, the panels, the sidebar and the top bar, the buttons, the background, its blur and dim, and the glass's grain. Each can be a colour or a picture.",
                     "Keep the look you have now as a theme, with its pictures, and switch between your themes. Each is one .zip file you can send to a friend.",
                     "Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.",
-                    "Shows the song playing on your device with previous, play and next. Bottom Left: a square at the foot of the sidebar. Top: a bar along the top. Compact Top and Compact Bottom: just previous, play and next in a small pill, along the top or at the foot of the sidebar. Off: no player. Its buttons use your Buttons look from the Theme Editor." };
+                    "Shows the song playing on your device with previous, play and next. Bottom Left: a square at the foot of the sidebar. Top: a bar along the top. Compact Top and Compact Bottom: just previous, play and next in a small pill, along the top or at the foot of the sidebar. Off: no player. Its buttons use your Buttons look from the Theme Editor.",
+                    "Avoid: every launcher screen keeps clear of the phone's camera hole, and the strip beside it stays black. Fill: the launcher runs across the whole screen, behind the camera hole, as the games do. Choose it to switch." };
                 GT(c, ix, y + 14 * u, titles[F.prow], 22 * u, text, true);
                 y += (int)(44 * u);
                 para(about[F.prow], text, 14 * u);
