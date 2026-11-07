@@ -1621,9 +1621,9 @@ struct LookPrefs
 {
     // 0 accent, 1 panels, 2 sidebar, 3 top bar, 4 buttons, 5 the background's own: a colour (a name or
     // #RRGGBB), a picture (a file in launcher-pictures; "" none), how solid in percent (-1: as the colour has it).
-    std::string col[6] = { "white", "clear", "clear", "clear", "white", "#1E3650" };
-    std::string pic[6];
-    int op[6] = { -1, -1, -1, -1, -1, -1 };
+    std::string col[11] = { "white", "clear", "clear", "clear", "white", "#1E3650", "", "", "", "", "#F2F5F9" }; // (10: the text colour)
+    std::string pic[11];
+    int op[11] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
     std::string backdrop = "game";               // game, custom (the background's own picture or colour), plain
     int blur = 20, dim = 42, grain = 25;         // percent
     std::string font = "noto-sans";              // (launcher_fonts.h)
@@ -1636,7 +1636,7 @@ struct LookPrefs
     int edit = -1, field = 1;                    // (open: 0 to 5 a colour's wheel, 6 the blur and dim; its row)
     float h = 0, s = 0, v = 1;
     int wx = 0, wy = 0, wr = 0;                  // the wheel on screen (taps)
-    int fx[6] = {}, fy[6] = {}, fw = 0, fh = 0;  // its rows
+    int fx[8] = {}, fy[8] = {}, fw = 0, fh = 0;  // its rows
     int px[9] = {}, py = 0, pd = 0, pn = 0;      // its presets
     int rowX = 0, rowW = 0;                      // its rows across
 };
@@ -1708,7 +1708,7 @@ inline void ThemesRefresh()
         return x < y;
     });
 }
-inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 10 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : 5; }
+inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 11 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : 5; }
 // A on a theme: Apply, Show In Folder (a PC), Delete.
 inline void OpenThemeMenu(int i)
 {
@@ -1762,7 +1762,7 @@ inline uint32_t SpecRgb(const std::string& sp, uint32_t fallback)
     return fallback;
 }
 inline bool LookHasOp(int e) { return e >= 1 && e <= 4; }
-inline uint32_t LookRgb(int e) { return SpecRgb(Look().col[e], e == 5 ? 0xFF1E3650u : e >= 1 && e <= 3 ? 0xFF101826u : 0xFFFFFFFFu); }
+inline uint32_t LookRgb(int e) { return SpecRgb(Look().col[e], e == 5 ? 0xFF1E3650u : e >= 1 && e <= 3 ? 0xFF101826u : e == 10 ? 0xFFF2F5F9u : 0xFFFFFFFFu); }
 inline int LookOpacity(int e)
 {
     const LookPrefs& l = Look();
@@ -1834,6 +1834,12 @@ inline void LookApply()
     }
     const uint32_t btn = Glass::SurfacePic(3).px.empty() ? LookRgb(4) : Glass::SurfacePic(3).avg;
     Glass::Button() = (uint32_t)(LookOpacity(4) * 255 / 100) << 24 | (btn & 0xFFFFFFu);
+    // The writing: its colour, the hint and the dimmed in proportion (the usual ones while it is the usual colour).
+    const uint32_t tx = 0xFF000000u | (LookRgb(10) & 0xFFFFFFu);
+    auto scaled = [&](float f) { return 0xFF000000u | (uint32_t)((tx >> 16 & 255) * f) << 16 | (uint32_t)((tx >> 8 & 255) * f) << 8 | (uint32_t)((tx & 255) * f); };
+    Menu::GlassText = tx;
+    Menu::GlassHint = tx == 0xFFF2F5F9u ? 0xFFB9C3CFu : scaled(0.78f);
+    Menu::GlassOff = tx == 0xFFF2F5F9u ? 0xFF7E8894u : scaled(0.5f);
 }
 static const char* const kLookKeys[6] = { "accent", "panel", "sidebar", "topbar", "buttons", "bgcolour" };
 inline void LookFrom(const std::map<std::string, std::string>& p)
@@ -1847,6 +1853,8 @@ inline void LookFrom(const std::map<std::string, std::string>& p)
         l.pic[i] = i == 0 ? std::string() : get(std::string(kLookKeys[i]) + "_pic", "");
         l.op[i] = LookHasOp(i) ? std::max(-1, std::min(100, atoi(get(std::string(kLookKeys[i]) + "_op", "-1").c_str()))) : -1;
     }
+    l.col[10] = get("text", d.col[10]);
+    if (l.col[10].empty()) l.col[10] = d.col[10];
     l.backdrop = get("background", "game");
     if (l.backdrop == "custom") l.backdrop = l.pic[5].empty() ? "colour" : "picture"; // (as it was for a while)
     if (p.count("softness")) l.blur = std::max(0, std::min(100, atoi(p.at("softness").c_str())));
@@ -1885,6 +1893,7 @@ inline void LookSave()
             if (i > 0) fprintf(f, "%s_pic\t%s\n", kLookKeys[i], l.pic[i].c_str());
             if (LookHasOp(i)) fprintf(f, "%s_op\t%d\n", kLookKeys[i], l.op[i]);
         }
+        fprintf(f, "text\t%s\n", l.col[10].c_str());
         fprintf(f, "background\t%s\nsoftness\t%d\ndim\t%d\ngrain\t%d\nbadges\t%s\nfont\t%s\nfont_size\t%d\nlayout\t%s\nmusic\t%s\n", l.backdrop.c_str(), l.blur, l.dim, l.grain, l.badges ? "on" : "off", l.font.c_str(), l.fontSize, l.layout.c_str(), l.music.c_str());
         fclose(f);
     }
@@ -2955,7 +2964,7 @@ inline std::vector<int> LookFieldList(int e)
 {
     if (e == 6) return { LF_GRAIN };
     if (e == 8) return { LF_SIZE }; // (Text Size)
-    if (e == 0) return { LF_PRESET, LF_HUE, LF_SAT, LF_VAL };
+    if (e == 0 || e == 10) return { LF_PRESET, LF_HUE, LF_SAT, LF_VAL };
     if (e == 5) return { LF_SOURCE, LF_PIC, LF_PRESET, LF_HUE, LF_SAT, LF_VAL, LF_BLUR, LF_DIM };
     return { LF_PIC, LF_PRESET, LF_HUE, LF_SAT, LF_VAL, LF_OP };
 }
@@ -2985,7 +2994,7 @@ inline void LookSetHsv()
     if (l.edit == 5) l.backdrop = "colour";
     LookApply();
 }
-inline void LookSyncHsv() { LookPrefs& l = Look(); if (l.edit >= 0 && l.edit < 6) ToHsv(LookRgb(l.edit), l.h, l.s, l.v); }
+inline void LookSyncHsv() { LookPrefs& l = Look(); if (l.edit >= 0 && (l.edit < 6 || l.edit == 10)) ToHsv(LookRgb(l.edit), l.h, l.s, l.v); }
 inline int LookFieldIndex(int e, int id) { const auto f = LookFieldList(e); for (size_t i = 0; i < f.size(); i++) if (f[i] == id) return (int)i; return 0; }
 inline void LookOpen(int e) { LookPrefs& l = Look(); l.edit = e; l.field = e == 6 || e == 5 || e == 8 ? 0 : LookFieldIndex(e, LF_HUE); LookSyncHsv(); }
 inline void LookPicked(int e) // (a picture chosen: shown fairly solid; a background one hardly dimmed)
@@ -3099,6 +3108,7 @@ inline int LookDo(int row, int dir)
     if (row <= 6) { LookOpen(row); Hub().version++; return 0; } // (each opens its own page)
     if (row == 8) { LauncherMode() = 4; Focus().prow = LookFontId(); Focus().rScroll = 0; Themes().msg.clear(); Hub().version++; return 0; } // (Font: its grid)
     if (row == 9) { LookOpen(8); Hub().version++; return 0; } // (Text Size)
+    if (row == 10) { LookOpen(10); Hub().version++; return 0; } // (Text Colour)
     if (row == 7) l.badges = !l.badges;
     (void)dir;
     LookSave();
@@ -3299,6 +3309,7 @@ inline bool LookWriteTheme(const std::string& name, const std::vector<unsigned c
         if (i > 0) text += std::string(kLookKeys[i]) + "_pic\t" + picName[i] + "\n";
         if (LookHasOp(i)) text += std::string(kLookKeys[i]) + "_op\t" + std::to_string(l.op[i]) + "\n";
     }
+    text += "text\t" + l.col[10] + "\n";
     text += "background\t" + l.backdrop + "\nsoftness\t" + std::to_string(l.blur) + "\ndim\t" + std::to_string(l.dim) + "\ngrain\t" + std::to_string(l.grain) + "\nbadges\t" + (l.badges ? "on" : "off") + "\n";
     text += "font\t" + l.font + "\nfont_size\t" + std::to_string(l.fontSize) + "\n";
     total += text.size();
@@ -3860,7 +3871,7 @@ inline int ThemePick(const std::string& pick)
         LookPrefs& l = Look();
         const LookPrefs d;
         for (int i = 0; i < 6; i++) { l.col[i] = d.col[i]; l.pic[i] = d.pic[i]; l.op[i] = d.op[i]; }
-        l.backdrop = d.backdrop; l.blur = d.blur; l.dim = d.dim; l.grain = d.grain; l.badges = d.badges; l.font = d.font; l.fontSize = d.fontSize;
+        l.col[10] = d.col[10]; l.backdrop = d.backdrop; l.blur = d.blur; l.dim = d.dim; l.grain = d.grain; l.badges = d.badges; l.font = d.font; l.fontSize = d.fontSize;
         LookApply();
         LookSave();
         ts.msg = "THE DEFAULT LOOK IS BACK";
@@ -5086,7 +5097,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             return;
         }
         const int rw = (int)(400 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(14 * u);
-        const int rowH = (int)(46 * u), rg = (int)(6 * u), n = 10;
+        const int rowH = (int)(46 * u), rg = (int)(6 * u), n = 11;
         Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
         if (lk.edit >= 0) F.prow = lk.edit == 8 ? 9 : lk.edit;
         F.prow = std::max(0, std::min(F.prow, n - 1));
@@ -5096,13 +5107,13 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         F.rScroll = std::max(0, std::min(F.rScroll, n - vis));
         F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
         F.aW = 0;
-        static const char* const names[10] = { "Accent", "Panels", "Sidebar", "Top Bar", "Buttons", "Background", "Grain", "Cloud Badges", "Font", "Text Size" };
-        static const char* const subs[10] = { "The frame round what is chosen, and its glow", "The glass panels: a colour or a picture, see-through to solid",
+        static const char* const names[11] = { "Accent", "Panels", "Sidebar", "Top Bar", "Buttons", "Background", "Grain", "Cloud Badges", "Font", "Text Size", "Text Colour" };
+        static const char* const subs[11] = { "The frame round what is chosen, and its glow", "The glass panels: a colour or a picture, see-through to solid",
                                              "The bar down the left: a colour or a picture", "The bar along the top: a colour or a picture",
                                              "Play, Continue, the chosen tab and the button marks at the bottom", "Game art, your own picture or a colour; its blur and dim",
                                              "The fine speckle in the glass panels", "A cloud on the cards of games whose saves sync",
-                                              "The letters everywhere in the launcher", "How big the writing is" };
-        static const int icons[10] = { Glass::I_SPARKLE, Glass::I_LAYERS, Glass::I_LAYOUT, Glass::I_WINDOW, Glass::I_PLAY, Glass::I_SCREENS, Glass::I_GAUGE, Glass::I_GLOBE, Glass::I_NOTE, Glass::I_EXPAND };
+                                              "The letters everywhere in the launcher", "How big the writing is", "The colour of the writing" };
+        static const int icons[11] = { Glass::I_SPARKLE, Glass::I_LAYERS, Glass::I_LAYOUT, Glass::I_WINDOW, Glass::I_PLAY, Glass::I_SCREENS, Glass::I_GAUGE, Glass::I_GLOBE, Glass::I_NOTE, Glass::I_EXPAND, Glass::I_CHAT };
         for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
         {
             const int rx = L + pad, ry = top + pad + (i - F.rScroll) * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
@@ -5119,17 +5130,18 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             else if (i == 6) st = std::to_string(lk.grain) + "%";
             else if (i == 7) st = lk.badges ? "On" : "Off";
             else if (i == 8) st = kLauncherFonts[LookFontId()].name;
-            else st = std::to_string(lk.fontSize) + "%";
+            else if (i == 9) st = std::to_string(lk.fontSize) + "%";
+            else st = LookName(lk.col[10]);
             Glass::DrawIcon(c, icons[i], rx + 28 * u, mid, 11 * u, text);
             GT(c, rx + (int)(56 * u), mid - 8 * u, names[i], 16 * u, text, true);
             GTFit(c, rx + (int)(56 * u), mid + 10 * u, subs[i], 12 * u, rww - (int)(56 * u) - GW(st, 12 * u, true) - (int)(100 * u), hint, false);
-            const bool hasDot = i <= 4 || (i == 5 && lk.backdrop == "colour");
+            const bool hasDot = i <= 4 || i == 10 || (i == 5 && lk.backdrop == "colour");
             const int dot = hasDot ? (int)(14 * u) : 0;
             const int chipW = GW(st, 12 * u, true) + (int)(20 * u) + (dot ? dot + (int)(6 * u) : 0), chipX = rx + rww - (int)(42 * u) - chipW;
             Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
             if (dot)
             {
-                const uint32_t dc = i >= 1 && i <= 4 && !lk.pic[i].empty() ? Glass::SurfacePic(i - 1).avg : LookRgb(i <= 4 ? i : 5);
+                const uint32_t dc = i >= 1 && i <= 4 && !lk.pic[i].empty() ? Glass::SurfacePic(i - 1).avg : LookRgb(i == 10 ? 10 : i <= 4 ? i : 5);
                 Glass::Round(c, chipX + (int)(8 * u), mid - dot / 2, dot, dot, dot * 0.5f, dc, 0xB0FFFFFFu, 1.0f * u);
             }
             GT(c, chipX + (int)(10 * u) + (dot ? dot + (int)(6 * u) : 0), mid, st, 12 * u, i == 7 && !lk.badges ? 0xFFAEB7C4u : text, true);
@@ -5251,7 +5263,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #endif
             return;
         }
-        static const char* const about[10] = {
+        static const char* const about[11] = {
             "The colour of the frame round what is chosen, and its glow, on every page of the launcher.",
             "A colour or a picture over every glass panel. Opacity sets how much: low lets the background through, 100% makes them solid.",
             "A colour or a picture for the sidebar, see-through to solid.",
@@ -5261,9 +5273,10 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             "The fine speckle in the frosted glass panels: 0% makes them smooth, 25% is as they were.",
             "With Cloud Saves on, a cloud shows in the corner of each game whose save syncs. Amber: it changed on two devices and needs a choice.",
             "The letters everywhere in the launcher: 30 to choose from, clean, rounded, bold, retro, fun, handwritten and easy to read. The pause menu keeps its own.",
-            "How big the writing is in the launcher, from 85% to 120%." };
+            "How big the writing is in the launcher, from 85% to 120%.",
+            "The colour of the writing everywhere in the launcher. Choose one that reads well on your panels and background." };
         para(about[F.prow], text, 14 * u);
-        if (F.prow <= 4 || (F.prow == 5 && (lk.backdrop == "colour" || lk.backdrop == "picture")))
+        if (F.prow <= 4 || F.prow == 10 || (F.prow == 5 && (lk.backdrop == "colour" || lk.backdrop == "picture")))
         {
             const int e = F.prow, cw = (int)(64 * u);
             if (e >= 1 && e <= 4 && !lk.pic[e].empty()) Glass::PictureIn(c, Glass::SurfacePic(e - 1), ix, y, cw, cw, 14 * u, 255);

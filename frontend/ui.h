@@ -458,7 +458,7 @@ struct Menu
     // or tile lighter still with a bright edge, text white, hints a soft grey.
     static constexpr uint32_t GlassPanel = 0x2BFFFFFF, GlassEdge = 0x3DFFFFFF;
     static constexpr uint32_t GlassChosen = 0x4AFFFFFF, GlassChosenEdge = 0xF2FFFFFF;
-    static constexpr uint32_t GlassText = 0xFFF2F5F9, GlassHint = 0xFFB9C3CF, GlassOff = 0xFF7E8894;
+    static inline uint32_t GlassText = 0xFFF2F5F9, GlassHint = 0xFFB9C3CF, GlassOff = 0xFF7E8894; // (the launcher's Text Colour changes them: Look, launcher.h)
     // Lists: a little shade under the glass so white text reads over bright parts of the game,
     // and the chosen row an outline with a faint fill (a bright fill hid its text).
     static constexpr uint32_t GlassShade = 0x4D000000, GlassRow = 0x1FFFFFFF;

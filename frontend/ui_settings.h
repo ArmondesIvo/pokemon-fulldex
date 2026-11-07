@@ -1486,7 +1486,7 @@ inline bool CompanionPicture(Canvas& c, const Menu::CompanionView& cv, int kind,
                              int chosen = -1, std::vector<std::array<int, 5>>* picks = nullptr)
 {
     using namespace SettingsArt;
-    constexpr uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
+    const uint32_t GlassText = Menu::GlassText, GlassHint = Menu::GlassHint;
     auto K = [&](float v) { return (int)std::lround(v * k); };
     if (kind == Menu::P_CPARTY && bottom - top > K(80))
     {
