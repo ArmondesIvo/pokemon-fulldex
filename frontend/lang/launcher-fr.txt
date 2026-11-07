@@ -556,3 +556,9 @@ Online	En ligne
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	Parcourez les thèmes partagés par d'autres joueurs, essayez-les avant de les garder, saisissez le code de thème d'un ami ou partagez le vôtre.
 The launcher's fonts	Les polices du lanceur
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	L'avis de droits d'auteur de chaque police et le texte complet de la licence sont dans FONT-LICENSES.txt, dans le dossier fonts du téléchargement et sur la page GitHub.
+Display	Affichage
+Sound	Son
+Graphics	Graphismes
+Controls	Commandes
+Optional Features	Fonctions facultatives
+Release Notes	Notes de version

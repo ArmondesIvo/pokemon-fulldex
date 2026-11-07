@@ -556,3 +556,9 @@ Online	온라인
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	다른 플레이어가 공유한 테마를 둘러보고, 유지하기 전에 써보고, 친구의 테마 코드를 입력하거나 내 테마를 공유하세요.
 The launcher's fonts	런처의 글꼴
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	각 글꼴의 저작권 고지와 라이선스 전문은 다운로드의 fonts 폴더와 GitHub 페이지에 있는 FONT-LICENSES.txt에 있습니다.
+Display	화면
+Sound	소리
+Graphics	그래픽
+Controls	조작
+Optional Features	선택 기능
+Release Notes	릴리스 노트

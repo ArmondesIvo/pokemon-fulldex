@@ -7349,7 +7349,7 @@ inline std::vector<Setting> SettingsList()
     l.push_back({ "!releases", "RELEASE PAGE", { { "", "OPEN" } }, "",
                   "OPENS THE LIST OF RELEASES ON GITHUB: THE CHANGES IN EACH VERSION, AND THE DOWNLOADS." });
     l.push_back({ nullptr, "RELEASE NOTES", {}, "",
-                  "THE CHANGES IN EACH VERSION ARE LISTED ON ITS RELEASE PAGE ON GITHUB. YOUR ROMS / SAVES AND SETTINGS STAY WHEN FULDEX UPDATES. "
+                  "THE CHANGES IN EACH VERSION ARE LISTED ON ITS RELEASE PAGE ON GITHUB. YOUR ROMS / SAVES AND SETTINGS STAY WHEN FULLDEX UPDATES. "
                   "THE VERSION BEFORE IS KEPT, IN CASE YOU NEED TO GO BACK." });
 
 #ifdef __SWITCH__
@@ -7583,7 +7583,7 @@ struct SettingsPage
             const SettingsGroup& sg = SettingsGroups()[g];
             std::string names;
             for (const Setting& s : all)
-                if (GroupOf(s) == g) names += (names.empty() ? "" : " / ") + std::string(s.name);
+                if (GroupOf(s) == g) names += (names.empty() ? "" : " / ") + UiLang::Tr(s.name);
             groupText[g] = names + ".";
             items.push_back({ sg.key, sg.name, { { "", ">" } }, "", groupText[g].c_str() });
         }
@@ -7948,8 +7948,8 @@ inline void BuildSettingsMenu(Menu& m, std::vector<int>& map, const SettingsPage
     {
         const Setting& s = p.items[i];
         MenuItem it;
-        it.label = s.name;
-        it.desc = SettingSentence(s.text ? s.text : "");
+        it.label = UiLang::Tr(s.name);
+        it.desc = SettingSentence(UiLang::Tr(s.text ? s.text : ""));
         it.icon = SettingIcon(s, p.group);
         if (p.group < 0) it.kind = Menu::K_LINK;
         else if (!s.key) it.kind = Menu::K_PLAIN;

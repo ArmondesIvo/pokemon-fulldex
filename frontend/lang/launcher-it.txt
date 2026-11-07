@@ -556,3 +556,9 @@ Online	Online
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	Sfoglia i temi condivisi da altri giocatori, provali prima di tenerli, inserisci il codice tema di un amico o condividine uno tuo.
 The launcher's fonts	I caratteri del launcher
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	L'avviso di copyright di ogni carattere e il testo completo della licenza sono in FONT-LICENSES.txt, nella cartella fonts del download e nella pagina GitHub.
+Display	Schermo
+Sound	Audio
+Graphics	Grafica
+Controls	Comandi
+Optional Features	Funzioni opzionali
+Release Notes	Note di rilascio

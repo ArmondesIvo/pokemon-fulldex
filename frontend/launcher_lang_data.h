@@ -559,6 +559,12 @@ Online	Online
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	Stöbere in Designs, die andere Spieler geteilt haben, probiere sie aus, bevor du sie behältst, gib den Design-Code eines Freundes ein oder teile eines von dir.
 The launcher's fonts	Die Schriften des Launchers
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	Der Urheberrechtshinweis jeder Schrift und der volle Lizenztext stehen in FONT-LICENSES.txt, im Ordner fonts des Downloads und auf der GitHub-Seite.
+Display	Anzeige
+Sound	Ton
+Graphics	Grafik
+Controls	Steuerung
+Optional Features	Optionale Funktionen
+Release Notes	Versionshinweise
 )FDXLANG";
 static const char* const kLauncherLang_es = u8R"FDXLANG(# Fulldex launcher: Español. One line each: the English, a tab, the Español. {} stands for a name or number.
 Game Options	Opciones del juego
@@ -1118,6 +1124,12 @@ Online	En línea
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	Explora temas que otros jugadores han compartido, pruébalos antes de conservarlos, introduce el código de tema de un amigo o comparte uno tuyo.
 The launcher's fonts	Las fuentes del launcher
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	El aviso de derechos de cada fuente y el texto completo de la licencia están en FONT-LICENSES.txt, en la carpeta fonts de la descarga y en la página de GitHub.
+Display	Pantalla
+Sound	Sonido
+Graphics	Gráficos
+Controls	Controles
+Optional Features	Funciones opcionales
+Release Notes	Notas de la versión
 )FDXLANG";
 static const char* const kLauncherLang_fr = u8R"FDXLANG(# Fulldex launcher: Français. One line each: the English, a tab, the Français. {} stands for a name or number.
 Game Options	Options du jeu
@@ -1677,6 +1689,12 @@ Online	En ligne
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	Parcourez les thèmes partagés par d'autres joueurs, essayez-les avant de les garder, saisissez le code de thème d'un ami ou partagez le vôtre.
 The launcher's fonts	Les polices du lanceur
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	L'avis de droits d'auteur de chaque police et le texte complet de la licence sont dans FONT-LICENSES.txt, dans le dossier fonts du téléchargement et sur la page GitHub.
+Display	Affichage
+Sound	Son
+Graphics	Graphismes
+Controls	Commandes
+Optional Features	Fonctions facultatives
+Release Notes	Notes de version
 )FDXLANG";
 static const char* const kLauncherLang_it = u8R"FDXLANG(# Fulldex launcher: Italiano. One line each: the English, a tab, the Italiano. {} stands for a name or number.
 Game Options	Opzioni di gioco
@@ -2236,6 +2254,12 @@ Online	Online
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	Sfoglia i temi condivisi da altri giocatori, provali prima di tenerli, inserisci il codice tema di un amico o condividine uno tuo.
 The launcher's fonts	I caratteri del launcher
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	L'avviso di copyright di ogni carattere e il testo completo della licenza sono in FONT-LICENSES.txt, nella cartella fonts del download e nella pagina GitHub.
+Display	Schermo
+Sound	Audio
+Graphics	Grafica
+Controls	Comandi
+Optional Features	Funzioni opzionali
+Release Notes	Note di rilascio
 )FDXLANG";
 static const char* const kLauncherLang_ja = u8R"FDXLANG(# Fulldex launcher: 日本語. One line each: the English, a tab, the 日本語. {} stands for a name or number.
 Game Options	ゲームオプション
@@ -2795,6 +2819,12 @@ Online	オンライン
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	他のプレイヤーが共有したテーマを見たり、残す前に試したり、友達のテーマコードを入力したり、自分のテーマを共有したりできます。
 The launcher's fonts	ランチャーのフォント
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	各フォントの著作権表示とライセンス全文は、ダウンロードのfontsフォルダ内とGitHubのページにあるFONT-LICENSES.txtにあります。
+Display	表示
+Sound	サウンド
+Graphics	グラフィック
+Controls	操作
+Optional Features	オプション機能
+Release Notes	リリースノート
 )FDXLANG";
 static const char* const kLauncherLang_ko = u8R"FDXLANG(# Fulldex launcher: 한국어. One line each: the English, a tab, the 한국어. {} stands for a name or number.
 Game Options	게임 옵션
@@ -3354,6 +3384,12 @@ Online	온라인
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	다른 플레이어가 공유한 테마를 둘러보고, 유지하기 전에 써보고, 친구의 테마 코드를 입력하거나 내 테마를 공유하세요.
 The launcher's fonts	런처의 글꼴
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	각 글꼴의 저작권 고지와 라이선스 전문은 다운로드의 fonts 폴더와 GitHub 페이지에 있는 FONT-LICENSES.txt에 있습니다.
+Display	화면
+Sound	소리
+Graphics	그래픽
+Controls	조작
+Optional Features	선택 기능
+Release Notes	릴리스 노트
 )FDXLANG";
 inline const char* LauncherLangData(const char* code)
 {

@@ -556,3 +556,9 @@ Online	オンライン
 Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	他のプレイヤーが共有したテーマを見たり、残す前に試したり、友達のテーマコードを入力したり、自分のテーマを共有したりできます。
 The launcher's fonts	ランチャーのフォント
 Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	各フォントの著作権表示とライセンス全文は、ダウンロードのfontsフォルダ内とGitHubのページにあるFONT-LICENSES.txtにあります。
+Display	表示
+Sound	サウンド
+Graphics	グラフィック
+Controls	操作
+Optional Features	オプション機能
+Release Notes	リリースノート
