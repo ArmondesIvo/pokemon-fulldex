@@ -843,7 +843,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         }
     }
     // (SSR_LIST_DIALOG=n: a dialog open, for the test picture: 1 Remove Game, 2 Delete, 3 Rename.)
-    if (const char* dd = getenv("SSR_LIST_DIALOG")) { Launcher::Focus().dialog = atoi(dd); Launcher::Focus().text = "My HeartGold Run"; }
+    if (const char* dd = getenv("SSR_LIST_DIALOG")) { Launcher::Focus().dialog = atoi(dd); Launcher::Focus().text = "My HeartGold Run"; if (Launcher::Focus().dialog == 16) Launcher::OpenSortMenu(""); }
     // (SSR_LIST_ITEM=n: the chosen game's menu row n chosen at once, for test pictures of its dialogs.)
     const char* testItem = listsShown == 1 ? getenv("SSR_LIST_ITEM") : nullptr;
     // (The game chosen last, if it is in that tab; else the tab's first. The games are in the
@@ -1157,10 +1157,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (onTabs && !F.onSort) { Launcher::OpenTabMenu(tab); return; } // (a tab: move, hide; one of your own also rename, delete)
             if (onTabs && F.onSort)
             {
-                // (Sort on the tab bar: the next order, kept in the settings as SORT is.)
-                SetConfigValues(fo.cfg, { { "list_sort", Launcher::NextSort(Launcher::ConfigValue(fo.cfg, "list_sort")) } });
-                reorderLibrary();
-                if (guide) page.Open(fo.cfg, true);
+                // (Sort on the tab bar: a menu of the orders; what is chosen is kept in the settings as SORT is.)
+                Launcher::OpenSortMenu(Launcher::ConfigValue(fo.cfg, "list_sort"));
                 return;
             }
             // (A in a page's list: Report A Bug and Website open in the browser.)
@@ -1498,7 +1496,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         Launcher::GlassFocus& F = Launcher::Focus();
         const bool noGame = selected < 0 || selected >= (int)games.size();
         // (A tab's menu, and the keyboard for a tab's name, a new tab or the search, need no game: a tab with none in it is where they are wanted.)
-        const bool tabOnly = F.dialog == 8 || F.dialog == 9 || F.dialog == 13 || F.dialog == 14 || (F.dialog == 3 && F.kbFor);
+        const bool tabOnly = F.dialog == 8 || F.dialog == 9 || F.dialog == 13 || F.dialog == 14 || F.dialog == 16 || (F.dialog == 3 && F.kbFor);
         if (noGame && !tabOnly) { dialogClose(); return; }
         const std::string rom = noGame ? std::string() : games[selected].rom;
         auto settle = [&]() { const Launcher::View v = view(); if (v.SpotOf(selected) < 0) selected = Launcher::FirstIn(v); };
@@ -1530,6 +1528,19 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             reorderLibrary();
             settle();
             note = "ROM FILE DELETED. ITS SAVES ARE KEPT";
+            return;
+        }
+        if (F.dialog == 16)
+        {
+            // (Sort Games By: the order picked.)
+            const std::string pick = F.drow >= 0 && F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
+            dialogClose();
+            if (pick.rfind("#sort:", 0) == 0)
+            {
+                SetConfigValues(fo.cfg, { { "list_sort", pick.substr(6) } });
+                reorderLibrary();
+                if (guide) page.Open(fo.cfg, true);
+            }
             return;
         }
         if (F.dialog == 15)
@@ -2107,6 +2118,17 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 const int s = std::max(1, std::min(canvas.w, canvas.h) / 240);
                 // The buttons in the title band (touch screens): SETTINGS at the right, and in the
                 // settings BACK at the left; on Android FOLDER at the left of the list.
+                // The Theme Editor's wheel and bars: pressed and dragged along (a mouse or a finger), the value follows.
+                {
+                    static bool lkDrag = false;
+                    if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().dialog == 0 && Launcher::Focus().page == Launcher::SIDE_LAUNCHER)
+                    {
+                        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) { if (Launcher::LookDragBegin(mx, my)) { lkDrag = true; break; } }
+                        else if (e.type == SDL_MOUSEMOTION && lkDrag) { Launcher::LookDragMove(mx, my); break; }
+                        else if (e.type == SDL_MOUSEBUTTONUP && lkDrag) { lkDrag = false; Launcher::LookDragEnd(); break; }
+                    }
+                    else if (lkDrag && e.type == SDL_MOUSEBUTTONUP) { lkDrag = false; Launcher::LookDragEnd(); }
+                }
                 // The game's menu open: the mouse or a finger chooses in it; elsewhere closes it.
                 if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().popup >= 0)
                 {

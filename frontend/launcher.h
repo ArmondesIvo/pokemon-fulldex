@@ -2121,6 +2121,17 @@ inline void OpenUnhideTabs()
 }
 // A row of those two chosen (pick: its path). tab: the tab shown, moved with its tab. Returns 1 when
 // the dialog stays (made again), 2 when the keyboard opens (dialog 3, kbFor set), else 0 (closed).
+// Sort on the tab bar: a menu of the orders (dialog 16); the chosen is on now.
+inline void OpenSortMenu(const std::string& cur)
+{
+    GlassFocus& F = Focus();
+    F.dialog = 16;
+    F.dTitle = "Sort Games By";
+    F.dMsg = "How the games are put in order, on every tab.";
+    F.dItems = { "Original", "Favourites First", "Recently Played", "Close" };
+    F.dPaths = { "#sort:", "#sort:favourites", "#sort:recent", "#close" };
+    F.drow = cur == "favourites" ? 1 : cur == "recent" ? 2 : 0;
+}
 inline int TabDialogPick(const std::string& pick, int& tab, std::string& note)
 {
     GlassFocus& F = Focus();
@@ -3248,6 +3259,63 @@ inline int LookTap(int x, int y)
     if (hit) { LookSave(); Hub().version++; }
     return hit ? 1 : 0;
 }
+// The wheel and the bars followed by a mouse or a finger held down and dragged: pressed on one (-1 the wheel, k a bar), the value
+// follows the pointer along it (up or down off it does not matter) until it is let go.
+inline int& LookDragK() { static int k = -2; return k; }
+inline void LookDragApply(int x, int y)
+{
+    LookPrefs& l = Look();
+    const int k = LookDragK(), e = l.edit;
+    if (k == -2 || e < 0) return;
+    if (k == -1)
+    {
+        const float dx = (float)(x - l.wx), dy = (float)(y - l.wy), d = std::sqrt(dx * dx + dy * dy);
+        l.h = std::fmod(std::atan2(dy, dx) * 57.29578f + 360.0f, 360.0f);
+        l.s = std::max(0.0f, std::min(1.0f, d / std::max(1, l.wr)));
+        if (l.v < 0.2f) l.v = 1;
+        l.field = LookFieldIndex(e, LF_HUE);
+        LookSetHsv();
+        return;
+    }
+    const std::vector<int> fl = LookFieldList(e);
+    if (k >= (int)fl.size() || l.fw <= 0) return;
+    const int id = fl[k];
+    const float t = std::max(0.0f, std::min(1.0f, (float)(x - l.fx[k]) / l.fw));
+    l.field = k;
+    if (id == LF_BLUR) l.blur = (int)(t * 100 + 0.5f);
+    else if (id == LF_DIM) l.dim = (int)(t * 100 + 0.5f);
+    else if (id == LF_GRAIN) { l.grain = (int)(t * 100 + 0.5f); Glass::Grain() = l.grain; }
+    else if (id == LF_SIZE) l.fontSize = 85 + (int)(t * 35 + 0.5f);
+    else if (id == LF_HUE) { l.h = t * 359.0f; if (l.s < 0.1f) l.s = 0.75f; if (l.v < 0.2f) l.v = 1; LookSetHsv(); }
+    else if (id == LF_SAT) { l.s = t; LookSetHsv(); }
+    else if (id == LF_VAL) { l.v = t; LookSetHsv(); }
+    else if (id == LF_OP) { l.op[e] = (int)(t * 100 + 0.5f); LookApply(); }
+}
+inline bool LookDragBegin(int x, int y)
+{
+    LookPrefs& l = Look();
+    LookDragK() = -2;
+    if (Focus().page != SIDE_LAUNCHER || l.edit < 0) return false;
+    const int e = l.edit;
+    const float dx = (float)(x - l.wx), dy = (float)(y - l.wy);
+    if (e != 6 && l.wr > 0 && std::sqrt(dx * dx + dy * dy) <= l.wr + 4) LookDragK() = -1;
+    else
+    {
+        const std::vector<int> fl = LookFieldList(e);
+        for (int k = 0; k < (int)fl.size() && LookDragK() == -2; k++)
+        {
+            const int id = fl[k];
+            if (id == LF_PRESET || id == LF_SOURCE || id == LF_PIC) continue;
+            if (l.fw > 0 && x >= l.fx[k] - 6 && x < l.fx[k] + l.fw + 6 && y >= l.fy[k] && y < l.fy[k] + l.fh) LookDragK() = k;
+        }
+    }
+    if (LookDragK() == -2) return false;
+    LookDragApply(x, y);
+    Hub().version++;
+    return true;
+}
+inline void LookDragMove(int x, int y) { if (LookDragK() != -2) { LookDragApply(x, y); Hub().version++; } }
+inline void LookDragEnd() { LookDragK() = -2; LookSave(); Hub().version++; }
 // Saving a theme: Home drawn once (ThemeCaptureDone, as the launcher is drawn), its picture taken, then
 // the theme written and the page as it was.
 inline Glass::Picture* ThemePreview(const std::string& name)
@@ -6699,7 +6767,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             }
         };
         const float tpx = pnl ? 13 * u : 15 * u;
-        const bool icn = PhoneLook(); // (a phone: Sort and Search are small icon buttons; the others keep their words)
+        const bool icn = true; // (Sort and Search are small icon buttons: Sort opens a menu of orders; Search shows what is searched for)
         const std::string sortL = std::string("Sort: ") + SortLabel(SortKey());
         const int sortW = icn ? bh : GW(sortL, tpx, true) + (int)(pnl ? 46 : 52) * u, sortX = toolR - sortW;
         std::string q = SearchText();
