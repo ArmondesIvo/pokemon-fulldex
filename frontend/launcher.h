@@ -3094,9 +3094,14 @@ inline int LookDo(int row, int dir)
         if (row == 0) { F.kbFor = 5; F.kbRom.clear(); F.text.clear(); F.dialog = 3; F.drow = 0; return 2; }
         if (row == 1)
         {
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || defined(__ANDROID__)
             ThemesRefresh();
+            // (No file picker here: zips dropped in the themes folder show in the Theme Library.)
+#ifdef __SWITCH__
             Themes().msg = "PUT .ZIP THEMES IN /SWITCH/POKEMON-DS-WIDE/THEMES/ AND THEY SHOW HERE";
+#else
+            Themes().msg = "PUT .ZIP THEMES IN " + ThemesDir() + " AND THEY SHOW HERE";
+#endif
             Hub().version++;
             return 0;
 #else
@@ -5205,8 +5210,8 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             else
             {
                 row(0, Glass::I_SAVE, "Save This Look", "Keep the look you have now as a theme", "");
-#ifdef __SWITCH__
-                row(1, Glass::I_LOAD, "Import A Theme", "From the themes folder on the SD card", "");
+#if defined(__SWITCH__) || defined(__ANDROID__)
+                row(1, Glass::I_LOAD, "Import A Theme", "From the themes folder", "");
 #else
                 row(1, Glass::I_LOAD, "Import A Theme", "A .zip theme someone sent you", "");
 #endif

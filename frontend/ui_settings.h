@@ -1970,12 +1970,14 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
                 const int maxW = (it.kind == K_TOGGLE || it.kind == K_PICKER ? ctlX : listX + listW - KR(90)) - (listX + KR(76) + in) - KR(12);
                 std::string label = it.label;
                 const bool bold = it.kind == K_FOLDER;
-                if (W(label, lpx, bold) > maxW)
+                int lp2 = lpx; // (A long name shrinks a little first, and is cut only if it still does not fit.)
+                while (lp2 * 100 > lpx * 78 && W(label, lp2, bold) > maxW) lp2--;
+                if (W(label, lp2, bold) > maxW)
                 {
-                    while (label.size() > 1 && W(label + "...", lpx, bold) > maxW) label.pop_back();
+                    while (label.size() > 1 && W(label + "...", lp2, bold) > maxW) label.pop_back();
                     label += "...";
                 }
-                T(c, listX + KR(76) + in, base, label, lpx, ink, bold);
+                T(c, listX + KR(76) + in, base, label, lp2, ink, bold);
             }
             if (it.kind == K_FOLDER && !it.value.empty())
                 T(c, listX + listW - KR(20) - W(it.value, KR(17)), base, it.value, KR(17), GlassHint);
