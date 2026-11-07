@@ -4849,11 +4849,26 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         {
             GT(c, ix, y + 14 * u, "How Trading Works", 20 * u, text, true);
             y += (int)(40 * u);
-            para("You both need Fulldex open, on the same Wi-Fi or with an online code. One offer each way, and you both say yes.", hint, 13 * u);
-            para("1. Connect. On one device choose Open A Room. On the other choose Join A Room, then the room. No shared Wi-Fi? Make An Online Code on one device, Enter An Online Code on the other, and send the code in a message.", text, 13 * u);
-            para("2. Offer. Pick a Pok\xC3\xA9mon from your list and choose Offer For A Trade, or Send As A Gift to give it away.", text, 13 * u);
-            para("3. Accept. Check both offers: the line under each says whether the game can take it. Then choose Accept The Trade on the Connect row. It happens when you both have said yes.", text, 13 * u);
-            para("Each save is backed up before it is written. Trades follow the real games' rules, and Pok\xC3\xA9mon that evolve by trading evolve.", hint, 13 * u);
+            const std::string gt[5] = {
+                "You both need Fulldex open, on the same Wi-Fi or with an online code. One offer each way, and you both say yes.",
+                "1. Connect. On one device choose Open A Room. On the other choose Join A Room, then the room. No shared Wi-Fi? Make An Online Code on one device, Enter An Online Code on the other, and send the code in a message.",
+                "2. Offer. Pick a Pok\xC3\xA9mon from your list and choose Offer For A Trade, or Send As A Gift to give it away.",
+                "3. Accept. Check both offers: the line under each says whether the game can take it. Then choose Accept The Trade on the Connect row. It happens when you both have said yes.",
+                "Each save is backed up before it is written. Trades follow the real games' rules, and Pok\xC3\xA9mon that evolve by trading evolve." };
+            const uint32_t gc[5] = { hint, text, text, text, hint };
+            float gpx = 13 * u;
+            if (ShortNow())
+            {
+                // (A phone sideways: the guide's writing gets smaller, to 9.5, until it fits above the one button.)
+                const int room = bottom - (int)(18 * u) - (int)(34 * u) - (int)(10 * u) - y;
+                for (; gpx > 9.5f * u; gpx -= 0.5f * u)
+                {
+                    int need = 0;
+                    for (int k = 0; k < 5; k++) need += (int)WrapLines(gt[k], gpx, iw).size() * (int)(gpx * 1.45f) + (int)(8 * u);
+                    if (need <= room) break;
+                }
+            }
+            for (int k = 0; k < 5; k++) para(gt[k], gc[k], gpx);
         }
         else if (F.prow == 2 || (s.state == HubLink::State::Linked && F.prow >= TRADE_FIRST && s.mine.any))
         {
