@@ -5062,7 +5062,10 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             // Its menu, or My Themes: rows, and right of them what the chosen one is (a theme: its picture).
             ThemeState& ts = Themes();
             const int rw = (int)(400 * u), gap = (int)(18 * u), lw2 = R - L - rw - gap, pad = (int)(14 * u);
-            const int rowH = (int)(58 * u), rg = (int)(8 * u), n = LauncherRows();
+            int rowH = (int)(58 * u), rg = (int)(8 * u);
+            const int n = LauncherRows();
+            // (The menu's rows all in view when the screen is short, as on a phone held sideways.)
+            if (LauncherMode() == 0 && n * (rowH + rg) - rg > bottom - top - 2 * pad) { rg = (int)(6 * u); rowH = std::max((int)(44 * u), (bottom - top - 2 * pad + rg) / n - rg); }
             const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
             Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
             F.prow = std::max(0, std::min(F.prow, n - 1));
