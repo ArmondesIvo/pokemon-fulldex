@@ -6554,9 +6554,14 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     {
         // The Tiles home's pages: over the home, dimmed, in a window.
         drawCarousel(); drawTiles();
-        Glass::Round(c, 0, 0, c.w, c.h, 0, 0xB0000000u);
+        // (The window follows the theme: its dim is the Background's Dim, its fill the Panels colour once that is changed; the usual dark otherwise.)
+        const int dimA = std::min(255, (int)(0xB0 * (0.5f + Look().dim / 20.0f)));
+        uint32_t winFill = 0xF2161A22u;
+        if (Look().op[1] >= 0 || LookRgb(1) != 0xFFFFFFu)
+            winFill = Glass::Over(winFill, (uint32_t)(Look().op[1] >= 0 ? LookOpacity(1) * 255 / 100 : 0x99) << 24 | (LookRgb(1) & 0xFFFFFFu));
+        Glass::Round(c, 0, 0, c.w, c.h, 0, (uint32_t)dimA << 24);
         Glass::Shadow(c, sp.winX, sp.winY, sp.winW, sp.winH, 22 * u, 24 * u, 0x80);
-        Glass::Round(c, sp.winX, sp.winY, sp.winW, sp.winH, 22 * u, 0xF2161A22u, 0x4DFFFFFFu, 1.5f * u);
+        Glass::Round(c, sp.winX, sp.winY, sp.winW, sp.winH, 22 * u, winFill, 0x4DFFFFFFu, 1.5f * u);
         DrawPage(c, sp, solid, u);
     }
     base = c.px;
