@@ -285,7 +285,7 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     int nScroll = 0, nMax = 0, nX = 0, nY = 0, nW = 0, nH = 0, nLine = 0;
                     // (The ROMs page: pact the chosen ROM's action, -1 the list; rScroll its first row shown, rVis how many;
                     // aX..aRow where the actions were drawn.)
-                    int pact = -1, rScroll = 0, rVis = 0, aX = 0, aY = 0, aW = 0, aRow = 0;
+                    bool freeScroll = false; int pact = -1, rScroll = 0, rVis = 0, aX = 0, aY = 0, aW = 0, aRow = 0;
                     // (Sort at the tab bar's right end: chosen (with the tabs), the list's order, where it was drawn.)
                     bool onSort = false; std::string sortKey; int sortX = 0, sortY = 0, sortW = 0, sortH = 0;
                     // (The tab bar's tools: which is chosen while onSort (1 +, 2 Search, 3 Sort), where they were drawn; the
@@ -1441,7 +1441,7 @@ inline GlassSpots Spots(const Canvas& c)
         else { s.sideW = (int)(60 * u); s.tabsX = s.sideW + (int)(14 * u); s.tabsY = (int)(8 * u); s.tabsH = (int)(44 * u); }
     }
     // (The tabs smaller as they grow in number, to leave room for + after them and Search and Sort.)
-    const int room = pnl ? pb.x + pb.w - pb.pad - (int)(280 * u) - s.tabsX : c.h > c.w ? c.w - (int)(12 * u) - s.tabsX : c.w - (int)(28 * u) - (int)(470 * u) - s.tabsX;
+    const int room = pnl ? pb.x + pb.w - pb.pad - (int)(280 * u) - s.tabsX : c.h > c.w ? c.w - (int)(12 * u) - s.tabsX : c.w - (int)(28 * u) - (int)((phn ? 190 : 470) * u) - s.tabsX;
     s.tabFont = 18 * u;
     float pad = 40 * u;
     auto total = [&]() { int w = 0; for (int t = 0; t < TabCount(); t++) w += GW(TabLabel(t), s.tabFont, true) + (int)pad + (int)(2 * u); return w; };
@@ -4460,8 +4460,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
         const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
         F.prow = std::max(0, std::min(F.prow, n - 1));
-        if (F.prow < F.rScroll) F.rScroll = F.prow;
-        if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+        if (!F.freeScroll) { if (F.prow < F.rScroll) F.rScroll = F.prow; if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1; } // (a finger scrolling: the list stays where it was put)
         F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
         F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
         if (n == 0)
@@ -4606,8 +4605,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
         F.prow = std::max(0, std::min(F.prow, n - 1));
         if (F.pact >= (int)acts.size()) F.pact = acts.empty() ? -1 : (int)acts.size() - 1;
-        if (F.prow < F.rScroll) F.rScroll = F.prow;
-        if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+        if (!F.freeScroll) { if (F.prow < F.rScroll) F.rScroll = F.prow; if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1; } // (a finger scrolling: the list stays where it was put)
         F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
         F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
         for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
@@ -4955,8 +4953,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
             Menu::FrostBox(c, solid, L, top, lw2, bottom - top, 18 * u);
             F.prow = std::max(0, std::min(F.prow, n - 1));
-            if (F.prow < F.rScroll) F.rScroll = F.prow;
-            if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+            if (!F.freeScroll) { if (F.prow < F.rScroll) F.rScroll = F.prow; if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1; } // (a finger scrolling: the list stays where it was put)
             F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
             F.pact = -1;
             F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
@@ -5435,8 +5432,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
         F.prow = std::max(0, std::min(F.prow, n - 1));
         if (F.pact >= (int)acts.size()) F.pact = acts.empty() ? -1 : (int)acts.size() - 1;
-        if (F.prow < F.rScroll) F.rScroll = F.prow;
-        if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+        if (!F.freeScroll) { if (F.prow < F.rScroll) F.rScroll = F.prow; if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1; } // (a finger scrolling: the list stays where it was put)
         F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
         F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
         for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
@@ -5641,8 +5637,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         const int vis = std::max(1, (bottom - top - 2 * pad + rg) / (rowH + rg));
         F.prow = std::max(0, std::min(F.prow, n - 1));
         if (F.pact >= (int)acts.size()) F.pact = acts.empty() ? -1 : (int)acts.size() - 1;
-        if (F.prow < F.rScroll) F.rScroll = F.prow;
-        if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1;
+        if (!F.freeScroll) { if (F.prow < F.rScroll) F.rScroll = F.prow; if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1; } // (a finger scrolling: the list stays where it was put)
         F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
         F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
         for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
@@ -5929,11 +5924,13 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         const std::vector<std::string> lines = WrapLines("Fulldex doesn't include any games. Play with ROMs from games you own.", 13 * u, lw - 2 * pad - (int)(28 * u));
         const int ch = (int)(66 * u) + (int)lines.size() * (int)(18 * u);
         const int cx = L + pad, cy = bottom - pad - ch, cw = lw - 2 * pad;
+        if (cy >= top + pad + 5 * (rowH + rg)) { // (not on a short screen: it would be drawn over the rows)
         Glass::Round(c, cx, cy, cw, ch, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
         GT(c, cx + (int)(14 * u), cy + 24 * u, "Fulldex", 20 * u, text, true);
         GT(c, cx + (int)(14 * u), cy + 48 * u, PlatformLabel(), 14 * u, hint, true);
         int ly = cy + (int)(70 * u);
         for (const std::string& l : lines) { GT(c, cx + (int)(14 * u), ly, l, 13 * u, hint, false); ly += (int)(18 * u); }
+        }
     }
     // The chosen section.
     const int px = L + lw + (int)(18 * u), pw = R - px, ip = (int)(22 * u);
@@ -6405,7 +6402,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     }
 
     // A page of the sidebar (About) in place of the games.
-    if (Focus().page >= 0 && !TilesOn()) DrawPage(c, sp, solid, ShortNow() ? u * 0.72f : u); // (a phone sideways: the pages are made for a tall screen, so smaller than the home)
+    if (Focus().page >= 0 && !TilesOn()) DrawPage(c, sp, solid, ShortNow() ? u * 1.0f : u); // (a phone sideways: the pages are made for a tall screen, so smaller than the home)
 
     // The banner: the game played last, ready to carry on.
     if (Focus().page < 0 && cont >= 0 && cont < (int)games.size() && !PanelOn() && !TilesOn())
@@ -6569,7 +6566,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
             }
             else Glass::Round(c, bx, by, bw, bh, 12 * u, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
-            if (icon >= 0)
+            if (icon >= 0 && label.empty()) Glass::DrawIcon(c, icon, bx + bw * 0.5f, by + bh * 0.5f, 9 * u, text);
+            else if (icon >= 0)
             {
                 Glass::DrawIcon(c, icon, bx + 22 * u, by + bh * 0.5f, 9 * u, text);
                 GT(c, bx + (int)(40 * u), by + bh * 0.5f, label, pnlTool ? 13 * u : 15 * u, text, true);
@@ -6580,17 +6578,18 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 GT(c, bx + (bw - GW(label, px, true)) / 2, by + bh * 0.5f, label, px, text, true);
             }
         };
-        const std::string sortL = std::string("Sort: ") + SortLabel(SortKey());
         const float tpx = pnl ? 13 * u : 15 * u;
-        const int sortW = GW(sortL, tpx, true) + (int)(pnl ? 46 : 52) * u, sortX = toolR - sortW;
+        const bool icn = PhoneLook(); // (a phone: Sort and Search are small icon buttons; the others keep their words)
+        const std::string sortL = std::string("Sort: ") + SortLabel(SortKey());
+        const int sortW = icn ? bh : GW(sortL, tpx, true) + (int)(pnl ? 46 : 52) * u, sortX = toolR - sortW;
         std::string q = SearchText();
         if (q.size() > 14) q = q.substr(0, 13) + "...";
-        const std::string searchL = q.empty() ? std::string("Search") : "\"" + q + "\"";
-        const int searchW = GW(searchL, tpx, true) + (int)(pnl ? 26 : 36) * u, searchX = sortX - (int)(10 * u) - searchW;
+        const std::string searchL = q.empty() ? (icn ? std::string() : std::string("Search")) : "\"" + q + "\"";
+        const int searchW = q.empty() && icn ? bh : GW(searchL, tpx, true) + (int)(q.empty() ? (pnl ? 26 : 36) : (pnl ? 46 : 52)) * u, searchX = sortX - (int)(10 * u) - searchW;
         const int last = LastTab();
         tool(1, prt ? (int)(12 * u) : sp.tabX[last] + sp.tabW[last] + (int)(10 * u), bh, "+", -1);
-        tool(2, searchX, searchW, searchL, -1);
-        tool(3, sortX, sortW, sortL, Glass::I_LAYERS);
+        tool(2, searchX, searchW, searchL, icn ? Glass::I_SEARCH : -1);
+        tool(3, sortX, sortW, icn ? std::string() : sortL, icn ? Glass::I_SORT : Glass::I_LAYERS);
         // NOW PLAYING along the top (Launcher > Music Player > Top): between the tabs and Search / Sort.
         if ((Look().music == "top" || ShortNow()) && !pnl && Music().shown && !Music().idle)
         {

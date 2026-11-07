@@ -239,6 +239,8 @@ struct Menu
     // preview starts; no panel, header or hint of their own. laneX -1: the usual panel.)
     int laneX = -1, laneY = 0, laneW = 0, laneH = 0, laneListW = 0, lanePvX = 0;
     float touchRows = 1.0f; // (phones: the settings rows this much larger, for a finger)
+    float laneK = 0; // (the launcher's settings page on a phone: its own size for the page, 0 for the usual)
+    bool freeScroll = false; // (a finger has scrolled the list: the chosen row need not be in view)
     bool tallRows = false;
     float rowTall = 1.0f; // (a settings page's rows this many times as high, their text and icons a little larger: BAG)
     // COMPANION's previews (P_CPARTY, P_CBAG, P_CDEX, P_CPLACE): what the game holds now, read by

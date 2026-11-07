@@ -525,7 +525,7 @@ enum Icon
     I_PLAY, I_SAVE, I_LOAD, I_CHEATS, I_FAST, I_TROPHY, I_GEAR, I_POWER,
     I_BACK, I_MONITOR, I_SCREENS, I_GLOBE, I_RATIO, I_LAYOUT, I_EXPAND, I_FULLSCREEN, I_GRID, I_LAYERS,
     I_PAD, I_GAUGE, I_WINDOW, I_PEOPLE, I_SPARKLE, I_INFO, I_CHEVRON_L, I_CHEVRON_R, I_CHEVRON_U, I_CHEVRON_D, I_POKEBALL, I_CHIP, I_SPEAKER, I_REWIND,
-    I_PAUSE, I_PREV, I_NEXT, I_NOTE, I_CHAT,
+    I_PAUSE, I_PREV, I_NEXT, I_NOTE, I_CHAT, I_SEARCH, I_SORT,
     I_COUNT
 };
 // A rhombus centred on (cx, cy), half width a and half height b (close to a true distance).
@@ -637,6 +637,13 @@ inline void DrawIcon(Canvas& c, int icon, float cx, float cy, float size, uint32
             for (int gx = -1; gx <= 1; gx++)
                 for (int gy = -1; gy <= 1; gy++) d = std::min(d, Box(u, v, gx * 0.56f, gy * 0.56f, 0.17f, 0.17f, 0.04f));
             return d;
+        }
+        case I_SEARCH: return std::min(std::fabs(Circle(u, v, -0.14f, -0.14f, 0.5f)) - t / 2, Segment(u, v, 0.24f, 0.24f, 0.74f, 0.74f, t / 2));
+        case I_SORT:
+        {
+            const float up = std::min(Segment(u, v, -0.38f, 0.62f, -0.38f, -0.62f, t / 2), std::min(Segment(u, v, -0.38f, -0.62f, -0.68f, -0.3f, t / 2), Segment(u, v, -0.38f, -0.62f, -0.08f, -0.3f, t / 2)));
+            const float dn = std::min(Segment(u, v, 0.38f, -0.62f, 0.38f, 0.62f, t / 2), std::min(Segment(u, v, 0.38f, 0.62f, 0.08f, 0.3f, t / 2), Segment(u, v, 0.38f, 0.62f, 0.68f, 0.3f, t / 2)));
+            return std::min(up, dn);
         }
         case I_LAYERS:
         {

@@ -1712,7 +1712,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     }
     k = std::max(k, 0.42f);
     const bool lane = laneX >= 0;
-    if (lane) k = std::max(0.42f, c.h / 720.0f * 0.94f);
+    if (lane) k = laneK > 0 ? laneK : std::max(0.42f, c.h / 720.0f * 0.94f);
     auto K = [&](float v) { return (int)std::lround(v * k); };
     int px0 = (int)((c.w - pw) / 2), py0 = (int)((c.h - ph) / 2), W0 = (int)pw, H0 = (int)ph;
     if (lane) { px0 = laneX; py0 = laneY; W0 = laneW; H0 = laneH; }
@@ -1830,6 +1830,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
     }
     rowX = listX; rowW = listW;
     if (total <= avail) scrollPx = 0;
+    else if (freeScroll) scrollPx = std::clamp(scrollPx, 0, total - avail);
     else if (at[selected] >= 0)
     {
         // (The chosen row kept in view; its section's heading too when that fits.)

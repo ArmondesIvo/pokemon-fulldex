@@ -2158,6 +2158,19 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     }
                     if (held) break;
                 }
+                // The ROMs, Hub and Launcher lists: a finger dragged up or down scrolls them (the chosen row stays where the list was put).
+                if (Launcher::Glassy(canvas) && !guide && (Launcher::Focus().page == Launcher::SIDE_ROMS || Launcher::Focus().page == Launcher::SIDE_HUB || Launcher::Focus().page == Launcher::SIDE_LAUNCHER) && Launcher::Focus().rVis > 0)
+                {
+                    static bool lsOn = false; static int lsY = 0, lsS = 0;
+                    Launcher::GlassFocus& LF = Launcher::Focus();
+                    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) { lsOn = mx >= LF.pX && mx < LF.pX + LF.pW && my >= LF.pY; lsY = my; lsS = LF.rScroll; dragging = false; }
+                    else if (e.type == SDL_MOUSEMOTION && lsOn)
+                    {
+                        if (!dragging && std::abs(my - lsY) > 8 * s) dragging = true;
+                        if (dragging) { LF.freeScroll = true; LF.rScroll = std::max(0, lsS - (my - lsY) / std::max(1, LF.pRow)); break; }
+                    }
+                    else if (e.type == SDL_MOUSEBUTTONUP && lsOn) { lsOn = false; if (dragging) { dragging = pressed = false; break; } }
+                }
                 // The music bar: previous, play / pause, next.
                 if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging)
                 {
@@ -2200,6 +2213,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         if (r >= 0)
                         {
                             const bool again = Launcher::Focus().prow == r && Launcher::Focus().side < 0;
+                            Launcher::Focus().freeScroll = false;
                             Launcher::Focus().side = -1;
                             Launcher::Focus().prow = r;
                             if (again) choose();
@@ -2229,9 +2243,17 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 }
                 if (guide && Launcher::Glassy(canvas))
                 {
-                    // (The glass settings page: a tap or click chooses a row, again changes it; BACK goes back.)
+                    // (The glass settings page: a tap or click chooses a row, again changes it; BACK goes back; a finger dragged scrolls the list.)
+                    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) { downY = my; downScroll = setMenu.scrollPx; pressed = true; dragging = false; }
+                    else if (e.type == SDL_MOUSEMOTION && pressed)
+                    {
+                        if (!dragging && std::abs(my - downY) > 8 * s) dragging = true;
+                        if (dragging) { setMenu.freeScroll = true; setMenu.scrollPx = downScroll - (my - downY); }
+                    }
+                    if (e.type == SDL_MOUSEBUTTONUP && dragging) { dragging = pressed = false; break; }
                     if (e.type == SDL_MOUSEBUTTONUP)
                     {
+                        pressed = false;
                         // (A section of the sidebar: the settings close and it opens, no Back first.)
                         const int sd = Launcher::SideAt(canvas, mx, my);
                         if (sd >= 0 && sd != Launcher::SIDE_SETTINGS)
@@ -2560,6 +2582,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (Launcher::Glassy(canvas))
             {
                 // (The pause menu's glass settings pages, ui_settings.h, over the chosen game's picture blurred.)
+                setMenu.touchRows = Launcher::PhoneUi() ? 1.5f : 1.0f; // (a phone: rows big enough for a finger, the page larger)
+                setMenu.laneK = Launcher::PhoneUi() ? std::max(0.42f, canvas.h / 720.0f * 0.94f * 1.3f) : 0.0f;
+                { static int lastSel = -99; if (page.selected != lastSel) { lastSel = page.selected; setMenu.freeScroll = false; } }
                 Launcher::BuildSettingsMenu(setMenu, setMap, page, onBack);
                 Launcher::DrawSettingsPage(canvas, setMenu, games, tab, scroll, page.group < 0 ? "Settings" : Launcher::SettingsGroups()[page.group].name,
                                            padIn ? btn(Controls::A) + (page.group < 0 ? ": OPEN    " : ": CHANGE    ") + btn(Controls::B) + ": BACK"
