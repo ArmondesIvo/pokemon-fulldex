@@ -4525,15 +4525,22 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 GT(c, cx, cy + 28 * u, fit(cells[i][1], 15 * u, true, iw / 2 - (int)(8 * u)), 15 * u, text, true);
             }
             y += 2 * (int)(48 * u) + (int)(10 * u);
-            GT(c, ix, y + 8 * u, "File", 12 * u, hint, true);
-            y += (int)(26 * u);
-            const std::vector<std::string> fl = WrapLines(fileOf(g.rom), 13 * u, iw);
-            for (size_t k = 0; k < fl.size() && k < 3; k++) { GT(c, ix, y, fl[k], 13 * u, text, false); y += (int)(18 * u); }
-            y += (int)(12 * u);
-            GT(c, ix, y + 8 * u, "Folder", 12 * u, hint, true);
-            y += (int)(26 * u);
-            const std::vector<std::string> dl = WrapLines(dirOf(g.rom), 13 * u, iw);
-            for (size_t k = 0; k < dl.size() && k < 3; k++) { GT(c, ix, y, dl[k], 13 * u, text, false); y += (int)(18 * u); }
+            const int yLim = bottom - (int)(18 * u) - RomActions() * (int)(44 * u) - (RomActions() - 1) * (int)(6 * u) - (int)(8 * u);
+            if (y + (int)(40 * u) < yLim)
+            {
+                GT(c, ix, y + 8 * u, "File", 12 * u, hint, true);
+                y += (int)(26 * u);
+                const std::vector<std::string> fl = WrapLines(fileOf(g.rom), 13 * u, iw);
+                for (size_t k = 0; k < fl.size() && k < 3 && y + (int)(14 * u) < yLim; k++) { GT(c, ix, y, fl[k], 13 * u, text, false); y += (int)(18 * u); }
+                y += (int)(12 * u);
+            }
+            if (y + (int)(44 * u) < yLim)
+            {
+                GT(c, ix, y + 8 * u, "Folder", 12 * u, hint, true);
+                y += (int)(26 * u);
+                const std::vector<std::string> dl = WrapLines(dirOf(g.rom), 13 * u, iw);
+                for (size_t k = 0; k < dl.size() && k < 3 && y + (int)(14 * u) < yLim; k++) { GT(c, ix, y, dl[k], 13 * u, text, false); y += (int)(18 * u); }
+            }
             // What can be done with it.
             const int na = RomActions(), ah = (int)(44 * u), ag = (int)(6 * u);
             const int ay = bottom - (int)(18 * u) - na * ah - (na - 1) * ag;
