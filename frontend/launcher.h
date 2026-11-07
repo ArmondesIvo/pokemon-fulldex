@@ -1802,8 +1802,8 @@ inline bool LookDecodePicture(const std::vector<unsigned char>& data, Glass::Pic
     int w = 0, h = 0, n = 0;
     unsigned char* px = stbi_load_from_memory(data.data(), (int)data.size(), &w, &h, &n, 4);
     if (!px) return false;
-#ifdef __SWITCH__
-    const int most = 1920; // (the Switch's memory)
+#if defined(__SWITCH__) || defined(__ANDROID__)
+    const int most = 1920; // (the Switch's memory; a phone's screen)
 #else
     const int most = 3840; // (4K)
 #endif
@@ -3167,6 +3167,50 @@ inline int LookDo(int row, int dir)
     return out;
 }
 // A picture from the system's picker, copied into launcher-pictures and used for the open row.
+// A picture's longest side kept at most this on a small screen (0: as it is, on a PC).
+#if defined(__SWITCH__)
+static const int kSmallPicture = 1280;
+#elif defined(__ANDROID__)
+static const int kSmallPicture = 1920;
+#else
+static const int kSmallPicture = 0;
+#endif
+// A bigger picture made smaller for a small screen: the longest side at most `most`, the shape kept (a box average, saved
+// as a JPEG, its name now .jpg). Left as it is when it already fits, or has see-through parts (a JPEG cannot). True when changed.
+inline bool LookShrinkPicture(std::vector<unsigned char>& data, std::string& name, int most)
+{
+    if (most <= 0 || data.empty()) return false;
+    int w = 0, h = 0, n = 0;
+    if (!stbi_info_from_memory(data.data(), (int)data.size(), &w, &h, &n) || std::max(w, h) <= most) return false;
+    unsigned char* px = stbi_load_from_memory(data.data(), (int)data.size(), &w, &h, &n, 4);
+    if (!px) return false;
+    bool see = false;
+    for (size_t i = 3; i < (size_t)w * h * 4 && !see; i += 4) see = px[i] != 255;
+    if (see) { stbi_image_free(px); return false; }
+    const double k = (double)most / std::max(w, h);
+    const int tw = std::max(1, (int)(w * k + 0.5)), th = std::max(1, (int)(h * k + 0.5));
+    std::vector<uint32_t> out((size_t)tw * th);
+    for (int y = 0; y < th; y++)
+    {
+        const int y0 = (int)((int64_t)y * h / th), y1 = std::max(y0 + 1, (int)((int64_t)(y + 1) * h / th));
+        for (int x = 0; x < tw; x++)
+        {
+            const int x0 = (int)((int64_t)x * w / tw), x1 = std::max(x0 + 1, (int)((int64_t)(x + 1) * w / tw));
+            uint32_t r = 0, g = 0, b = 0, c = 0;
+            for (int yy = y0; yy < y1 && yy < h; yy++)
+                for (int xx = x0; xx < x1 && xx < w; xx++) { const unsigned char* q = px + ((size_t)yy * w + xx) * 4; r += q[0]; g += q[1]; b += q[2]; c++; }
+            if (!c) c = 1;
+            out[(size_t)y * tw + x] = 0xFF000000u | (r / c) << 16 | (g / c) << 8 | (b / c);
+        }
+    }
+    stbi_image_free(px);
+    std::vector<unsigned char> jpg;
+    if (!ThemePack::Jpeg(out.data(), tw, th, 88, jpg) || jpg.empty() || jpg.size() >= data.size()) return false;
+    data.swap(jpg);
+    const size_t dot = name.find_last_of('.');
+    name = (dot == std::string::npos ? name : name.substr(0, dot)) + ".jpg";
+    return true;
+}
 inline bool LookAddPicture(const std::string& path)
 {
     LookPrefs& l = Look();
@@ -3175,7 +3219,8 @@ inline bool LookAddPicture(const std::string& path)
     if (!ReadFile(path, data) || !ImageAllowed(data.data(), data.size())) return false;
     std::error_code ec;
     std::filesystem::create_directories(HubDir() + "/launcher-pictures", ec);
-    const std::string name = std::filesystem::path(path).filename().string();
+    std::string name = std::filesystem::path(path).filename().string();
+    LookShrinkPicture(data, name, kSmallPicture);
     FILE* f = fopen((HubDir() + "/launcher-pictures/" + name).c_str(), "wb");
     if (!f) return false;
     const bool ok = fwrite(data.data(), 1, data.size(), f) == data.size();
@@ -3484,10 +3529,13 @@ inline bool LookApplyTheme(const std::string& name, bool gallery = false)
         if (it == p.end() || it->second.empty()) continue;
         const auto f = files.find(it->second);
         if (f == files.end() || !ImageAllowed(f->second.data(), f->second.size())) { it->second.clear(); continue; }
-        const std::string mine = name + " - " + std::filesystem::path(it->second).filename().string();
+        std::vector<unsigned char> bytes = f->second;
+        std::string fname = std::filesystem::path(it->second).filename().string();
+        LookShrinkPicture(bytes, fname, kSmallPicture); // (A phone or a Switch does not need a 4K picture: smaller, the shape kept.)
+        const std::string mine = name + " - " + fname;
         FILE* o = fopen((HubDir() + "/launcher-pictures/" + mine).c_str(), "wb");
         if (!o) { it->second.clear(); continue; }
-        const bool ok = fwrite(f->second.data(), 1, f->second.size(), o) == f->second.size();
+        const bool ok = fwrite(bytes.data(), 1, bytes.size(), o) == bytes.size();
         fclose(o);
         it->second = ok ? mine : std::string();
     }
