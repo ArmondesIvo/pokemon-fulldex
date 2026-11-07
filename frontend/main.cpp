@@ -9197,7 +9197,11 @@ int main(int argc, char** argv)
             const uint32_t now = opt.headless ? (uint32_t)(frame * 50 / 3) : SDL_GetTicks();
             if (dirs & ~prevDirs) dirSince = now;
             prevDirs = dirs;
-            if (speed > 1 && dirs && now - dirSince < 250) speed = 1;
+            // (Walking in the overworld with nothing open: the games do not repeat a direction there,
+            // so fast forward stays on. Menus, text boxes, battles and games without field detection keep the rule.)
+            const bool freeWalk = pokeActions.Supported() && (pokeActions.Flags() & PK_NDS_FIELD_SCREEN) &&
+                                  !(pokeActions.Flags() & (PK_NDS_FIELD_LOCKED | PK_NDS_FIELD_TEXT | PK_NDS_FIELD_MENU));
+            if (speed > 1 && dirs && !freeWalk && now - dirSince < 250) speed = 1;
         }
         prevPad = ps;
 
