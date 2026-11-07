@@ -170,6 +170,7 @@ inline uint32_t AccentNamed(const std::string& name)
 }
 
 #include "glass.h"
+#include "art_smooth.h"
 #include "ui_clean_font.h"
 
 // Button presses the menu understands, edge-triggered.
@@ -523,7 +524,7 @@ struct Menu
                     const float qx = std::max(0.0f, std::fabs(px + 0.5f - a * 0.5f) - (a * 0.5f - rr)), qy = std::max(0.0f, std::fabs(py + 0.5f - a * 0.5f) - (a * 0.5f - rr));
                     const float cover = std::clamp(rr + 0.5f - Glass::Hyp(qx, qy), 0.0f, 1.0f);
                     if (cover <= 0) continue;
-                    const uint32_t s = nowPlaying.art[(size_t)(py * nowPlaying.artH / a) * nowPlaying.artW + px * nowPlaying.artW / a];
+                    const uint32_t s = ArtSmooth::At(nowPlaying.art, nowPlaying.artW, nowPlaying.artH, px, py, a);
                     c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], s | 0xFF000000u, (int)(cover * 255));
                 }
             Glass::Mark(c, ax, ay, ax + a, ay + a);

@@ -29,7 +29,7 @@ struct Info
     bool playing = false;
     bool canPrev = false, canNext = false;
     std::string title, artist, app;
-    // The album art, if the app gives it: ARGB, artW x artH (at most 128 square); artVersion
+    // The album art, if the app gives it: ARGB, artW x artH (at most 512 square); artVersion
     // changes with it, so the menu copies it only when it is new.
     std::vector<uint32_t> art;
     int artW = 0, artH = 0;
@@ -156,7 +156,7 @@ inline void AwaitDone(void* op, int ms)
 }
 
 // The album art: the thumbnail's stream read through WIC (Windows' own image decoders: JPEG, PNG),
-// made 32-bit BGRA (in memory the same as the menu's ARGB) at most 128 pixels square.
+// made 32-bit BGRA (in memory the same as the menu's ARGB) at most 512 pixels square.
 static const CLSID CLSID_WicFactory = { 0xcacaf262, 0x9370, 0x4615, { 0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a } };
 static const IID IID_WicFactory = { 0xec5ec8a9, 0xc395, 0x4314, { 0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70 } };
 static const GUID Wic32bppBGRA = { 0x6fddc324, 0x4e03, 0x4bfe, { 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x0f } };
@@ -191,7 +191,7 @@ inline bool Art(void* props, std::vector<uint32_t>& out, int& w, int& h)
         frame->GetSize(&fw, &fh);
         if (fw > 0 && fh > 0)
         {
-            const UINT big = fw > fh ? fw : fh, side = big > 128 ? 128 : big;
+            const UINT big = fw > fh ? fw : fh, side = big > 512 ? 512 : big;
             const UINT sw = fw * side / big ? fw * side / big : 1, sh = fh * side / big ? fh * side / big : 1;
             if (SUCCEEDED(wic->CreateBitmapScaler(&scaler)) && scaler &&
                 SUCCEEDED(scaler->Initialize(frame, sw, sh, WICBitmapInterpolationModeFant)) &&

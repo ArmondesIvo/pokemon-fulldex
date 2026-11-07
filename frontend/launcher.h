@@ -16,6 +16,7 @@
 #include <cstring>
 #include <string>
 #include <utility>
+#include "art_smooth.h"
 #include <cmath>
 #include <vector>
 #include <map>
@@ -6286,7 +6287,7 @@ inline void DrawMusicBar(Canvas& c, int x, int y, int w, int h, float u)
                 const float qx = std::max(0.0f, std::fabs(px + 0.5f - a * 0.5f) - (a * 0.5f - rr)), qy = std::max(0.0f, std::fabs(py + 0.5f - a * 0.5f) - (a * 0.5f - rr));
                 const float cover = std::clamp(rr + 0.5f - Glass::Hyp(qx, qy), 0.0f, 1.0f);
                 if (cover <= 0) continue;
-                const uint32_t sp = m.art[(size_t)(py * m.artH / a) * m.artW + px * m.artW / a];
+                const uint32_t sp = ArtSmooth::At(m.art, m.artW, m.artH, px, py, a);
                 c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], sp | 0xFF000000u, (int)(cover * 255));
             }
         Glass::Mark(c, ax, ay, ax + a, ay + a);
@@ -6348,7 +6349,7 @@ inline void DrawMusicSquare(Canvas& c, int x, int y, int sz, float u)
             const float qx = std::max(0.0f, std::fabs(px + 0.5f - sz * 0.5f) - (sz * 0.5f - rr)), qy = std::max(0.0f, std::fabs(py + 0.5f - sz * 0.5f) - (sz * 0.5f - rr));
             const float cover = std::clamp(rr + 0.5f - Glass::Hyp(qx, qy), 0.0f, 1.0f);
             if (cover <= 0) continue;
-            uint32_t col = art ? m.art[(size_t)(py * m.artH / sz) * m.artW + px * m.artW / sz] | 0xFF000000u : 0xFF1A2430u;
+            uint32_t col = art ? ArtSmooth::At(m.art, m.artW, m.artH, px, py, sz) : 0xFF1A2430u;
             const float dark = std::clamp((py - 0.34f * sz) / (0.56f * sz), 0.0f, 1.0f); // (the foot darker, for the text)
             col = Glass::Over(col, 0xFF000000u, (int)(dark * 0.82f * 255));
             c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], col, (int)(cover * 255));

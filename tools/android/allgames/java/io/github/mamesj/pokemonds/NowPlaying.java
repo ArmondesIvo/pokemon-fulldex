@@ -98,7 +98,7 @@ public final class NowPlaying {
             + title.replace('\n', ' ') + "\n" + (artist == null ? "" : artist.replace('\n', ' ')) + "\n" + app.replace('\n', ' ');
     }
 
-    // The album art, at most 128 pixels square: width, height, then the pixels (ARGB); or null.
+    // The album art, at most 512 pixels square: width, height, then the pixels (ARGB); or null.
     public static int[] art() {
         MediaController mc = current();
         MediaMetadata md = mc != null ? mc.getMetadata() : null;
@@ -107,7 +107,7 @@ public final class NowPlaying {
         if (b == null) b = md.getBitmap(MediaMetadata.METADATA_KEY_ART);
         if (b == null) b = md.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON);
         if (b == null || b.getWidth() <= 0 || b.getHeight() <= 0) return null;
-        int big = Math.max(b.getWidth(), b.getHeight()), side = Math.min(128, big);
+        int big = Math.max(b.getWidth(), b.getHeight()), side = Math.min(512, big);
         int w = Math.max(1, b.getWidth() * side / big), h = Math.max(1, b.getHeight() * side / big);
         Bitmap s = Bitmap.createScaledBitmap(b.copy(Bitmap.Config.ARGB_8888, false), w, h, true);
         int[] out = new int[2 + w * h];
