@@ -44,6 +44,7 @@
 #include "thirdparty/stb_image.h"
 #undef STB_IMAGE_IMPLEMENTATION
 #include "launcher.h"
+#include "discord_presence.h" // (Discord shows "In the launcher" or the game being played; needs an Application ID)
 #include "cloud_autosync.h"
 #include "library_history.h"
 #include "android_second_screen.h"
@@ -746,6 +747,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     // (Test: the Launcher page's sub-page; a theme saved as the list is first drawn.)
     if (const char* lg = getenv("SSR_LIST_LANG")) UiLang::Set(lg); // (test: the launcher in a language)
     if (const char* lm = getenv("SSR_LIST_LAUNCHER")) { Launcher::LauncherMode() = atoi(lm); Launcher::ThemesRefresh(); }
+    // (Test: SSR_LIST_GALLERY_CODE=a code: typed in at Enter A Theme Code; SSR_LIST_GALLERY_SHARE=a theme of My Themes: shared.)
+    if (const char* gc = getenv("SSR_LIST_GALLERY_CODE")) Launcher::GalleryEnterCode(gc);
+    if (const char* gs = getenv("SSR_LIST_GALLERY_SHARE")) Launcher::GalleryShare(gs);
     if (const char* ts = getenv("SSR_LIST_THEMESAVE")) { Launcher::LookLoad(); Launcher::ThemeSaveStart(ts); }
     if (const char* ta = getenv("SSR_LIST_THEMEAPPLY")) { Launcher::LookLoad(); Launcher::ThemesRefresh(); Launcher::LookApplyTheme(ta); }
     if (const char* le = getenv("SSR_LIST_LOOKEDIT")) { Launcher::LookLoad(); Launcher::Look().edit = atoi(le); Launcher::Look().field = 1; Launcher::LookSyncHsv(); }
@@ -2825,6 +2829,7 @@ bool Start(int& argc, char**& argv)
 #ifdef __ANDROID__
     if (directGame < 0) JavaVoid("checkUpdatesQuiet");
 #endif
+    DiscordPresence::InLauncher();
     for (;;)
     {
         chosen = directGame >= 0 ? directGame : PickGame(fo, games, chosen, fullscreen, winW, winH);
@@ -2892,6 +2897,7 @@ bool Start(int& argc, char**& argv)
     const Launcher::Game& game = games[chosen];
     LibraryHistory recent;recent.Load(fo.saves+"/fulldex-library.txt");if(Launcher::ConfigValue(fo.cfg,"extra_library_history")=="1")recent.Played(game.rom);
     if (const Launcher::KnownGame* k = Launcher::Known(game.code)) g_name = k->name;
+    DiscordPresence::Playing(g_name.empty() ? std::string("a game") : g_name);
     if (FILE* f = fopen(lastPath.c_str(), "w"))
     {
         fprintf(f, "%s\n", game.rom.c_str());
@@ -2925,6 +2931,7 @@ void ChangeGame() { g_change = true; }
 
 void Finish()
 {
+    DiscordPresence::Stop();
     if (!g_change) return;
     fflush(stderr);
     // The program again, without arguments: the list.

@@ -1,4 +1,6 @@
 #pragma once
+#include <pthread.h>
+#include <functional>
 // The game picker of the all-games download (one program for every game): finds the players'
 // ROMs, reads each one's name and icon from the ROM itself (every DS game carries a 32x32 icon
 // and its title in its banner), and draws the list. Kept free of any platform so that it can be
@@ -35,6 +37,9 @@
 #include "theme_pack.h"
 #include "launcher_text.h"
 #include "launcher_fonts.h"
+#include "net_http.h"
+#include <deque>
+#include <set>
 #include "support_qr.h"
 #include "play_time.h"
 #ifdef SSR_POKEMON_HUB
@@ -995,7 +1000,7 @@ struct Grid
 };
 // The glass launcher (DrawGlass) on landscape screens with the clean font; the classic list otherwise.
 inline bool& GlassOn() { static bool on = true; return on; }
-inline bool Glassy(const Canvas& c) { return GlassOn() && c.w > c.h && Menu::UseClean(); }
+inline bool Glassy(const Canvas& c) { return GlassOn() && c.w > c.h && Menu::Clean; } // (Menu::Clean, not UseClean: Japanese and Korean are drawn smooth here too, with the launcher's CJK font)
 inline int GlassTabAt(const Canvas& c, int x, int y);
 inline Grid Layout(const Canvas& c)
 {
@@ -1406,6 +1411,31 @@ struct ThemeState
     int perPage = 8, prevX = 0, nextX = 0, pageY = 0, pageW = 0, pageH = 0; // (its pages, and the < > under it)
 };
 inline ThemeState& Themes() { static ThemeState t; return t; }
+// The Theme Gallery (Launcher > Theme Gallery): themes shared through the relay (tools/relay), in a grid
+// like the Theme Library's. Its first two cards are Enter A Theme Code and Share A Theme. Fetching runs
+// on a background thread; the screen only reads what has finished, under the mutex.
+struct GalleryItem
+{
+    std::string code, name, author;
+    int size = 0;
+    std::vector<unsigned char> jpg; // (the preview as downloaded, until it is decoded)
+    Glass::Picture pic;
+    bool decoded = false;
+};
+struct GalleryState
+{
+    std::mutex m;
+    std::deque<GalleryItem> items;
+    std::string cursor, msg, ready; // (the next page's cursor; the line under the grid; a downloaded theme waiting to be tried)
+    bool more = false, busy = false, working = false, loaded = false, tried = false;
+    bool trying = false;            // (Try It: a gallery theme on, Keep or Go Back to answer)
+    std::string tryName;
+    LookPrefs before;
+    std::set<std::string> picsBefore;
+};
+inline GalleryState& Gallery() { static GalleryState g; return g; }
+inline int GalleryCards() { GalleryState& g = Gallery(); std::lock_guard<std::mutex> l(g.m); return 2 + (int)g.items.size(); }
+inline void GalleryEnterCode(const std::string& code);
 inline std::string ThemesDir() { return HubDir() + "/themes"; }
 inline std::string ThemeSafe(const std::string& raw)
 {
@@ -1433,7 +1463,7 @@ inline void ThemesRefresh()
         return x < y;
     });
 }
-inline int LauncherRows() { return LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 10 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : 3; }
+inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 10 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : 3; }
 // A on a theme: Apply, Show In Folder (a PC), Delete.
 inline void OpenThemeMenu(int i)
 {
@@ -1752,9 +1782,9 @@ inline int ToolAt(int x, int y)
     return 0;
 }
 // The keyboard's title, line and done key for what it is for (GlassFocus::kbFor).
-inline const char* KbTitle() { const int k = Focus().kbFor; return k == 5 ? "THEME NAME" : k == 4 ? "TRADE CODE" : k == 1 ? "NEW TAB" : k == 2 ? "SEARCH" : k == 3 ? "RENAME TAB" : "RENAME"; }
-inline const char* KbPrompt() { const int k = Focus().kbFor; return k == 5 ? "Your Theme's Name" : k == 4 ? "The Other Player's Code" : k == 1 || k == 3 ? "Tab Name" : k == 2 ? "Part Of A Game's Name" : "The Game's Own Name"; }
-inline const char* KbDone() { const int k = Focus().kbFor; return k == 4 ? "Join" : k == 1 ? "Make Tab" : k == 2 ? "Search" : "Save"; }
+inline const char* KbTitle() { const int k = Focus().kbFor; return k == 6 ? "THEME CODE" : k == 5 ? "THEME NAME" : k == 4 ? "TRADE CODE" : k == 1 ? "NEW TAB" : k == 2 ? "SEARCH" : k == 3 ? "RENAME TAB" : "RENAME"; }
+inline const char* KbPrompt() { const int k = Focus().kbFor; return k == 6 ? "A Theme Code" : k == 5 ? "Your Theme's Name" : k == 4 ? "The Other Player's Code" : k == 1 || k == 3 ? "Tab Name" : k == 2 ? "Part Of A Game's Name" : "The Game's Own Name"; }
+inline const char* KbDone() { const int k = Focus().kbFor; return k == 6 ? "Get It" : k == 4 ? "Join" : k == 1 ? "Make Tab" : k == 2 ? "Search" : "Save"; }
 // Add To Tab (the game's menu): the player's tabs, each marked if the game is in it, New Tab and Close.
 inline void OpenAddToTab(const std::string& rom)
 {
@@ -1934,6 +1964,7 @@ inline void KeyboardDone(int& tab, std::string& note)
     }
     else if (F.kbFor == 4) TradeEnterCode(t);
     else if (F.kbFor == 5) ThemeSaveStart(t);
+    else if (F.kbFor == 6) GalleryEnterCode(t);
     else if (F.kbFor == 3 && !t.empty() && F.kbTab >= 0 && F.kbTab < (int)tabs.size())
     {
         tabs[F.kbTab].name = t;
@@ -2727,6 +2758,9 @@ inline void LookCycleSource(int d)
     for (int k = 0; k < 4; k++) if (l.backdrop == b[k]) i = k;
     l.backdrop = b[(i + d + 4) % 4];
 }
+inline void GalleryOpen();
+inline void GalleryOpenCard(int k);
+inline void GalleryShareMenu();
 // A on a row: 3 when a picture is wanted from the system's picker (the PC's).
 inline int LookDo(int row, int dir)
 {
@@ -2738,7 +2772,7 @@ inline int LookDo(int row, int dir)
         // (The menu: Theme Editor, My Themes, Theme Gallery.)
         if (row == 0) LauncherMode() = 1;
         else if (row == 1) { LauncherMode() = 2; ThemesRefresh(); }
-        else Themes().msg = "THE THEME GALLERY IS COMING SOON";
+        else { LauncherMode() = 5; Focus().prow = 0; Focus().rScroll = 0; Themes().msg.clear(); GalleryOpen(); } // (the Theme Gallery)
         if (row <= 1) Focus().prow = 0;
         Hub().version++;
         return 0;
@@ -2771,6 +2805,16 @@ inline int LookDo(int row, int dir)
             F.dItems = { "Use The Default Look", "Cancel" };
             F.dPaths = { "#lookdefault", "#close" };
         }
+        return 0;
+    }
+    if (LauncherMode() == 5)
+    {
+        // (The Theme Gallery: Enter A Theme Code, Share A Theme, then a shared theme's menu.)
+        GlassFocus& GF = Focus();
+        Themes().msg.clear();
+        if (row == 0) { GF.kbFor = 6; GF.kbRom.clear(); GF.text.clear(); GF.dialog = 3; GF.drow = 0; return 2; }
+        if (row == 1) GalleryShareMenu();
+        else GalleryOpenCard(row - 2);
         return 0;
     }
     if (LauncherMode() == 3) { OpenThemeMenu(row); return 0; } // (the Theme Library: a theme's menu)
@@ -3033,7 +3077,7 @@ inline void ThemeCaptureDone(Canvas& c)
     }
     Hub().version++;
 }
-inline bool LookApplyTheme(const std::string& name)
+inline bool LookApplyTheme(const std::string& name, bool gallery = false)
 {
     ThemeState& ts = Themes();
     std::map<std::string, std::vector<unsigned char>> files;
@@ -3069,11 +3113,458 @@ inline bool LookApplyTheme(const std::string& name)
         fclose(o);
         it->second = ok ? mine : std::string();
     }
+    if (gallery)
+    {
+        // (From the Gallery: the built-in fonts only, and not kept until the player says so.)
+        bool known = false;
+        for (int i = 0; i < kLauncherFontCount; i++) if (p["font"] == kLauncherFonts[i].id) known = true;
+        if (!known) p["font"] = "noto-sans";
+    }
     LookFrom(p);
-    LookSave();
+    if (!gallery) LookSave();
     Hub().version++;
     ts.msg = "THEME ON: " + name;
     return true;
+}
+// ---------------------------------------------------------------- the Theme Gallery
+inline std::string GalleryEnc(const std::string& s)
+{
+    static const char* hx = "0123456789ABCDEF";
+    std::string o;
+    for (const unsigned char ch : s)
+    {
+        if (isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~') o += (char)ch;
+        else { o += '%'; o += hx[ch >> 4]; o += hx[ch & 15]; }
+    }
+    return o;
+}
+// "k7qm-x2rd" is K7QMX2RD; "" when it is not 8 letters and numbers.
+inline std::string GalleryCode(const std::string& raw)
+{
+    std::string c;
+    for (const char ch : raw) if (isalnum((unsigned char)ch)) c += (char)toupper((unsigned char)ch);
+    return c.size() == 8 ? c : std::string();
+}
+inline bool GalleryHttp(const std::string& method, const std::string& path, const std::string& body, const std::string& type, int& status, std::string& reply)
+{
+    std::string base = TradeRelay();
+    while (!base.empty() && base.back() == '/') base.pop_back();
+    status = 0;
+    if (base.empty()) return false;
+    Achievements::HttpCall c;
+    c.method = method;
+    c.url = base + path;
+    c.timeout = 30;
+    c.limit = 22u << 20;
+    if (!type.empty()) c.headers.push_back("Content-Type: " + type);
+    c.body = body;
+    std::string err;
+    return Achievements::HttpRequest(c, status, reply, err);
+}
+// The relay's answers are small JSON; these read a string or a number of a key between two places.
+inline bool GalleryJStr(const std::string& j, size_t from, size_t to, const char* key, std::string& out)
+{
+    const std::string k = std::string("\"") + key + "\":\"";
+    size_t at = j.find(k, from);
+    if (at == std::string::npos || at >= to) return false;
+    at += k.size();
+    out.clear();
+    for (; at < to && j[at] != '"'; at++)
+    {
+        if (j[at] != '\\' || at + 1 >= to) { out += j[at]; continue; }
+        const char e = j[++at];
+        if (e == 'u' && at + 4 < to)
+        {
+            const unsigned cp = (unsigned)strtoul(j.substr(at + 1, 4).c_str(), nullptr, 16);
+            at += 4;
+            if (cp < 0x80) out += (char)cp;
+            else if (cp < 0x800) { out += (char)(0xC0 | cp >> 6); out += (char)(0x80 | (cp & 63)); }
+            else if (cp >= 0xD800 && cp < 0xE000) out += '?';
+            else { out += (char)(0xE0 | cp >> 12); out += (char)(0x80 | (cp >> 6 & 63)); out += (char)(0x80 | (cp & 63)); }
+        }
+        else out += (e == 'n' || e == 't' || e == 'r') ? ' ' : e;
+    }
+    return true;
+}
+inline long GalleryJNum(const std::string& j, size_t from, size_t to, const char* key)
+{
+    const std::string k = std::string("\"") + key + "\":";
+    const size_t at = j.find(k, from);
+    return at == std::string::npos || at >= to ? 0 : atol(j.c_str() + at + k.size());
+}
+inline void GalleryParse(const std::string& j, std::deque<GalleryItem>& out, std::string& next)
+{
+    next.clear();
+    const std::string tag = "{\"code\":\"";
+    std::vector<size_t> at;
+    for (size_t p = j.find(tag); p != std::string::npos; p = j.find(tag, p + 1)) at.push_back(p);
+    for (size_t i = 0; i < at.size(); i++)
+    {
+        const size_t to = i + 1 < at.size() ? at[i + 1] : j.size();
+        GalleryItem it;
+        if (!GalleryJStr(j, at[i], to, "code", it.code) || GalleryCode(it.code).empty()) continue;
+        GalleryJStr(j, at[i], to, "name", it.name);
+        GalleryJStr(j, at[i], to, "author", it.author);
+        it.size = (int)GalleryJNum(j, at[i], to, "size");
+        out.push_back(std::move(it));
+    }
+    const size_t cp = j.rfind("\"cursor\":\"");
+    if (cp != std::string::npos) GalleryJStr(j, cp, j.size(), "cursor", next);
+}
+inline std::string GalleryMsg() { GalleryState& g = Gallery(); std::lock_guard<std::mutex> l(g.m); return g.msg; }
+// A page of the list (fresh: from the start), then its previews one at a time as they arrive.
+// A job on a thread of its own, let go. On the Switch with a 2 MB stack: the default one is too small for the
+// secure connection, and the program ended when the gallery asked the relay for its list.
+inline void GalleryBg(std::function<void()> job)
+{
+#ifdef __SWITCH__
+    std::function<void()>* p = new std::function<void()>(std::move(job));
+    pthread_attr_t a;
+    pthread_attr_init(&a);
+    pthread_attr_setstacksize(&a, 2u << 20);
+    pthread_t t;
+    if (pthread_create(&t, &a, [](void* q) -> void* { std::function<void()>* f = (std::function<void()>*)q; (*f)(); delete f; return nullptr; }, p) == 0) pthread_detach(t);
+    else { (*p)(); delete p; }
+    pthread_attr_destroy(&a);
+#else
+    std::thread(std::move(job)).detach();
+#endif
+}
+inline void GalleryLoad(bool fresh)
+{
+    GalleryState& g = Gallery();
+    std::string cursor;
+    {
+        std::lock_guard<std::mutex> l(g.m);
+        if (g.busy) return;
+        g.busy = true;
+        if (fresh) { g.items.clear(); g.cursor.clear(); g.more = false; g.loaded = false; g.tried = true; }
+        cursor = g.cursor;
+        if (g.msg.empty()) g.msg = "LOADING...";
+    }
+    Hub().version++;
+    GalleryBg([cursor]() {
+        GalleryState& g = Gallery();
+        int status = 0;
+        std::string reply;
+        const bool ok = GalleryHttp("GET", "/v2/themes?limit=24" + (cursor.empty() ? std::string() : "&cursor=" + GalleryEnc(cursor)), "", "", status, reply);
+        size_t first = 0;
+        {
+            std::lock_guard<std::mutex> l(g.m);
+            first = g.items.size();
+            if (!ok || status != 200)
+            {
+                g.more = false;
+                if (g.msg == "LOADING..." || g.msg.empty()) g.msg = TradeRelay().empty() ? "NO GALLERY ADDRESS IS SET UP IN THIS BUILD" : "COULD NOT REACH THE GALLERY";
+            }
+            else
+            {
+                std::deque<GalleryItem> got;
+                std::string next;
+                GalleryParse(reply, got, next);
+                for (GalleryItem& it : got) g.items.push_back(std::move(it));
+                g.cursor = next;
+                g.more = !next.empty();
+                g.loaded = true;
+                if (g.msg == "LOADING..." || g.msg.empty()) g.msg = g.items.empty() ? "NOTHING SHARED YET. BE THE FIRST: SHARE A THEME" : "";
+            }
+        }
+        Hub().version++;
+        for (size_t i = first;; i++)
+        {
+            std::string code;
+            {
+                std::lock_guard<std::mutex> l(g.m);
+                if (i >= g.items.size()) break;
+                code = GalleryCode(g.items[i].code);
+            }
+            std::string body;
+            int st = 0;
+            if (GalleryHttp("GET", "/v2/themes/" + code + "/preview", "", "", st, body) && st == 200 && body.size() < (700u << 10))
+            {
+                std::lock_guard<std::mutex> l(g.m);
+                if (i < g.items.size()) g.items[i].jpg.assign(body.begin(), body.end());
+            }
+            Hub().version++;
+        }
+        {
+            std::lock_guard<std::mutex> l(g.m);
+            g.busy = false;
+        }
+        Hub().version++;
+    });
+}
+inline void GalleryOpen()
+{
+    GalleryState& g = Gallery();
+    std::lock_guard<std::mutex> l(g.m);
+    if (g.busy) return;
+    g.items.clear(); g.cursor.clear(); g.more = false; g.loaded = false; g.tried = false; g.msg.clear();
+}
+inline void GalleryCardInfo(int i, std::string& label, std::string& author)
+{
+    if (i == 0) { label = "Enter A Theme Code"; return; }
+    if (i == 1) { label = "Share A Theme"; return; }
+    GalleryState& g = Gallery();
+    std::lock_guard<std::mutex> l(g.m);
+    if (i - 2 < (int)g.items.size()) { label = g.items[(size_t)i - 2].name; author = g.items[(size_t)i - 2].author; }
+}
+inline const Glass::Picture* GalleryPreview(int k)
+{
+    GalleryState& g = Gallery();
+    std::lock_guard<std::mutex> l(g.m);
+    if (k < 0 || k >= (int)g.items.size()) return nullptr;
+    GalleryItem& it = g.items[(size_t)k];
+    if (!it.decoded && !it.jpg.empty())
+    {
+        it.decoded = true;
+        if (!LookDecodePicture(it.jpg, it.pic)) it.pic = Glass::Picture();
+        it.jpg.clear();
+        it.jpg.shrink_to_fit();
+    }
+    return it.pic.px.empty() ? nullptr : &it.pic;
+}
+// A shared theme chosen: its menu (Try It).
+inline void GalleryOpenCard(int k)
+{
+    GalleryState& g = Gallery();
+    GlassFocus& F = Focus();
+    std::string name, author, code;
+    {
+        std::lock_guard<std::mutex> l(g.m);
+        if (k < 0 || k >= (int)g.items.size()) return;
+        name = g.items[(size_t)k].name; author = g.items[(size_t)k].author; code = GalleryCode(g.items[(size_t)k].code);
+    }
+    F.dialog = 15;
+    F.drow = 0;
+    F.dTitle = name;
+    F.dMsg = "By " + author + ". Try It puts it on your launcher; then you keep it or go back.";
+    F.dItems = { "Try It", "Close" };
+    F.dPaths = { "#gtry:" + code, "#close" };
+}
+// Share A Theme: pick one of My Themes.
+inline void GalleryShareMenu()
+{
+    ThemeState& ts = Themes();
+    GlassFocus& F = Focus();
+    ThemesRefresh();
+    if (ts.list.empty()) { ts.msg = "SAVE A THEME FIRST: LAUNCHER, MY THEMES, SAVE THIS LOOK"; Hub().version++; return; }
+    F.dialog = 15;
+    F.drow = 0;
+    F.dTitle = "Share A Theme";
+    F.dMsg = "Pick one of your themes. It is looked at before it shows for others. Share only pictures that are yours.";
+    F.dItems.clear();
+    F.dPaths.clear();
+    for (size_t i = 0; i < ts.list.size() && i < 6; i++) { F.dItems.push_back(ts.list[i]); F.dPaths.push_back("#gshare:" + ts.list[i]); }
+    F.dItems.push_back("Close");
+    F.dPaths.push_back("#close");
+}
+inline std::set<std::string> GalleryPicList()
+{
+    std::set<std::string> s;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(HubDir() + "/launcher-pictures", ec)) s.insert(e.path().filename().string());
+    return s;
+}
+// A theme by its code (from a card or typed): downloaded, checked, kept in the themes folder, and handed to GalleryPoll to try.
+inline void GalleryDownload(const std::string& code)
+{
+    GalleryState& g = Gallery();
+    {
+        std::lock_guard<std::mutex> l(g.m);
+        if (g.working) return;
+        g.working = true;
+        g.msg = "DOWNLOADING...";
+    }
+    Hub().version++;
+    GalleryBg([code]() {
+        GalleryState& g = Gallery();
+        int status = 0;
+        std::string reply, msg, name;
+        std::error_code ec;
+        if (!GalleryHttp("GET", "/v2/themes/" + code, "", "", status, reply)) msg = TradeRelay().empty() ? "NO GALLERY ADDRESS IS SET UP IN THIS BUILD" : "COULD NOT REACH THE GALLERY";
+        else if (status == 404)
+        {
+            std::string r2;
+            int s2 = 0;
+            msg = "THAT CODE DOES NOT WORK";
+            if (GalleryHttp("GET", "/v2/themes/" + code + "/status", "", "", s2, r2) && s2 == 200)
+            {
+                if (r2.find("pending") != std::string::npos) msg = "THAT THEME IS WAITING TO BE APPROVED. TRY AGAIN LATER.";
+                else if (r2.find("rejected") != std::string::npos) msg = "THAT THEME WAS NOT APPROVED";
+                else if (r2.find("removed") != std::string::npos) msg = "THAT THEME WAS TAKEN DOWN";
+            }
+        }
+        else if (status != 200 || reply.size() < 100 || reply.size() > (20u << 20)) msg = "THE GALLERY GAVE AN ANSWER IT SHOULD NOT";
+        else
+        {
+            std::filesystem::create_directories(ThemesDir(), ec);
+            const std::string tmp = ThemesDir() + "/gallery-download.tmp";
+            bool wrote = false;
+            if (FILE* f = fopen(tmp.c_str(), "wb")) { wrote = fwrite(reply.data(), 1, reply.size(), f) == reply.size(); fclose(f); }
+            std::map<std::string, std::vector<unsigned char>> files;
+            if (!wrote || !ThemePack::ZipRead(tmp, files, 48u << 20) || !files.count("theme.txt")) msg = "THAT IS NOT A FULLDEX THEME";
+            else
+            {
+                const std::string t(files["theme.txt"].begin(), files["theme.txt"].end());
+                std::string raw = "Gallery Theme";
+                const size_t at = t.find("\nname\t");
+                if (at != std::string::npos)
+                {
+                    const size_t end = t.find('\n', at + 1);
+                    raw = t.substr(at + 6, end == std::string::npos ? std::string::npos : end - (at + 6));
+                    while (!raw.empty() && raw.back() == '\r') raw.pop_back();
+                }
+                std::string nm = ThemeSafe(raw);
+                if (nm.empty()) nm = "Gallery Theme";
+                std::string to = nm;
+                for (int n = 2; std::filesystem::exists(ThemesDir() + "/" + to + ".zip", ec); n++) to = nm + " " + std::to_string(n);
+                std::filesystem::rename(tmp, ThemesDir() + "/" + to + ".zip", ec);
+                if (ec) msg = "COULD NOT SAVE IT"; else name = to;
+            }
+            if (name.empty()) std::filesystem::remove(tmp, ec);
+        }
+        {
+            std::lock_guard<std::mutex> l(g.m);
+            g.working = false;
+            g.msg = name.empty() ? msg : "TRYING: " + name;
+            if (!name.empty()) g.ready = name;
+        }
+        Hub().version++;
+    });
+}
+inline void GalleryEnterCode(const std::string& raw)
+{
+    const std::string code = GalleryCode(raw);
+    if (code.empty()) { Themes().msg = "A CODE IS 8 LETTERS AND NUMBERS, LIKE K7QM-X2RD"; Hub().version++; return; }
+    Themes().msg.clear();
+    GalleryDownload(code);
+}
+inline void GalleryTryDialog()
+{
+    GalleryState& g = Gallery();
+    GlassFocus& F = Focus();
+    F.dialog = 15;
+    F.drow = 0;
+    F.dTitle = "Keep This Theme?";
+    F.dMsg = g.tryName + " is on. Keep it in My Themes, or go back to your own look.";
+    F.dItems = { "Keep", "Go Back" };
+    F.dPaths = { "#gkeep", "#gback" };
+}
+inline void GalleryKeep()
+{
+    GalleryState& g = Gallery();
+    if (!g.trying) return;
+    g.trying = false;
+    LookSave();
+    ThemesRefresh();
+    Themes().msg = "KEPT IN MY THEMES: " + g.tryName;
+    Hub().version++;
+}
+// Go Back: the look as it was, and nothing of the theme left behind.
+inline void GalleryBack()
+{
+    GalleryState& g = Gallery();
+    ThemeState& ts = Themes();
+    if (!g.trying) return;
+    g.trying = false;
+    Look() = g.before;
+    LookApply();
+    std::error_code ec;
+    std::filesystem::remove(ThemesDir() + "/" + g.tryName + ".zip", ec);
+    ts.previews.erase(g.tryName);
+    std::vector<std::string> added;
+    for (const auto& e : std::filesystem::directory_iterator(HubDir() + "/launcher-pictures", ec))
+        if (!g.picsBefore.count(e.path().filename().string())) added.push_back(e.path().string());
+    for (const std::string& p : added) std::filesystem::remove(p, ec);
+    ThemesRefresh();
+    ts.msg = "BACK TO YOUR OWN LOOK";
+    Hub().version++;
+}
+// Each time the Gallery is drawn: first load, the next page near the end, and a downloaded theme to try.
+inline void GalleryPoll(int prow)
+{
+    GalleryState& g = Gallery();
+    GlassFocus& F = Focus();
+    std::string ready;
+    bool load = false, more = false;
+    {
+        std::lock_guard<std::mutex> l(g.m);
+        ready.swap(g.ready);
+        load = !g.tried && !g.busy;
+        more = g.more && !g.busy;
+    }
+    if (!ready.empty())
+    {
+        LookLoad();
+        g.before = Look();
+        g.picsBefore = GalleryPicList();
+        g.tryName = ready;
+        if (LookApplyTheme(ready, true)) g.trying = true;
+        else
+        {
+            std::error_code ec;
+            std::filesystem::remove(ThemesDir() + "/" + ready + ".zip", ec);
+            ThemesRefresh();
+        }
+    }
+    if (g.trying && (F.dialog != 15 || F.dTitle != "Keep This Theme?")) GalleryTryDialog();
+    if (load) GalleryLoad(true);
+    else if (more && prow + 4 >= GalleryCards()) GalleryLoad(false);
+}
+// Share: one of My Themes sent up. It waits for approval; the code is shown now and kept in gallery-shared.txt.
+inline void GalleryShare(const std::string& name)
+{
+    GalleryState& g = Gallery();
+    ThemeState& ts = Themes();
+    std::string body;
+    if (FILE* f = fopen((ThemesDir() + "/" + name + ".zip").c_str(), "rb"))
+    {
+        char buf[65536];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof buf, f)) > 0 && body.size() <= (20u << 20)) body.append(buf, n);
+        fclose(f);
+    }
+    if (body.empty()) { ts.msg = "COULD NOT READ THAT THEME"; Hub().version++; return; }
+    if (body.size() > (20u << 20)) { ts.msg = "OVER 20 MB: USE SMALLER PICTURES"; Hub().version++; return; }
+    std::string author;
+    if (FILE* f = fopen((HubDir() + "/fulldex-author.txt").c_str(), "rb")) { char b[64] = {}; if (fgets(b, sizeof b, f)) author = b; fclose(f); }
+    while (!author.empty() && isspace((unsigned char)author.back())) author.pop_back();
+    if (author.empty()) author = "Anonymous";
+    {
+        std::lock_guard<std::mutex> l(g.m);
+        if (g.working) return;
+        g.working = true;
+        g.msg = "SHARING...";
+    }
+    Hub().version++;
+    GalleryBg([name, body, author]() {
+        GalleryState& g = Gallery();
+        int status = 0;
+        std::string reply, msg, code;
+        const bool ok = GalleryHttp("POST", "/v2/themes?author=" + GalleryEnc(author), body, "application/zip", status, reply);
+        if (!ok) msg = TradeRelay().empty() ? "NO GALLERY ADDRESS IS SET UP IN THIS BUILD" : "COULD NOT REACH THE GALLERY";
+        else if (status == 201 && GalleryJStr(reply, 0, reply.size(), "code", code))
+        {
+            msg = "SHARED. YOUR CODE: " + code + ". IT SHOWS FOR EVERYONE ONCE APPROVED.";
+            if (FILE* f = fopen((HubDir() + "/gallery-shared.txt").c_str(), "ab")) { const std::string line = code + "\t" + name + "\n"; fwrite(line.data(), 1, line.size(), f); fclose(f); }
+        }
+        else if (status == 429) msg = "TOO MANY SHARES FOR NOW. TRY AGAIN LATER.";
+        else if (status == 413) msg = "OVER 20 MB: USE SMALLER PICTURES";
+        else if (status == 400)
+        {
+            std::string why = reply.substr(0, reply.find('\n'));
+            for (char& ch : why) ch = (char)toupper((unsigned char)ch);
+            msg = "NOT ACCEPTED: " + why;
+        }
+        else msg = "THE GALLERY DID NOT TAKE IT (" + std::to_string(status) + ")";
+        {
+            std::lock_guard<std::mutex> l(g.m);
+            g.working = false;
+            g.msg = msg;
+        }
+        Hub().version++;
+    });
 }
 // A .zip from the PC's picker, copied into the themes folder (named after its file).
 inline bool ThemeImport(const std::string& path)
@@ -3100,6 +3591,10 @@ inline int ThemePick(const std::string& pick)
     ThemeState& ts = Themes();
     GlassFocus& F = Focus();
     if (pick.rfind("#apply:", 0) == 0) { LookApplyTheme(pick.substr(7)); return 0; }
+    if (pick.rfind("#gtry:", 0) == 0) { GalleryDownload(pick.substr(6)); return 0; }
+    if (pick == "#gkeep") { GalleryKeep(); return 0; }
+    if (pick == "#gback") { GalleryBack(); return 0; }
+    if (pick.rfind("#gshare:", 0) == 0) { GalleryShare(pick.substr(8)); return 0; }
     if (pick == "#lookdefault")
     {
         // (Everything as a new install has it; the pictures and themes stay where they are.)
@@ -3372,7 +3867,7 @@ inline void OpenSupportAsk()
 inline int PageRows(int page) { return page == SIDE_LAUNCHER ? LauncherRows() : page == SIDE_ABOUT ? 5 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
 inline std::string AboutUrl(int row)
 {
-    return row == 0 ? "https://buymeacoffee.com/mamesj" : row == 2 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 4 ? "https://github.com/mamesj/pokemon-fulldex" : "";
+    return row == 0 ? "https://buymeacoffee.com/mamesj" : row == 2 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 4 ? "https://github.com/mamesj/pokemon-fulldex" : row == 3 ? "https://github.com/mamesj/pokemon-fulldex/blob/main/frontend/fonts/FONT-LICENSES.txt" : "";
 }
 // The page a row of a page opens (none: "").
 inline std::string PageUrl(int page, int row)
@@ -3475,6 +3970,7 @@ inline bool PageBack()
     if (F.page < 0) return false;
     if (F.page == SIDE_LAUNCHER && Look().edit >= 0) { Look().edit = -1; LookSave(); Hub().version++; return true; } // (the colour wheel closed)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 4) { LauncherMode() = 1; F.prow = 8; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the fonts: back to the Theme Editor)
+    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 5) { LauncherMode() = 0; F.prow = 2; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Gallery: back to its menu)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 3) { LauncherMode() = 2; F.prow = 2; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Library: back to My Themes)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMode() == 1 ? 0 : 1; LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
@@ -3540,16 +4036,33 @@ inline std::vector<std::string> WrapLines(const std::string& msg0, float px, int
 {
     const std::string msg = LauncherText::Tr(msg0); // (in the player's language before it is wrapped)
     std::vector<std::string> lines;
-    std::string line, word;
-    auto flush = [&]() {
-        if (word.empty()) return;
-        const std::string t = line.empty() ? word : line + " " + word;
-        if (!line.empty() && GW(t, px, bold) > w) { lines.push_back(line); line = word; }
+    std::string line;
+    struct Tok { std::string text; bool space; };
+    std::vector<Tok> toks;
+    std::string word;
+    bool pend = false, wordSpace = false;
+    auto endWord = [&]() { if (!word.empty()) { toks.push_back({ word, wordSpace }); word.clear(); } };
+    for (size_t i = 0; i < msg.size();)
+    {
+        const unsigned char b = (unsigned char)msg[i];
+        const size_t n = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1;
+        const std::string ch = msg.substr(i, n);
+        i += n;
+        if (ch == " ") { endWord(); pend = true; continue; }
+        uint32_t cp = b;
+        if (n == 3 && ch.size() == 3) cp = ((b & 0x0F) << 12) | (((unsigned char)ch[1] & 0x3F) << 6) | ((unsigned char)ch[2] & 0x3F);
+        const bool cjk = n == 3 && ((cp >= 0x3000 && cp <= 0x9FFF) || (cp >= 0xFF00 && cp <= 0xFFEF)); // (Japanese has no spaces: it may break after any letter)
+        if (cjk) { endWord(); toks.push_back({ ch, pend }); pend = false; continue; }
+        if (word.empty()) { wordSpace = pend; pend = false; }
+        word += ch;
+    }
+    endWord();
+    for (const Tok& k : toks)
+    {
+        const std::string t = line.empty() ? k.text : line + (k.space ? " " : "") + k.text;
+        if (!line.empty() && GW(t, px, bold) > w) { lines.push_back(line); line = k.text; }
         else line = t;
-        word.clear();
-    };
-    for (char ch : msg) { if (ch == ' ') flush(); else word += ch; }
-    flush();
+    }
     if (!line.empty()) lines.push_back(line);
     return lines;
 }
@@ -3630,7 +4143,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -4046,7 +4559,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             GT(c, L + pad, bottom - pad - (int)(4 * u), line, 13 * u, ts.msg.empty() ? hint : 0xFF8CC8FFu, !ts.msg.empty());
             return;
         }
-        if (LauncherMode() == 3)
+        if (LauncherMode() == 3 || LauncherMode() == 5)
         {
             // The Theme Library: a grid of cards, each a theme's Home picture over its name. One panel
             // across, rows of four, a page at a time.
@@ -4056,6 +4569,8 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             const int visRows = std::max(1, (bottom - top - 2 * pad - (int)(26 * u) + gap) / (ch + gap));
             Menu::FrostBox(c, solid, L, top, W, bottom - top, 18 * u);
             F.prow = std::max(0, std::min(F.prow, n - 1));
+            const bool gal = LauncherMode() == 5; // (the Theme Gallery: shared themes, after two action cards)
+            if (gal) GalleryPoll(F.prow);
             // (A page at a time: the chosen card's.)
             const int perPage = cols * visRows, pages = std::max(1, (n + perPage - 1) / perPage), page = F.prow / perPage;
             F.rScroll = page * visRows;
@@ -4063,7 +4578,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             F.pact = -1; F.aW = 0;
             F.pX = L + pad; F.pY = top + pad; F.pW = W - 2 * pad; F.pRow = ch + gap; F.rVis = visRows;
             ts.gx = L + pad; ts.gy = top + pad; ts.cw = cw; ts.ch = ch; ts.gap = gap; ts.cols = cols;
-            for (int i = 0; i < (int)ts.list.size(); i++)
+            for (int i = 0; i < (gal ? GalleryCards() : (int)ts.list.size()); i++)
             {
                 const int r = i / cols - F.rScroll;
                 if (r < 0 || r >= visRows) continue;
@@ -4075,8 +4590,17 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 const int px = x + (int)(8 * u), py = y + (int)(8 * u);
                 std::string label;
                 {
-                    label = ts.list[(size_t)i];
-                    if (const Glass::Picture* pv = ThemePreview(label)) Glass::PictureIn(c, *pv, px, py, pw, pph, 10 * u, 255);
+                    std::string gAuthor;
+                    const Glass::Picture* pv = nullptr;
+                    if (gal) { GalleryCardInfo(i, label, gAuthor); if (i >= 2) pv = GalleryPreview(i - 2); }
+                    else { label = ts.list[(size_t)i]; pv = ThemePreview(label); }
+                    if (gal && i < 2)
+                    {
+                        Glass::Round(c, px, py, pw, pph, 10 * u, 0x24FFFFFFu);
+                        const std::string big = i == 0 ? "ABCD-1234" : "Share";
+                        GT(c, px + (pw - GW(big, 22 * u, true)) / 2, py + pph / 2, big, 22 * u, text, true);
+                    }
+                    else if (pv) Glass::PictureIn(c, *pv, px, py, pw, pph, 10 * u, 255);
                     else { Glass::Round(c, px, py, pw, pph, 10 * u, 0x24FFFFFFu); GT(c, px + (pw - GW("No Picture", 12 * u, true)) / 2, py + pph / 2, "No Picture", 12 * u, hint, true); }
                 }
                 float fs = 15 * u;
@@ -4099,14 +4623,16 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 GT(c, lx + (lw - GW(pl, 13 * u, true)) / 2, ly + bh / 2, pl, 13 * u, text, true);
                 ts.prevX = px2; ts.nextX = nx; ts.pageY = ly; ts.pageW = bw; ts.pageH = bh;
             }
-            if (ts.list.empty()) GT(c, L + (W - GW("No Themes Yet", 20 * u, true)) / 2, (top + bottom) / 2, "No Themes Yet", 20 * u, hint, true);
+            if (!gal && ts.list.empty()) GT(c, L + (W - GW("No Themes Yet", 20 * u, true)) / 2, (top + bottom) / 2, "No Themes Yet", 20 * u, hint, true);
 #ifdef __SWITCH__
             const char* say[2] = { "Save This Look on My Themes makes one.", "Press A to apply it or delete it." };
 #else
             const char* say[2] = { "Save This Look on My Themes makes one.", "Choose it to apply it, show its file, or delete it." };
 #endif
-            const std::string line = !ts.msg.empty() ? ts.msg : say[ts.list.empty() ? 0 : 1];
-            GT(c, L + pad, bottom - pad - (int)(4 * u), line, 13 * u, ts.msg.empty() ? hint : 0xFF8CC8FFu, ts.msg.empty() ? false : true);
+            const std::string gm = gal ? GalleryMsg() : std::string();
+            const std::string line = !ts.msg.empty() ? ts.msg : gal ? (!gm.empty() ? gm : std::string("Choose a theme to try it on. You keep it or go back.")) : std::string(say[ts.list.empty() ? 0 : 1]);
+            const bool lit = !ts.msg.empty() || !gm.empty();
+            GT(c, L + pad, bottom - pad - (int)(4 * u), line, 13 * u, lit ? 0xFF8CC8FFu : hint, lit);
             return;
         }
         if (LauncherMode() != 1)
@@ -4157,12 +4683,12 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 const std::string count = std::to_string(ts.list.size()) + (ts.list.size() == 1 ? " Theme" : " Themes");
                 row(0, Glass::I_SPARKLE, "Theme Editor", "Colours, pictures, blur and the rest of the launcher's look", "");
                 row(1, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
-                row(2, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Soon");
+                row(2, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Online");
                 static const char* const titles[3] = { "Theme Editor", "My Themes", "Theme Gallery" };
                 static const char* const about[3] = {
                     "Change the launcher's look: the accent, the panels, the sidebar and the top bar, the buttons, the background, its blur and dim, and the glass's grain. Each can be a colour or a picture.",
                     "Keep the look you have now as a theme, with its pictures, and switch between your themes. Each is one .zip file you can send to a friend.",
-                    "Browse themes other players have shared, see each one on a Home screen, and try one on before you keep it. Coming soon." };
+                    "Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own." };
                 GT(c, ix, y + 14 * u, titles[F.prow], 22 * u, text, true);
                 y += (int)(44 * u);
                 para(about[F.prow], text, 14 * u);
@@ -5169,7 +5695,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         heading("Licences");
         static const char* lic[][2] = {
             { "Fulldex", "GPL-3.0-or-later" }, { "melonDS", "GPL-3.0" }, { "Pok\xC3\xA9" "Daisy readers", "GPL-3.0" },
-            { "HOME Menu icon loader (nx-hbloader)", "GPL-3.0" }, { "mGBA", "MPL-2.0" }, { "Noto Sans, Nunito and the launcher's other fonts", "SIL Open Font License" } };
+            { "HOME Menu icon loader (nx-hbloader)", "GPL-3.0" }, { "mGBA", "MPL-2.0" }, { "The launcher's fonts", "SIL Open Font License" } };
         const int rh = (int)(44 * u);
         for (int i = 0; i < 6; i++)
         {
@@ -5178,7 +5704,10 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             GT(c, px + pw - ip - (int)(14 * u) - GW(lic[i][1], 15 * u, true), y + rh * 0.5f, lic[i][1], 15 * u, hint, true);
             y += rh + (int)(6 * u);
         }
-        y += (int)(10 * u);
+        y += (int)(4 * u);
+        para("Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.");
+        card(px + ip, y, pw - 2 * ip, (int)(64 * u), "FONT-LICENSES.txt", open);
+        y += (int)(78 * u);
         para("Not affiliated with or endorsed by Nintendo, Game Freak, The Pok\xC3\xA9mon Company or the melonDS project. Pok\xC3\xA9mon is a trademark of its owners. The full licence texts are on the GitHub page.");
     }
     else
@@ -5196,7 +5725,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
 {
     // (The launcher's own font and Text Size while it draws; CleanFont's own after.)
     LookLoad();
-    struct FontUse { FontUse() { CleanFont::FontId() = LookFontId(); CleanFont::SizeScale() = Look().fontSize / 100.0f; } ~FontUse() { CleanFont::FontId() = 0; CleanFont::SizeScale() = 1.0f; } } fontUse;
+    struct FontUse { FontUse() { CleanFont::FontId() = LookFontId(); CleanFont::SizeScale() = Look().fontSize / 100.0f; CleanFont::Cjk() = true; } ~FontUse() { CleanFont::FontId() = 0; CleanFont::SizeScale() = 1.0f; CleanFont::Cjk() = false; } } fontUse;
     const float u = GU(c);
     const Grid& grid = v.g;
     const GlassSpots sp = Spots(c);
