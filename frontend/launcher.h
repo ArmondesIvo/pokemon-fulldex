@@ -5945,7 +5945,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #endif
         const int na = (int)acts.size();
         int ah = (int)(44 * u), ag = (int)(6 * u);
-        if (ShortNow() && na > 0)
+        if (na > 0)
         {
             // (A phone sideways: the writing above can run long, so the buttons give way, down to a smaller size, instead of lying over it.)
             const int room = bottom - (int)(18 * u) - (y + (int)(8 * u));
