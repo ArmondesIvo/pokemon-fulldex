@@ -2182,6 +2182,13 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     SDL_PushEvent(&k);
                     break;
                 }
+                // The About page's cards that open a page (credits, licences, the support codes, the bug page, the website).
+                if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging && Launcher::Focus().page == Launcher::SIDE_ABOUT && Launcher::Focus().dialog == 0)
+                    if (const char* url = Launcher::AboutLinkAt(mx, my))
+                    {
+                        if (SDL_OpenURL(url) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", url, SDL_GetError());
+                        break;
+                    }
                 // The music bar: previous, play / pause, next.
                 if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging)
                 {

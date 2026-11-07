@@ -4124,6 +4124,15 @@ inline void OpenSupportAsk()
     F.dPaths = { "#open:https://buymeacoffee.com/mamesj", "#open:https://paypal.me/mamesj", "#close" };
 }
 inline int PageRows(int page) { return page == SIDE_LAUNCHER ? LauncherRows() : page == SIDE_ABOUT ? 5 : page == SIDE_UPDATES ? 2 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
+// The cards of the About page that open a page when tapped, as drawn (cleared each frame it is drawn).
+struct AboutLink { int x, y, w, h; const char* url; };
+inline std::vector<AboutLink>& AboutLinks() { static std::vector<AboutLink> v; return v; }
+inline const char* AboutLinkAt(int mx, int my)
+{
+    for (const AboutLink& l : AboutLinks())
+        if (mx >= l.x && mx < l.x + l.w && my >= l.y && my < l.y + l.h) return l.url;
+    return nullptr;
+}
 inline std::string AboutUrl(int row)
 {
     return row == 0 ? "https://buymeacoffee.com/mamesj" : row == 2 ? "https://github.com/mamesj/pokemon-fulldex/issues" : row == 4 ? "https://github.com/mamesj/pokemon-fulldex" : row == 3 ? "https://github.com/mamesj/pokemon-fulldex/blob/main/frontend/fonts/FONT-LICENSES.txt" : "";
@@ -5991,6 +6000,11 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             Glass::Round(c, px + pw - (int)(10 * u), y0 + (avail - th) * start / maxStart, (int)(4 * u), th, 2 * u, 0x80FFFFFFu);
         }
     };
+    AboutLinks().clear();
+    auto link = [&](int lx, int ly, int lw, int lh, const char* url) {
+        AboutLinks().push_back({ lx, ly, lw, lh, url });
+        Glass::DrawIcon(c, Glass::I_CHEVRON_R, lx + lw - (int)(18 * u), ly + lh * 0.5f, 7 * u, hint);
+    };
     if (F.prow == 0)
     {
         heading("Support Fulldex");
@@ -6004,6 +6018,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         {
             const int cx = px + ip + i * (cw + gap);
             card(cx, y, cw, ch, names2[i], where[i]);
+            link(cx, y, cw, ch, i == 0 ? "https://buymeacoffee.com/mamesj" : "https://paypal.me/mamesj");
             if (i == 0) DrawQr(c, kBeerQr, kBeerQrSize, cx + (cw - qs) / 2, y + ch + (int)(14 * u), qs);
             else DrawQr(c, kPaypalQr, kPaypalQrSize, cx + (cw - qs) / 2, y + ch + (int)(14 * u), qs);
         }
@@ -6017,6 +6032,9 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     else if (F.prow == 1)
     {
         heading("Credits And Acknowledgements");
+        static const char* const creditUrl[10] = { "https://github.com/ClickingMaster/ssrecomp", "https://github.com/melonDS-emu/melonDS", "https://mgba.io",
+            "https://github.com/lidor30/pokedaisy", "https://github.com/fuddlesworth/pokebw2", "https://gbatemp.net/threads/deadskullzjrs-nds-cheat-databases.488711/",
+            "https://github.com/ITotalJustice/sphaira", "", "", "" };
         static const char* credits[][2] = {
             { "ssrecomp by ClickingMaster", "The single-screen and widescreen view Fulldex grew from" },
             { "melonDS", "The DS emulation" },
@@ -6031,7 +6049,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         const int gap = (int)(12 * u), cw = (pw - 2 * ip - gap) / 2, ch = (int)(62 * u);
         std::vector<Blk> bl;
         for (int r = 0; r < 5; r++)
-            bl.push_back({ ch + (int)(10 * u), [&, r]() { for (int k = 0; k < 2; k++) card(px + ip + k * (cw + gap), y, cw, ch, credits[r * 2 + k][0], credits[r * 2 + k][1]); y += ch + (int)(10 * u); } });
+            bl.push_back({ ch + (int)(10 * u), [&, r]() { for (int k = 0; k < 2; k++) { card(px + ip + k * (cw + gap), y, cw, ch, credits[r * 2 + k][0], credits[r * 2 + k][1]); if (*creditUrl[r * 2 + k]) link(px + ip + k * (cw + gap), y, cw, ch, creditUrl[r * 2 + k]); } y += ch + (int)(10 * u); } });
         runBlocks(bl, ch + (int)(10 * u));
     }
     else if (F.prow == 2)
@@ -6040,10 +6058,13 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         para("Found something wrong? Open an issue on the GitHub page: say which game, which device, and what happened just before.");
         para("A screenshot helps, and so does game.log from the folder Fulldex runs from.");
         card(px + ip, y, pw - 2 * ip, (int)(64 * u), "github.com/mamesj/pokemon-fulldex/issues", open);
+        link(px + ip, y, pw - 2 * ip, (int)(64 * u), "https://github.com/mamesj/pokemon-fulldex/issues");
     }
     else if (F.prow == 3)
     {
         heading("Licences");
+        static const char* const licUrl[6] = { "https://github.com/mamesj/pokemon-fulldex", "https://github.com/melonDS-emu/melonDS", "https://github.com/lidor30/pokedaisy",
+            "https://github.com/switchbrew/nx-hbloader", "https://mgba.io", "https://github.com/mamesj/pokemon-fulldex/blob/main/frontend/fonts/FONT-LICENSES.txt" };
         static const char* lic[][2] = {
             { "Fulldex", "GPL-3.0-or-later" }, { "melonDS", "GPL-3.0" }, { "Pok\xC3\xA9" "Daisy readers", "GPL-3.0" },
             { "HOME Menu icon loader (nx-hbloader)", "GPL-3.0" }, { "mGBA", "MPL-2.0" }, { "The launcher's fonts", "SIL Open Font License" } };
@@ -6056,10 +6077,11 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             bl.push_back({ rh + (int)(6 * u), [&, i]() {
                 Glass::Round(c, px + ip, y, pw - 2 * ip, rh, 12 * u, 0x14FFFFFFu);
                 GT(c, px + ip + (int)(14 * u), y + rh * 0.5f, lic[i][0], 16 * u, text, true);
-                GT(c, px + pw - ip - (int)(14 * u) - GW(lic[i][1], 15 * u, true), y + rh * 0.5f, lic[i][1], 15 * u, hint, true);
+                GT(c, px + pw - ip - (int)(40 * u) - GW(lic[i][1], 15 * u, true), y + rh * 0.5f, lic[i][1], 15 * u, hint, true);
+                link(px + ip, y, pw - 2 * ip, rh, licUrl[i]);
                 y += rh + (int)(6 * u); } });
         bl.push_back({ (int)(4 * u) + paraH(p1), [&]() { y += (int)(4 * u); para(p1); } });
-        bl.push_back({ (int)(78 * u), [&]() { card(px + ip, y, pw - 2 * ip, (int)(64 * u), "FONT-LICENSES.txt", open); y += (int)(78 * u); } });
+        bl.push_back({ (int)(78 * u), [&]() { card(px + ip, y, pw - 2 * ip, (int)(64 * u), "FONT-LICENSES.txt", open); link(px + ip, y, pw - 2 * ip, (int)(64 * u), "https://github.com/mamesj/pokemon-fulldex/blob/main/frontend/fonts/FONT-LICENSES.txt"); y += (int)(78 * u); } });
         bl.push_back({ paraH(p2), [&]() { para(p2); } });
         runBlocks(bl, rh + (int)(6 * u));
     }
@@ -6068,6 +6090,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         heading("Website");
         para("Downloads, the latest changes and the full instructions are on the GitHub page.");
         card(px + ip, y, pw - 2 * ip, (int)(64 * u), "github.com/mamesj/pokemon-fulldex", open);
+        link(px + ip, y, pw - 2 * ip, (int)(64 * u), "https://github.com/mamesj/pokemon-fulldex");
         y += (int)(84 * u);
         para("Tips are welcome but never expected: see Support, at the top of this page.");
     }
