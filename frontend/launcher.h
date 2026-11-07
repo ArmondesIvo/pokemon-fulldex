@@ -7597,6 +7597,7 @@ struct SettingsPage
     std::string Shown(const Setting& s) const
     {
         const int i = ValueIndex(s);
+        if (i >= (int)s.values.size()) return std::string(); // (TOGGLE FAVOURITE has no values: it is something to do, and read past its empty list this crashed the Game List page on Android)
         return i < 0 ? "AUTO" : s.values[i].second;
     }
     void Move(int d)
