@@ -1848,6 +1848,26 @@ inline void LookApply()
     Menu::GlassHint = tx == 0xFFF2F5F9u ? 0xFFB9C3CFu : scaled(0.78f);
     Menu::GlassOff = tx == 0xFFF2F5F9u ? 0xFF7E8894u : scaled(0.5f);
 }
+// What size of picture suits each surface that can have one. A picture covers each panel, bar or button it is
+// on (cropped to fit), so it is the shape that matters most; one over 4K (1080p on the Switch) is made smaller.
+inline std::string BestPicture(int e)
+{
+#ifdef __SWITCH__
+    const int m = 1920;
+#else
+    const int m = 3840;
+#endif
+    auto n = [&](int v) { return std::to_string(v * m / 3840); };
+    switch (e)
+    {
+    case 1: return "Best picture: " + n(1920) + " x " + n(1080) + " (16:9). It is cropped to fit each panel.";
+    case 2: return "Best picture: " + n(540) + " x " + n(2160) + ", tall and narrow. It is cropped to fit the sidebar.";
+    case 3: return "Best picture: " + n(3840) + " x " + n(220) + ", a very wide strip. It is cropped to fit the top bar.";
+    case 4: return "Best picture: " + n(600) + " x " + n(170) + ", wide and small. It is cropped to fit each button.";
+    case 5: return "Best picture: " + n(3840) + " x " + n(2160) + " (16:9). It covers the whole screen, so a wider or taller one is cropped.";
+    }
+    return std::string();
+}
 static const char* const kLookKeys[6] = { "accent", "panel", "sidebar", "topbar", "buttons", "bgcolour" };
 inline void LookFrom(const std::map<std::string, std::string>& p)
 {
@@ -5382,6 +5402,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             }
             y += (int)fl.size() * (fh + (int)(5 * u)) + (int)(8 * u);
             const bool pics = e >= 1 && e <= 5;
+            if (pics && (e != 5 || lk.backdrop == "picture")) para(BestPicture(e), text, 12 * u);
 #ifdef __SWITCH__
             para(std::string("Up and down choose a row, left and right change it.") + (pics ? " Pictures: put PNG or JPG files in /switch/pokemon-ds-wide/launcher-pictures/." : "") + " A or B: done.", hint, 12 * u);
 #else
@@ -5402,6 +5423,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             "How big the writing is in the launcher, from 85% to 120%.",
             "The colour of the writing everywhere in the launcher. Choose one that reads well on your panels and background." };
         para(about[F.prow], text, 14 * u);
+        if (F.prow >= 1 && F.prow <= 5) para(BestPicture(F.prow), text, 13 * u);
         if (F.prow <= 4 || F.prow == 10 || (F.prow == 5 && (lk.backdrop == "colour" || lk.backdrop == "picture")))
         {
             const int e = F.prow, cw = (int)(64 * u);
