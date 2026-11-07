@@ -22,7 +22,9 @@ namespace SettingsArt
 // chosen (the row's edge, the pill that is on, its picture), with dark text on a white pill.
 // (Raised glass: the panel a deep tint over the frost, lit at its rim; the rows and the preview
 // darker glass set into it, each with its own thin lit edge.)
-constexpr uint32_t Panel = 0x38101826, PanelEdge = 0x5CFFFFFF, Row = 0x400A111C, RowEdge = 0x2EFFFFFF;
+constexpr uint32_t Panel = 0x38101826, PanelEdge = 0x5CFFFFFF, RowEdge = 0x2EFFFFFF;
+// The rows and the preview: dark glass set into the panel over a game; the launcher's Settings pages set it as light as its other pages.
+inline uint32_t Row = 0x400A111C;
 constexpr uint32_t RowChosen = 0x2EFFFFFF, Glow = 0xFFFFFF, ChosenEdge = 0xFFFFFFFF;
 constexpr uint32_t Pill = 0xF7FFFFFF, PillEdge = 0xFFFFFFFF, PillInk = 0xFF0B1018, PillOff = 0x1EFFFFFF, PillOffEdge = 0x33FFFFFF;
 constexpr uint32_t Desc = 0xFFD3DAE4, Line = 0x2EFFFFFF;
@@ -1868,7 +1870,7 @@ inline void Menu::DrawSettings(Canvas& c, const std::string& title, const std::s
         // Drawing every row each press cost the Switch about 60 ms.)
         const bool selHere = i == selected;
         const bool nearSel = i > 0 && i - 1 == selected; // (the row above's glow, drawn before this one)
-        std::string rk = it.label + "|" + it.sub + "|" + it.value + "|" + std::to_string(it.choice) + "|" + std::to_string(it.kind) + "|" +
+        std::string rk = std::to_string(Row) + "|" + it.label + "|" + it.sub + "|" + it.value + "|" + std::to_string(it.choice) + "|" + std::to_string(it.kind) + "|" +
             std::to_string(it.preview) + "|" + std::to_string(it.icon) + "|" + std::to_string(it.indent) + "|" + std::to_string(it.disabled) + "|" +
             std::to_string(it.slider) + "|" + std::to_string(listX) + "," + std::to_string(y) + "," + std::to_string(listW) + "," + std::to_string(rowH) + "|" +
             std::to_string(nearSel) + std::to_string(tallRows) + std::to_string(rowTall) + std::to_string(kr) + "|" + std::to_string(c.BackdropSig()) + "|" +

@@ -7895,7 +7895,10 @@ inline void DrawSettingsPage(Canvas& c, Menu& m, const std::vector<Game>& games,
     if (F.sW > 0) { lane[0] = F.sX; lane[1] = F.sY; lane[2] = F.sW; lane[3] = F.sH; lane[4] = F.sListW; lane[5] = F.sPvX; }
     m.laneX = lane[0]; m.laneY = lane[1]; m.laneW = lane[2]; m.laneH = lane[3]; m.laneListW = lane[4]; m.lanePvX = lane[5];
     Focus() = kept;
+    const uint32_t rowWas = SettingsArt::Row;
+    SettingsArt::Row = Menu::GlassRow; // (As light as the launcher's other pages: the rows were dark glass, so this page looked darker.)
     m.Draw(c, title, std::string());
+    SettingsArt::Row = rowWas;
     m.laneX = -1;
 }
 // The settings previews draw their pictures from a game's two screens (Canvas::dsTop, dsBottom); the launcher has no
