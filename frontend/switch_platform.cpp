@@ -572,6 +572,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
             const bool bDown = (down & bB) != 0;
             const bool valid = selected >= 0 && selected < (int)games.size();
             const bool banner = Launcher::ContinueGame(games, selected) >= 0;
+            const bool panel = Launcher::PanelHome(); const bool tiles = Launcher::TilesHome(); const bool alt = panel || tiles;
             bool play = false, quitList = false;
             auto setTab = [&](int by) {
                 tab = Launcher::TabStep(tab, by); // (in the order shown)
@@ -908,7 +909,15 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                 if (down & (tl | tr)) setTab((down & tr) ? 1 : -1);
                 if (F.side >= 0)
                 {
-                    if (dir == 3) F.side = std::max(0, F.side - 1);
+                    if (panel || tiles)
+                    {
+                        // (The Panel home's sections along the top: left and right along them, down to the tabs.)
+                        if (dir == 1) F.side = std::max(0, F.side - 1);
+                        else if (dir == 2) F.side = std::min((int)Launcher::SIDES - 1, F.side + 1);
+                        else if (dir == 4 && panel) { F.side = -1; onTabs = true; }
+                    else if (dir == 3 && tiles) { F.side = -1; if (banner) F.banner = 1; else intoGames(); }
+                    }
+                    else if (dir == 3) F.side = std::max(0, F.side - 1);
                     else if (dir == 4) F.side = std::min((int)Launcher::SIDES - 1, F.side + 1);
                     else if (dir == 2) { F.side = -1; intoGames(); }
                     if (aDown)
@@ -922,9 +931,10 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     if (F.onSort)
                     {
                         // (Sort on the tab bar: left back to the tabs, down to the games, A the next order.)
-                        if (dir == 1) { if (F.tool > 1) F.tool--; else F.onSort = false; }
+                        if (panel && dir == 3) { F.onSort = false; onTabs = false; F.side = Launcher::SIDE_HOME; }
+                    else if (dir == 1) { if (F.tool > 1) F.tool--; else F.onSort = false; }
                         else if (dir == 2) F.tool = std::min(3, F.tool + 1);
-                        else if (dir == 4) { F.onSort = false; onTabs = false; if (banner) F.banner = 1; else intoGames(); }
+                        else if (dir == 4) { F.onSort = false; onTabs = false; if (banner && !alt) F.banner = 1; else intoGames(); }
                         else if (aDown && F.tool == 1 && !Launcher::TabHidden().empty()) Launcher::OpenPlusMenu(); // (+: new, or one hidden shown)
                         else if (aDown && F.tool != 3)
                         {
@@ -941,17 +951,19 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                             settle();
                         }
                     }
-                    else if (dir == 1 && tab == Launcher::FirstTab()) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                    else if (panel && dir == 3) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                else if (dir == 1 && tab == Launcher::FirstTab()) { if (!alt) { onTabs = false; F.side = Launcher::SIDE_HOME; } }
                     else if (dir == 2 && tab == Launcher::LastTab()) { F.onSort = true; F.tool = 1; }
                     else if (dir == 1 || dir == 2) setTab(dir == 2 ? 1 : -1);
                     else if (aDown) Launcher::OpenTabMenu(tab); // (a tab: move, hide; one of your own also rename, delete)
-                    else if (dir == 4 || aDown) { onTabs = false; if (banner) F.banner = 1; else intoGames(); }
+                    else if (dir == 4 || aDown) { onTabs = false; if (banner && !alt) F.banner = 1; else intoGames(); }
                 }
                 else if (F.banner)
                 {
-                    if (dir == 1) { if (F.banner == 2) F.banner = 1; else { F.banner = 0; F.side = Launcher::SIDE_HOME; } }
+                    if (dir == 1) { if (F.banner == 2) F.banner = 1; else { F.banner = 0; if (alt) intoGames(); else F.side = Launcher::SIDE_HOME; } }
                     else if (dir == 2) F.banner = 2;
-                    else if (dir == 3) { F.banner = 0; onTabs = true; }
+                    else if (dir == 3) { F.banner = 0; if (tiles) intoGames(); else onTabs = true; }
+                else if (tiles && dir == 4) { F.banner = 0; F.side = Launcher::SIDE_HOME; }
                     else if (dir == 4 && Launcher::FirstIn(view()) >= 0) { F.banner = 0; intoGames(); }
                     else if (aDown)
                     {
@@ -970,11 +982,19 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     {
                         const Launcher::View v = view();
                         const int k = v.SpotOf(selected);
-                        if (dir == 1 && (k < 0 || v.spots[k].x == v.g.gx)) F.side = Launcher::SIDE_HOME;
+                        if (tiles)
+                        {
+                            if (dir == 3) onTabs = true;
+                            else if (dir == 4) { if (banner) F.banner = 1; else F.side = Launcher::SIDE_HOME; }
+                            else { const int to2 = v.spots.empty() ? -1 : Launcher::Step(v, selected, dir == 1 ? 3 : 4); if (to2 >= 0 && to2 != selected) { selected = to2; note.clear(); } }
+                        }
+                        else if (panel && dir == 1) {}
+                        else if (panel && dir == 2 && banner) F.banner = 1;
+                        else if (dir == 1 && (k < 0 || v.spots[k].x == v.g.gx)) F.side = Launcher::SIDE_HOME;
                         else
                         {
                             const int to = v.spots.empty() ? -1 : Launcher::Step(v, selected, dir);
-                            if (to < 0) { if (dir == 3) { if (banner) F.banner = 1; else onTabs = true; } }
+                            if (to < 0) { if (dir == 3) { if (banner && !alt) F.banner = 1; else onTabs = true; } }
                             else if (to != selected) { selected = to; note.clear(); }
                         }
                     }
@@ -1126,7 +1146,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     Launcher::GlassBackdrop(canvas, selected >= 0 && selected < (int)games.size() ? &games[selected] : nullptr);
                     kb.Draw(canvas, Launcher::KbTitle(), "A: TYPE    X: DELETE    +: SAVE    B: CANCEL");
                 }
-                else Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected,
+                else Launcher::Draw(canvas, games, tab, !Launcher::TilesOn() && (onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner) ? -1 : selected,
                                     scroll, note, Launcher::Focus().popup >= 0 || Launcher::Focus().dialog || Launcher::Focus().page >= 0 ? "A: CHOOSE    B: BACK" : "A: PLAY    L / R: TABS    +: QUIT",
                                     theme, true, onTabs, onSettings);
                 glassKey = overlay ? std::string() : keyNow();

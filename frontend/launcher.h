@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -1035,6 +1036,42 @@ struct Grid
 };
 // The glass launcher (DrawGlass) on landscape screens with the clean font; the classic list otherwise.
 inline bool& GlassOn() { static bool on = true; return on; }
+inline bool PanelOn(); // (the Panel layout: Launcher > Layout)
+inline bool PanelHome(); // (the Panel layout, on the home screen: the sidebar's pages keep their sidebar)
+inline bool TilesOn(); // (the Tiles layout: Launcher > Layout)
+inline bool TilesHome(); // (the Tiles layout, on the home screen: a game carousel over a row of tiles, one per section)
+// The Panel home: one glass panel with the sections and the tabs along its top, the game list on its left,
+// the chosen game's preview on its right (Draw, the grid, the taps and the buttons all use this).
+struct PanelBox
+{
+    int x, y, w, h, pad, secY, secH, tabY, tabH, contentY, contentB, listX, listW, prevX, prevW;
+};
+inline PanelBox PanelGeometry(const Canvas& c)
+{
+    const float u = c.h / 720.0f;
+    PanelBox b;
+    b.pad = (int)(16 * u);
+    b.x = (int)(28 * u); b.y = (int)(24 * u); b.w = c.w - 2 * b.x; b.h = c.h - (int)(70 * u) - b.y;
+    b.secY = b.y + b.pad; b.secH = (int)(44 * u);
+    b.tabY = b.secY; b.tabH = b.secH; // (the tabs on the sections' row, between them and the tools)
+    b.contentY = b.secY + b.secH + (int)(14 * u);
+    b.contentB = b.y + b.h - b.pad;
+    b.listX = b.x + b.pad; b.listW = std::min((int)(430 * u), (b.w - 2 * b.pad) * 36 / 100);
+    b.prevX = b.listX + b.listW + (int)(16 * u); b.prevW = b.x + b.w - b.pad - b.prevX;
+    return b;
+}
+// The Tiles home: the chosen game's cover large in the middle of a row of covers, its name and the buttons under it,
+// a row of tiles (one per section) along the foot.
+struct TilesBox { int coverY, cover, nameY, metaY, btnY, tileY, tileH; };
+inline TilesBox TilesGeometry(const Canvas& c)
+{
+    const float u = c.h / 720.0f;
+    TilesBox b;
+    b.coverY = (int)(90 * u); b.cover = (int)(250 * u);
+    b.nameY = (int)(378 * u); b.metaY = (int)(408 * u); b.btnY = (int)(432 * u);
+    b.tileH = (int)(96 * u); b.tileY = c.h - (int)(70 * u) - b.tileH;
+    return b;
+}
 inline bool Glassy(const Canvas& c) { return GlassOn() && c.w > c.h && Menu::Clean; } // (Menu::Clean, not UseClean: Japanese and Korean are drawn smooth here too, with the launcher's CJK font)
 inline int GlassTabAt(const Canvas& c, int x, int y);
 inline Grid Layout(const Canvas& c)
@@ -1048,6 +1085,25 @@ inline Grid Layout(const Canvas& c)
         g.tabsY = (int)(28 * u); g.tabsH = (int)(44 * u);
         g.panelX = (int)(204 * u); g.panelW = c.w - g.panelX - (int)(28 * u);
         g.top = (int)(304 * u); g.bottom = c.h - (int)(82 * u);
+        if (PanelHome())
+        {
+            // The Panel home: one column of plain rows on the left of its panel, the preview on the right.
+            const PanelBox pb = PanelGeometry(c);
+            g.top = pb.contentY; g.bottom = pb.contentB;
+            g.gap = (int)(4 * u);
+            g.cw = pb.listW; g.ch = (int)(54 * u); g.tile = (int)(40 * u);
+            g.panelX = pb.x; g.panelW = pb.w;
+            g.cols = 1; g.gx = pb.listX; g.colStep = g.cw; g.rowStep = g.ch + g.gap;
+            return g;
+        }
+        if (TilesOn())
+        {
+            // The Tiles home: one column, one cover in view (the chosen one, in the middle); the arrows step along it.
+            const TilesBox tb = TilesGeometry(c);
+            g.top = tb.coverY; g.ch = tb.cover; g.bottom = g.top + g.ch; g.cw = tb.cover; g.tile = tb.cover; g.gap = (int)(20 * u);
+            g.panelX = 0; g.panelW = c.w; g.cols = 1; g.gx = (c.w - g.cw) / 2; g.colStep = g.cw; g.rowStep = g.ch + g.gap;
+            return g;
+        }
         // (Box art is square: square pictures, two rows of cards in view, as many across as fit,
         // the room left over shared out between them.)
         const int minGap = (int)(14 * u);
@@ -1289,6 +1345,9 @@ struct GlassSpots
     int bannerX, bannerY, bannerW, bannerH;
     int contX, contY, contW, contH; // the Continue button
     int headY;
+    int secY = 0, secH = 0;
+    std::vector<int> secX, secW; // (the Panel home's sections along the top)
+    int winX = 0, winY = 0, winW = 0, winH = 0, pageTop = 0, pageTitleY = 0, pageBottom = 0; // (the Tiles home's pages: a window over the home)
 };
 inline GlassSpots Spots(const Canvas& c)
 {
@@ -1299,8 +1358,26 @@ inline GlassSpots Spots(const Canvas& c)
     // (text sizes: bigger since 6 November, the sidebar and tabs most)
     s.rowH = (int)(54 * u); s.rowGap = (int)(6 * u); s.firstRow = (int)(12 * u); // (level with the tab pills)
     s.tabsX = (int)(204 * u); s.tabsY = (int)(14 * u); s.tabsH = (int)(46 * u);
+    const bool pnl = PanelHome();
+    const PanelBox pb = PanelGeometry(c);
+    if (pnl)
+    {
+        // The Panel home: the sections first along the top of its panel, the tabs after them on the same row, the tools at its right.
+        s.secY = pb.secY; s.secH = pb.secH;
+        s.secX.assign(SIDES, 0); s.secW.assign(SIDES, 0);
+        int sx = pb.x + pb.pad + (int)(6 * u);
+        for (int i = 0; i < SIDES; i++)
+        {
+            const int w = (int)(40 * u) + GW(i == SIDE_HOME ? "Games" : SideName(i), 14 * u, true);
+            s.secX[i] = sx; s.secW[i] = w;
+            sx += w + (int)(2 * u);
+        }
+        s.tabsX = sx + (int)(18 * u); s.tabsY = pb.tabY; s.tabsH = pb.tabH;
+    }
+    const bool tls = TilesOn();
+    if (tls) { s.sideW = 0; s.tabsX = (int)(28 * u); } // (no sidebar: the tabs start at the left edge)
     // (The tabs smaller as they grow in number, to leave room for + after them and Search and Sort.)
-    const int room = c.w - (int)(28 * u) - (int)(470 * u) - s.tabsX;
+    const int room = pnl ? pb.x + pb.w - pb.pad - (int)(280 * u) - s.tabsX : c.w - (int)(28 * u) - (int)(470 * u) - s.tabsX;
     s.tabFont = 18 * u;
     float pad = 40 * u;
     auto total = [&]() { int w = 0; for (int t = 0; t < TabCount(); t++) w += GW(TabLabel(t), s.tabFont, true) + (int)pad + (int)(2 * u); return w; };
@@ -1316,12 +1393,47 @@ inline GlassSpots Spots(const Canvas& c)
     s.bannerX = s.tabsX; s.bannerY = (int)(90 * u); s.bannerW = c.w - s.bannerX - (int)(28 * u); s.bannerH = (int)(160 * u);
     s.contX = s.bannerX + (int)(168 * u); s.contY = s.bannerY + (int)(100 * u); s.contW = (int)(150 * u); s.contH = (int)(44 * u);
     s.headY = (int)(266 * u);
+    if (pnl)
+    {
+        // The Panel home: the preview's buttons at the foot of its panel.
+        s.contH = (int)(44 * u); s.contW = (int)(150 * u);
+        s.contX = pb.prevX + (int)(20 * u); s.contY = pb.contentB - (int)(20 * u) - s.contH;
+    }
+    if (tls)
+    {
+        // The Tiles home: a tile for each section along the foot, the buttons centred under the chosen game.
+        const TilesBox tb = TilesGeometry(c);
+        s.secY = tb.tileY; s.secH = tb.tileH;
+        s.secX.assign(SIDES, 0); s.secW.assign(SIDES, 0);
+        const int m = (int)(28 * u), gap = (int)(14 * u), tw = (c.w - 2 * m - (SIDES - 1) * gap) / SIDES;
+        for (int i = 0; i < SIDES; i++) { s.secX[i] = m + i * (tw + gap); s.secW[i] = tw; }
+        s.contH = (int)(44 * u); s.contW = (int)(150 * u);
+        const int ow = GW("Game Options", 18 * u, true) + (int)(36 * u);
+        s.contX = (c.w - (s.contW + (int)(10 * u) + ow)) / 2; s.contY = tb.btnY;
+        if (Focus().page >= 0)
+        {
+            // A page of the Tiles home: a window over the dimmed home, its title and rows inside it.
+            s.winX = (int)(56 * u); s.winY = (int)(24 * u); s.winW = c.w - 2 * s.winX; s.winH = c.h - (int)(76 * u);
+            s.bannerX = s.winX + (int)(24 * u); s.bannerW = s.winW - (int)(48 * u);
+            s.tabsX = s.winX + (int)(30 * u);
+            s.pageTitleY = s.winY + (int)(30 * u); s.pageTop = s.winY + (int)(66 * u); s.pageBottom = s.winY + s.winH - (int)(22 * u);
+        }
+    }
     return s;
 }
 inline bool Glassy(const Canvas& c);
 inline int SideAt(const Canvas& c, int x, int y)
 {
     if (!Glassy(c)) return -1;
+    if (PanelHome() || TilesHome())
+    {
+        // (The Panel home: the sections along the top of its panel; the Tiles home: its tiles.)
+        const GlassSpots ps = Spots(c);
+        if (y >= ps.secY && y < ps.secY + ps.secH)
+            for (int i = 0; i < SIDES; i++)
+                if (x >= ps.secX[i] && x < ps.secX[i] + ps.secW[i]) return i;
+        return -1;
+    }
     const GlassSpots s = Spots(c);
     if (x < s.sideX || x >= s.sideX + s.sideW) return -1;
     for (int i = 0; i < SIDES; i++)
@@ -1351,6 +1463,8 @@ inline bool GameOptionsAt(const Canvas& c, int x, int y)
 // (not the chosen one: the banner would change, and be drawn again, with every press).
 inline int ContinueGame(const std::vector<Game>& games, int selected)
 {
+    // (The Panel home: its buttons are for the chosen game, if it can be played.)
+    if (PanelHome() || TilesHome()) return selected >= 0 && selected < (int)games.size() && games[selected].known && !games[selected].comingSoon ? selected : -1;
     for (size_t i = 0; i < games.size(); i++)
         if (!ContinueRom().empty() && games[i].rom == ContinueRom()) return (int)i;
     for (size_t i = 0; i < games.size(); i++)
@@ -1421,6 +1535,8 @@ struct LookPrefs
     std::string font = "noto-sans";              // (launcher_fonts.h)
     int fontSize = 100;                          // percent, 85 to 120
     bool badges = true;
+    std::string music = "corner";                 // corner (sidebar foot), top (Launcher > Music Player)
+    std::string layout = "sidebar";              // sidebar, tiles (panel is kept as a file value only) (Launcher > Layout)
     bool loaded = false;
     std::string from;
     int edit = -1, field = 1;                    // (open: 0 to 5 a colour's wheel, 6 the blur and dim; its row)
@@ -1498,7 +1614,7 @@ inline void ThemesRefresh()
         return x < y;
     });
 }
-inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 10 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : 3; }
+inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 10 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : 5; }
 // A on a theme: Apply, Show In Folder (a PC), Delete.
 inline void OpenThemeMenu(int i)
 {
@@ -1646,6 +1762,8 @@ inline void LookFrom(const std::map<std::string, std::string>& p)
     l.font = get("font", "noto-sans");
     l.fontSize = std::max(85, std::min(120, atoi(get("font_size", "100").c_str())));
     l.badges = get("badges", "on") != "off";
+    { const std::string lv = get("layout", l.layout); l.layout = lv == "panel" || lv == "tiles" ? lv : "sidebar"; }
+    { const std::string mv = get("music", l.music); l.music = mv == "top" ? "top" : "corner"; }
     LookApply();
 }
 inline void LookLoad()
@@ -1655,7 +1773,13 @@ inline void LookLoad()
     l.loaded = true;
     l.from = HubDir();
     LookFrom(ReadPairs(HubDir() + "/fulldex-look.txt"));
+    if (const char* e = getenv("SSR_LIST_LAYOUT")) l.layout = !strcmp(e, "panel") ? "panel" : !strcmp(e, "tiles") ? "tiles" : "sidebar"; // (test: shown, not kept)
+    if (const char* e = getenv("SSR_LIST_MUSIC")) l.music = !strcmp(e, "top") ? "top" : "corner"; // (test)
 }
+inline bool PanelOn() { LookLoad(); return Look().layout == "panel"; }
+inline bool PanelHome() { return PanelOn() && Focus().page < 0; }
+inline bool TilesOn() { LookLoad(); return Look().layout == "tiles"; }
+inline bool TilesHome() { return TilesOn() && Focus().page < 0; }
 inline void LookSave()
 {
     const LookPrefs& l = Look();
@@ -1667,7 +1791,7 @@ inline void LookSave()
             if (i > 0) fprintf(f, "%s_pic\t%s\n", kLookKeys[i], l.pic[i].c_str());
             if (LookHasOp(i)) fprintf(f, "%s_op\t%d\n", kLookKeys[i], l.op[i]);
         }
-        fprintf(f, "background\t%s\nsoftness\t%d\ndim\t%d\ngrain\t%d\nbadges\t%s\nfont\t%s\nfont_size\t%d\n", l.backdrop.c_str(), l.blur, l.dim, l.grain, l.badges ? "on" : "off", l.font.c_str(), l.fontSize);
+        fprintf(f, "background\t%s\nsoftness\t%d\ndim\t%d\ngrain\t%d\nbadges\t%s\nfont\t%s\nfont_size\t%d\nlayout\t%s\nmusic\t%s\n", l.backdrop.c_str(), l.blur, l.dim, l.grain, l.badges ? "on" : "off", l.font.c_str(), l.fontSize, l.layout.c_str(), l.music.c_str());
         fclose(f);
     }
 }
@@ -2467,6 +2591,7 @@ struct TradeState
 {
     int game = 0, box = 0;
     std::string msg;
+    bool guide = false;                                // (How Trading Works: shown in place of the link's panel)
     int offerBox = 0, offerSlot = 0, offerSpecies = 0; // (where this side's offer came from)
     std::string checked;                               // (the other side's offer last checked)
 #ifdef SSR_POKEMON_HUB
@@ -2591,7 +2716,9 @@ inline std::vector<std::string> TradeActions(int row)
     {
         switch (s.state)
         {
-        case HubLink::State::Off: return { "Open A Room", "Join A Room", "Make An Online Code", "Enter An Online Code" };
+        case HubLink::State::Off:
+            if (Trade().guide) return { "Close The Guide" };
+            return { "Open A Room", "Join A Room", "Make An Online Code", "Enter An Online Code", "How Trading Works" };
         case HubLink::State::Online: return { "Stop" };
         case HubLink::State::Hosting: return { "Close The Room" };
         case HubLink::State::Browsing:
@@ -2632,6 +2759,7 @@ inline std::string TradeDo(int row, int act)
     const HubLink::Status s = HubLink::Snapshot();
     Hub().version++;
     if (row == 0) { t.game = act; t.box = 0; return ""; }
+    if (row == 2) { const bool was = t.guide; t.guide = a == "How Trading Works"; if (a == "How Trading Works" || (was && a == "Close The Guide")) { Focus().pact = -1; return ""; } }
 #ifdef SSR_POKEMON_HUB
     TradeOpenSave();
     if (row == 1) { if (t.save) t.box = StepBox(t.box, t.save->Boxes(), a == "Next Box" ? 0 : a == "Previous Box" ? 1 : 2); return ""; }
@@ -2804,11 +2932,13 @@ inline int LookDo(int row, int dir)
     int out = 0;
     if (LauncherMode() == 0)
     {
-        // (The menu: Theme Editor, My Themes, Theme Gallery.)
-        if (row == 0) LauncherMode() = 1;
-        else if (row == 1) { LauncherMode() = 2; ThemesRefresh(); }
+        // (The menu: Layout, Theme Editor, My Themes, Theme Gallery.)
+        if (row == 0) { l.layout = l.layout == "tiles" ? "sidebar" : "tiles"; LookSave(); Hub().version++; return 0; }
+        if (row == 4) { l.music = l.music == "top" ? "corner" : "top"; LookSave(); Hub().version++; return 0; }
+        if (row == 1) LauncherMode() = 1;
+        else if (row == 2) { LauncherMode() = 2; ThemesRefresh(); }
         else { LauncherMode() = 5; Focus().prow = 0; Focus().rScroll = 0; Themes().msg.clear(); GalleryOpen(); } // (the Theme Gallery)
-        if (row <= 1) Focus().prow = 0;
+        if (row <= 2) Focus().prow = 0;
         Hub().version++;
         return 0;
     }
@@ -3931,6 +4061,7 @@ inline bool PageMove(int dir)
 {
     GlassFocus& F = Focus();
     if (F.page < 0) return false;
+    if (TilesOn() && F.side >= 0) F.side = -1; // (a window over the tiles: no sidebar to move to)
     if (F.side >= 0)
     {
         if (dir == 3) F.side = std::max(0, F.side - 1);
@@ -4005,14 +4136,15 @@ inline bool PageBack()
     if (F.page < 0) return false;
     if (F.page == SIDE_LAUNCHER && Look().edit >= 0) { Look().edit = -1; LookSave(); Hub().version++; return true; } // (the colour wheel closed)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 4) { LauncherMode() = 1; F.prow = 8; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the fonts: back to the Theme Editor)
-    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 5) { LauncherMode() = 0; F.prow = 2; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Gallery: back to its menu)
+    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 5) { LauncherMode() = 0; F.prow = 3; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Gallery: back to its menu)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 3) { LauncherMode() = 2; F.prow = 2; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Library: back to My Themes)
-    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMode() == 1 ? 0 : 1; LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
+    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMode() == 1 ? 1 : 2; LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() != 0) { HubMode() = 0; F.prow = 0; F.rScroll = 0; Hub().version++; return true; }
     if ((F.page == SIDE_ROMS || F.page == SIDE_HUB) && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
+    if (TilesOn()) { const int pg = F.page; F.page = -1; F.side = pg; return true; } // (the window closed: back on the tile that opened it)
     if (F.side < 0) F.side = F.page;
     else { F.page = -1; F.side = SIDE_HOME; }
     return true;
@@ -4172,15 +4304,25 @@ inline std::vector<std::string> ReleasePoints(const std::string& md)
 }
 // A page, right of the sidebar: its title in the bar, its sections in a glass panel on the left
 // (what Fulldex is at the bottom), the chosen one in a wider panel on the right.
+// (The species under a Pokemon's nickname, only when it differs: MonName is in the Hub builds; elsewhere there is none.)
+inline bool SameMonName(const std::string& v, const std::string& spn)
+{
+#ifdef SSR_POKEMON_HUB
+    return MonName(v) == spn;
+#else
+    return v == spn;
+#endif
+}
 inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 {
     GlassFocus& F = Focus();
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
-    const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = barH + (int)(18 * u), bottom = c.h - (int)(64 * u);
-    GT(c, sp.tabsX + (int)(6 * u), barH * 0.5f, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
+    const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)(18 * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : c.h - (int)(64 * u);
+    const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
+    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
-    GT(c, R - GW(where, 16 * u, true), barH * 0.5f, where, 16 * u, hint, true);
+    GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
     {
         const std::vector<Game>& roms = RomList();
@@ -4387,7 +4529,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             std::vector<uint32_t> ic;
             if (i == 0) { k = "Game"; v = game; }
             else if (i == 1) { k = "Box"; v = "-"; }
-            else if (i == 2) { k = "Link"; v = linkV; chip = linkChip; chipCol = linkCol2; }
+            else if (i == 2) { k = "Connect"; v = linkV; chip = linkChip; chipCol = linkCol2; }
 #ifdef SSR_POKEMON_HUB
             if (i == 0 && t.save) chip = Shown(t.save->Trainer(), "-");
             if (i == 1 && t.save) { v = BoxLabel(t.save.get(), t.box); chip = std::to_string(mons.size()) + " Pok\xC3\xA9mon"; }
@@ -4410,8 +4552,8 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 GT(c, chipX + (int)(10 * u), mid, chip, 12 * u, chipCol, true);
             }
             GT(c, rx + (int)(48 * u), mid, k, 13 * u, hint, true);
-            GT(c, rx + (int)(118 * u), mid, fit(v, 16 * u, true, (int)(230 * u)), 16 * u, text, true);
-            if (!spn.empty() && MonName(v) != spn)
+            GT(c, rx + (int)(118 * u), mid, fit(v, 16 * u, true, (int)(230 * u)), 16 * u, i >= TRADE_FIRST && s.state != HubLink::State::Linked ? hint : text, true); // (a Pok\xC3\xA9mon dimmed until connected)
+            if (!spn.empty() && !SameMonName(v, spn))
                 GT(c, rx + (int)(118 * u) + std::min(GW(v, 16 * u, true), (int)(230 * u)) + (int)(12 * u), mid, spn, 14 * u, hint, true);
         }
         if (n > vis)
@@ -4447,14 +4589,54 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (!under.empty()) para(under, underCol, 12 * u);
             else y += (int)(6 * u);
         };
-        if (F.prow == 2 || (s.state == HubLink::State::Linked && F.prow >= TRADE_FIRST && s.mine.any))
+        const bool guideOn = t.guide && F.prow == 2 && s.state == HubLink::State::Off;
+        if (!guideOn)
+        {
+            // How it goes, always at the top: the three steps (the one you are on lit) and what to do now.
+            const bool linked = s.state == HubLink::State::Linked;
+            const int step = linked ? (s.mine.any || s.theirs.any ? 3 : 2) : 1;
+            const std::string peer = s.peerName.empty() ? std::string("the other player") : s.peerName;
+            std::string now;
+            if (s.state == HubLink::State::Off) now = "Choose the Connect row, then Open A Room on one device and Join A Room on the other (same Wi-Fi), or use an online code.";
+            else if (s.state == HubLink::State::Hosting) now = "Your room is open. Waiting for the other device to join it.";
+            else if (s.state == HubLink::State::Browsing) now = "Looking for rooms. Choose one on the Connect row to join it.";
+            else if (s.state == HubLink::State::Online) now = "Waiting for the other player to enter your code.";
+            else if (!s.mine.any && !s.theirs.any) now = "You are linked. Pick one of your Pok\xC3\xA9mon in the list, then choose Offer For A Trade (or Send As A Gift).";
+            else if (s.mine.any && !s.theirs.any) now = "Your offer is up. Waiting for " + peer + " to offer one back (or to accept your gift).";
+            else if (!s.mine.any && s.theirs.gift) now = peer + " is sending you a gift. Choose the Connect row, then Accept The Gift.";
+            else if (!s.mine.any) now = peer + " has offered one. Pick one of yours to offer back.";
+            else if (s.iAccepted) now = "You said yes. Waiting for " + peer + "...";
+            else now = "Both offers are up. Check them, then choose the Connect row and Accept The Trade.";
+            static const char* const lab[3] = { "1  Connect", "2  Offer", "3  Accept" };
+            const int cg = (int)(6 * u), cw = (iw - 2 * cg) / 3, chh = (int)(26 * u);
+            for (int k = 0; k < 3; k++)
+            {
+                const int x = ix + k * (cw + cg);
+                if (k + 1 == step) Glass::Round(c, x, y, cw, chh, chh * 0.5f, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
+                else Glass::Round(c, x, y, cw, chh, chh * 0.5f, 0x1AFFFFFFu, 0x3DFFFFFF, 1.0f * u);
+                GT(c, x + (cw - GW(lab[k], 12 * u, true)) / 2, y + chh * 0.5f, lab[k], 12 * u, k + 1 == step ? text : hint, true);
+            }
+            y += chh + (int)(10 * u);
+            para(now, text, 13 * u);
+        }
+        if (guideOn)
+        {
+            GT(c, ix, y + 14 * u, "How Trading Works", 20 * u, text, true);
+            y += (int)(40 * u);
+            para("You both need Fulldex open, on the same Wi-Fi or with an online code. One offer each way, and you both say yes.", hint, 13 * u);
+            para("1. Connect. On one device choose Open A Room. On the other choose Join A Room, then the room. No shared Wi-Fi? Make An Online Code on one device, Enter An Online Code on the other, and send the code in a message.", text, 13 * u);
+            para("2. Offer. Pick a Pok\xC3\xA9mon from your list and choose Offer For A Trade, or Send As A Gift to give it away.", text, 13 * u);
+            para("3. Accept. Check both offers: the line under each says whether the game can take it. Then choose Accept The Trade on the Connect row. It happens when you both have said yes.", text, 13 * u);
+            para("Each save is backed up before it is written. Trades follow the real games' rules, and Pok\xC3\xA9mon that evolve by trading evolve.", hint, 13 * u);
+        }
+        else if (F.prow == 2 || (s.state == HubLink::State::Linked && F.prow >= TRADE_FIRST && s.mine.any))
         {
             GT(c, ix, y + 14 * u, s.state == HubLink::State::Linked ? "Linked With " + s.peerName : "Trade", 20 * u, text, true);
             y += (int)(40 * u);
             if (s.state == HubLink::State::Off)
             {
-                para("Trade with a friend, or send Pok\xC3\xA9mon to another of your own devices, on the same Wi-Fi.", text, 14 * u);
-                para("Same Wi-Fi: one device chooses Open A Room, the other Join A Room. Online: one makes a code, the other enters it. Then each offers a Pok\xC3\xA9mon, or sends one as a gift.", hint, 13 * u);
+                para("Trade with a friend, or send Pok\xC3\xA9mon to another of your own devices.", hint, 13 * u);
+                para("Online instead: one player makes a code, the other enters it.", hint, 13 * u);
             }
             else if (s.state == HubLink::State::Online)
             {
@@ -4468,7 +4650,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             else if (s.state == HubLink::State::Hosting) para("Room " + std::to_string(s.code) + " is open. On the other device: Hub, Trade Over Wi-Fi, Join A Room.", hint, 13 * u);
             if (!s.myAddress.empty() && s.state != HubLink::State::Linked) para("This device: " + s.myAddress, hint, 12 * u);
             else if (s.state == HubLink::State::Browsing) para(s.rooms.empty() ? "Looking for rooms on this network. Open one on the other device." : "Rooms on this network are listed below: choose one to join.", hint, 13 * u);
-            else
+            else if (s.state == HubLink::State::Linked)
             {
                 std::string mineUnder, theirUnder;
                 uint32_t mineCol = hint, theirCol = hint;
@@ -4499,7 +4681,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             GT(c, ix, y + 14 * u, fit(Shown(mon.nickname, MonName(mon.speciesName)), 22 * u, true, iw - bs), 22 * u, text, true);
             GT(c, ix, y + 42 * u, (mon.egg ? std::string("Egg") : MonName(mon.speciesName)) + (mon.shiny ? "   \xC2\xB7   Shiny" : ""), 15 * u, mon.shiny ? 0xFFF2C46Bu : hint, true);
             y += (int)(72 * u);
-            if (s.state != HubLink::State::Linked) para("Link with the other device first: the Link row above.", hint, 13 * u);
+            if (s.state != HubLink::State::Linked) para("Connect to the other device first: the Connect row above.", hint, 13 * u);
             else
             {
                 const PokemonHub::Check rm = t.save ? PokemonHub::CanRemove(*t.save, mon.box, mon.slot) : PokemonHub::Check();
@@ -4716,14 +4898,18 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (LauncherMode() == 0)
             {
                 const std::string count = std::to_string(ts.list.size()) + (ts.list.size() == 1 ? " Theme" : " Themes");
-                row(0, Glass::I_SPARKLE, "Theme Editor", "Colours, pictures, blur and the rest of the launcher's look", "");
-                row(1, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
-                row(2, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Online");
-                static const char* const titles[3] = { "Theme Editor", "My Themes", "Theme Gallery" };
-                static const char* const about[3] = {
+                row(0, Glass::I_LAYOUT, "Layout", "How the home screen is set out: the sidebar with a grid, or tiles with a game carousel", TilesOn() ? "Tiles" : PanelOn() ? "Panel" : "Sidebar");
+                row(1, Glass::I_SPARKLE, "Theme Editor", "Colours, pictures, blur and the rest of the launcher's look", "");
+                row(2, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
+                row(3, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Online");
+                row(4, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: the foot of the sidebar, or along the top", Look().music == "top" ? "Top" : "Bottom Left");
+                static const char* const titles[5] = { "Layout", "Theme Editor", "My Themes", "Theme Gallery", "Music Player" };
+                static const char* const about[5] = {
+                    "How the home screen is set out. Sidebar: the Continue Playing banner above a grid of games. Tiles: one game at a time in a carousel, with a row of tiles for the sections under it. Choose it to switch.",
                     "Change the launcher's look: the accent, the panels, the sidebar and the top bar, the buttons, the background, its blur and dim, and the glass's grain. Each can be a colour or a picture.",
                     "Keep the look you have now as a theme, with its pictures, and switch between your themes. Each is one .zip file you can send to a friend.",
-                    "Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own." };
+                    "Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.",
+                    "Shows the song playing on your device with previous, play and next. Bottom Left: a square at the foot of the sidebar. Top: a bar along the top. Its buttons use your Buttons look from the Theme Editor." };
                 GT(c, ix, y + 14 * u, titles[F.prow], 22 * u, text, true);
                 y += (int)(44 * u);
                 para(about[F.prow], text, 14 * u);
@@ -5217,7 +5403,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             }
             GT(c, rx + (int)(48 * u), mid, k, 13 * u, hint, true);
             GT(c, rx + (int)(118 * u), mid, fit(v, 16 * u, true, (int)(210 * u)), 16 * u, text, true);
-            if (!spn.empty() && MonName(v) != spn)
+            if (!spn.empty() && !SameMonName(v, spn))
             {
                 const int sx = rx + (int)(118 * u) + std::min(GW(v, 16 * u, true), (int)(210 * u)) + (int)(12 * u);
                 GT(c, sx, mid, spn, 14 * u, hint, true);
@@ -5755,6 +5941,114 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     }
 }
 
+// NOW PLAYING on the home screen: what the player's own music app is playing (frontend/now_playing.h; pc_launcher.cpp
+// fills this in every frame), a slim bar with its album art and previous / play-pause / next. Nothing while no music
+// app is playing, and none where the system cannot tell (the Switch).
+struct MusicBar
+{
+    bool shown = false, idle = true, blind = false, playing = false, canPrev = true, canNext = true;
+    std::string title, artist, app;
+    std::vector<uint32_t> art; int artW = 0, artH = 0;
+    int bx[3] = {}, by = 0, bs = 0; // the buttons as drawn (centres, half size), for taps; bs 0: not drawn
+    int action = -1;                // a button pressed (0 previous, 1 play / pause, 2 next), for the caller
+};
+inline MusicBar& Music() { static MusicBar m; return m; }
+inline int MusicAt(int x, int y)
+{
+    const MusicBar& m = Music();
+    if (!m.shown || m.idle || m.bs <= 0) return -1;
+    for (int i = 0; i < 3; i++)
+        if (x >= m.bx[i] - m.bs && x < m.bx[i] + m.bs && y >= m.by - m.bs && y < m.by + m.bs) return i;
+    return -1;
+}
+inline void DrawMusicBar(Canvas& c, int x, int y, int w, int h, float u)
+{
+    MusicBar& m = Music();
+    const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
+    Glass::Round(c, x, y, w, h, h * 0.32f, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+    const int pad = std::max(3, h / 8), a = h - 2 * pad, ax = x + pad, ay = y + pad;
+    Glass::Round(c, ax, ay, a, a, a * 0.22f, 0x400A111C, 0x2EFFFFFF, 1.0f);
+    if (!m.blind && !m.art.empty() && m.artW > 0 && m.artH > 0)
+    {
+        const float rr = a * 0.22f;
+        for (int py = 0; py < a; py++)
+            for (int px = 0; px < a; px++)
+            {
+                const int X = ax + px, Y = ay + py;
+                if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
+                const float qx = std::max(0.0f, std::fabs(px + 0.5f - a * 0.5f) - (a * 0.5f - rr)), qy = std::max(0.0f, std::fabs(py + 0.5f - a * 0.5f) - (a * 0.5f - rr));
+                const float cover = std::clamp(rr + 0.5f - Glass::Hyp(qx, qy), 0.0f, 1.0f);
+                if (cover <= 0) continue;
+                const uint32_t sp = m.art[(size_t)(py * m.artH / a) * m.artW + px * m.artW / a];
+                c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], sp | 0xFF000000u, (int)(cover * 255));
+            }
+        Glass::Mark(c, ax, ay, ax + a, ay + a);
+    }
+    else Glass::DrawIcon(c, Glass::I_NOTE, ax + a * 0.5f, ay + a * 0.5f, a * 0.3f, text);
+    // (Controls at the right: previous, play / pause, next.)
+    const int gap = (int)(h * 0.9f), cy = y + h / 2, cxN = x + w - pad - gap / 2, cxP = cxN - gap, cxB = cxP - gap;
+    m.bx[0] = cxB; m.bx[1] = cxP; m.bx[2] = cxN; m.by = cy; m.bs = gap / 2;
+    const int pr = (int)(h * 0.36f);
+    const int sr = (int)(h * 0.27f);
+    const uint32_t ink = Glass::ButtonInk(), inkOff = (ink & 0x00FFFFFFu) | 0x66000000u;
+    Glass::Surface(c, 3, cxB - sr, cy - sr, 2 * sr, 2 * sr, (float)sr, Glass::Button());
+    Glass::Surface(c, 3, cxN - sr, cy - sr, 2 * sr, 2 * sr, (float)sr, Glass::Button());
+    Glass::Surface(c, 3, cxP - pr, cy - pr, 2 * pr, 2 * pr, (float)pr, Glass::Button());
+    Glass::DrawIcon(c, m.playing ? Glass::I_PAUSE : Glass::I_PLAY, cxP + (m.playing ? 0 : h * 0.03f), cy, h * 0.16f, ink);
+    Glass::DrawIcon(c, Glass::I_PREV, cxB, cy, h * 0.15f, m.canPrev ? ink : inkOff);
+    Glass::DrawIcon(c, Glass::I_NEXT, cxN, cy, h * 0.15f, m.canNext ? ink : inkOff);
+    // (The song, and who it is by with the app after it, cut short to fit before the controls.)
+    const int tx = ax + a + pad * 2, tw = cxB - gap / 2 - (int)(6 * u) - tx;
+    if (tw > (int)(40 * u))
+    {
+        const std::string l1 = m.blind ? std::string("Your music") : m.title;
+        const std::string l2 = m.blind ? std::string("Allow song names in Settings") : m.artist.empty() ? m.app : m.artist + "  \xC2\xB7  " + m.app;
+        GTFit(c, tx, y + h * 0.36f, l1, h * 0.34f, tw, text, true);
+        GTFit(c, tx, y + h * 0.72f, l2, h * 0.27f, tw, hint, true);
+    }
+}
+// The sidebar layout's music player: a square at the foot of the sidebar, the album art filling it, the song over the
+// art's darkened foot and the controls under that.
+inline void DrawMusicSquare(Canvas& c, int x, int y, int sz, float u)
+{
+    MusicBar& m = Music();
+    const uint32_t text = 0xFFFFFFFFu;
+    const float rr = 16 * u;
+    Glass::Shadow(c, x, y, sz, sz, rr, 14 * u, 0x50);
+    Glass::Round(c, x, y, sz, sz, rr, 0xFF1A2430u, 0x3DFFFFFF, 1.0f * u);
+    const bool art = !m.blind && !m.art.empty() && m.artW > 0 && m.artH > 0;
+    for (int py = 0; py < sz; py++)
+        for (int px = 0; px < sz; px++)
+        {
+            const int X = x + px, Y = y + py;
+            if (X < 0 || Y < 0 || X >= c.w || Y >= c.h) continue;
+            const float qx = std::max(0.0f, std::fabs(px + 0.5f - sz * 0.5f) - (sz * 0.5f - rr)), qy = std::max(0.0f, std::fabs(py + 0.5f - sz * 0.5f) - (sz * 0.5f - rr));
+            const float cover = std::clamp(rr + 0.5f - Glass::Hyp(qx, qy), 0.0f, 1.0f);
+            if (cover <= 0) continue;
+            uint32_t col = art ? m.art[(size_t)(py * m.artH / sz) * m.artW + px * m.artW / sz] | 0xFF000000u : 0xFF1A2430u;
+            const float dark = std::clamp((py - 0.34f * sz) / (0.56f * sz), 0.0f, 1.0f); // (the foot darker, for the text)
+            col = Glass::Over(col, 0xFF000000u, (int)(dark * 0.82f * 255));
+            c.px[(size_t)Y * c.w + X] = Glass::Over(c.px[(size_t)Y * c.w + X], col, (int)(cover * 255));
+        }
+    Glass::Mark(c, x, y, x + sz, y + sz);
+    if (!art) Glass::DrawIcon(c, Glass::I_NOTE, x + sz * 0.5f, y + sz * 0.3f, sz * 0.14f, 0xCCFFFFFFu);
+    const int pad = (int)(12 * u), tw = sz - 2 * pad;
+    const std::string l1 = m.blind ? std::string("Your music") : m.title;
+    const std::string l2 = m.blind ? std::string("Allow song names in Settings") : m.artist.empty() ? m.app : m.artist;
+    GTFit(c, x + pad, y + sz * 0.58f, l1, 14 * u, tw, text, true);
+    GTFit(c, x + pad, y + sz * 0.58f + 18 * u, l2, 11 * u, tw, 0xCCFFFFFFu, true);
+    const int cy = y + sz - (int)(26 * u), gap = (int)(42 * u), cx = x + sz / 2;
+    m.bx[0] = cx - gap; m.bx[1] = cx; m.bx[2] = cx + gap; m.by = cy; m.bs = gap / 2;
+    const int pr = (int)(16 * u);
+    const int sr = (int)(12 * u);
+    const uint32_t ink = Glass::ButtonInk(), inkOff = (ink & 0x00FFFFFFu) | 0x66000000u;
+    Glass::Surface(c, 3, cx - gap - sr, cy - sr, 2 * sr, 2 * sr, (float)sr, Glass::Button());
+    Glass::Surface(c, 3, cx + gap - sr, cy - sr, 2 * sr, 2 * sr, (float)sr, Glass::Button());
+    Glass::Surface(c, 3, cx - pr, cy - pr, 2 * pr, 2 * pr, (float)pr, Glass::Button());
+    Glass::DrawIcon(c, m.playing ? Glass::I_PAUSE : Glass::I_PLAY, cx + (m.playing ? 0 : 1.5f * u), cy, 7 * u, ink);
+    Glass::DrawIcon(c, Glass::I_PREV, cx - gap, cy, 6.5f * u, m.canPrev ? ink : inkOff);
+    Glass::DrawIcon(c, Glass::I_NEXT, cx + gap, cy, 6.5f * u, m.canNext ? ink : inkOff);
+}
 inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, int tab, int selected, int& scroll,
                       const std::string& note, const std::string& hintText, bool follow, bool onTabs, bool settingsChosen)
 {
@@ -5774,11 +6068,12 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     GlassBackdrop(c, bg);
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint, dark = 0xFF18222Eu;
     FollowSelection(v, selected, scroll, follow);
+    Music().bs = 0; // (its buttons: set again where the bar is drawn)
     // (Everything but the chosen card, the game's menu, the dialogs and the hints is kept as drawn and
     // copied back while nothing on it changes; a press then redraws only the chosen card. The Switch
     // draws in software about 20 times slower than a PC.)
     auto sig = [](const Game& g) { return g.art.empty() ? std::string("-") : std::to_string(g.art[(size_t)Art * Art / 2 + Art / 2]); };
-    std::string key = std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
+    std::string key = std::string(TilesOn() ? "T" + std::to_string(selected) : PanelOn() ? "P" + std::to_string(selected) : "S") + std::to_string(c.w) + "x" + std::to_string(c.h) + "/" + std::to_string(tab) + "/" + std::to_string(scroll) + "/"
                     + (bg ? bg->rom + "#" + sig(*bg) : std::string()) + "/"
                     + std::to_string(onTabs) + std::to_string(settingsChosen) + "/" + std::to_string(cont) + "/" + ContinueRom()
                     + "/t" + Focus().pageTitle + "/h" + HubSig() + (Focus().page == SIDE_HUB ? std::to_string(Mover().open) + std::to_string(HubMode()) + "," + std::to_string(Focus().pact) + "," + std::to_string(Focus().rScroll) : std::string()) + "/p" + std::to_string(Focus().page) + "," + std::to_string(Focus().page >= 0 ? Focus().prow : 0) + std::to_string(Focus().page >= 0 && Focus().side < 0) + "/s" + std::to_string(Focus().onSort) + SortKey() + "/q" + SearchText() + "/t" + TabsSig()
@@ -5793,6 +6088,22 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     auto drawCard = [&](const View::Spot& s, bool sel) {
         const int x = s.x, y = grid.top + s.y - scroll;
         const Game& g = games[s.game];
+        if (PanelHome())
+        {
+            // (The Panel home: a plain row, the picture small on the left, the name and the console right.)
+            const int rh = grid.ch, pr = (int)(12 * u), t = grid.tile, tx0 = x + (int)(10 * u), ty0 = y + (rh - t) / 2;
+            if (sel) { Glass::Glow(c, x, y, grid.cw, rh, pr, u); Menu::FrostBox(c, solid, x, y, grid.cw, rh, pr, true, 1.5f * u); }
+            DrawCover(c, g, tx0, ty0, t, t, 8 * u);
+            if (g.comingSoon) Glass::Round(c, tx0, ty0, t, t, 8 * u, 0x99000000u);
+            const int nx = tx0 + t + (int)(14 * u);
+            const std::string sub = g.comingSoon ? std::string("Coming Soon") : !g.known ? std::string("Not Playable") : std::string(PlatformName(g.platform));
+            const int sw = GW(sub, 13 * u, true);
+            GTFit(c, nx, y + rh * 0.5f, ShortName(g), 17 * u, x + grid.cw - nx - sw - (int)(30 * u), text, true);
+            GT(c, x + grid.cw - (int)(16 * u) - sw, y + rh * 0.5f, sub, 13 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
+            if (g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, tx0 + t - 6 * u, ty0 + 6 * u, 6 * u, 0xFFFFFFFFu);
+            if (const int cl = Look().badges ? HubCloudOf(g) : 0) DrawCloud(c, tx0 + t - 8 * u, ty0 + t - 7 * u, 6 * u, cl == 2 ? 0xFFF2C46Bu : 0xFFFFFFFFu);
+            return;
+        }
         if (sel) Glass::Glow(c, x, y, grid.cw, grid.ch, 16 * u, u);
         Menu::FrostBox(c, solid, x, y, grid.cw, grid.ch, 16 * u, sel, sel ? 1.5f * u : 1.0f);
         const int ix = x + (int)(8 * u), iy = y + (int)(8 * u), iw = grid.tile, ih = grid.tile;
@@ -5836,6 +6147,65 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             GT(c, rx + (int)(52 * u), ry + sp.rowH * 0.5f, SideName(i), 19 * u, text, true);
         }
     };
+    auto drawSections = [&]() {
+        // (The Panel home's sections along the top of its panel; the one chosen with the arrows framed.)
+        const int fs = Focus().side, n = SIDES;
+        const int cx0 = sp.secX[0] - (int)(6 * u), cx1 = sp.secX[n - 1] + sp.secW[n - 1] + (int)(6 * u);
+        Glass::Round(c, cx0, sp.secY, cx1 - cx0, sp.secH, sp.secH * 0.5f, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+        for (int i = 0; i < n; i++)
+        {
+            const int x = sp.secX[i], w = sp.secW[i], py = sp.secY + (int)(4 * u), ph = sp.secH - (int)(8 * u);
+            const bool cur = i == SIDE_HOME, foc = fs == i;
+            if (foc) { Glass::Glow(c, x, py, w, ph, ph * 0.5f, u); Glass::Round(c, x, py, w, ph, ph * 0.5f, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u); }
+            else if (cur) Glass::Surface(c, 3, x, py, w, ph, ph * 0.5f, Glass::Button());
+            const uint32_t ink = cur && !foc ? Glass::ButtonInk() : text;
+            Glass::DrawIcon(c, SideIcon(i), x + 18 * u, py + ph * 0.5f, 8 * u, ink);
+            GT(c, x + (int)(32 * u), py + ph * 0.5f, i == SIDE_HOME ? "Games" : SideName(i), 14 * u, ink, true);
+        }
+    };
+    auto drawCarousel = [&]() {
+        // (The Tiles home: the chosen game's cover large in the middle, the ones either side smaller and dimmer; its name and details under it.)
+        const TilesBox tb = TilesGeometry(c);
+        const int k = v.SpotOf(selected);
+        if (k < 0) return;
+        const int S = tb.cover, cx = c.w / 2, cyc = tb.coverY + S / 2, nearW = (int)(168 * u), farW = (int)(112 * u), sp1 = (int)(24 * u), sp2 = (int)(16 * u);
+        for (int d = -2; d <= 2; d++)
+        {
+            const int j = k + d;
+            if (j < 0 || j >= (int)v.spots.size()) continue;
+            const Game& g = games[v.spots[j].game];
+            const int a = d < 0 ? -d : d, w = d == 0 ? S : a == 1 ? nearW : farW;
+            const int off = d == 0 ? 0 : (d > 0 ? 1 : -1) * (a == 1 ? S / 2 + sp1 + w / 2 : S / 2 + sp1 + nearW + sp2 + w / 2);
+            const int x = cx + off - w / 2, y = cyc - w / 2;
+            if (d == 0) Glass::Glow(c, x, y, w, w, 20 * u, u);
+            DrawCover(c, g, x, y, w, w, (d == 0 ? 20 : 14) * u);
+            if (g.comingSoon) Glass::Round(c, x, y, w, w, (d == 0 ? 20 : 14) * u, 0x99000000u);
+            else if (d != 0) Glass::Round(c, x, y, w, w, 14 * u, a == 1 ? 0x70000000u : 0xA0000000u);
+            if (d == 0 && g.comingSoon) GT(c, x + (w - GW("Coming Soon", 16 * u, true)) / 2, y + w * 0.5f, "Coming Soon", 16 * u, text, true);
+            if (d == 0 && g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - 18 * u, y + 18 * u, 8 * u, 0xFFFFFFFFu);
+        }
+        const Game& g = games[v.spots[k].game];
+        const std::string nm = ShortName(g);
+        const int nw = std::min(GW(nm, 34 * u, true), (int)(c.w * 0.7f));
+        GTFit(c, cx - nw / 2, (float)tb.nameY, nm, 34 * u, nw, text, true);
+        const std::string saveS = HubCloudOf(g) == 2 ? "Cloud Save: Changed On Both" : HubCloudOf(g) ? "Cloud Save" : g.hasSave ? "Save Found" : "New Game";
+        const std::string meta = g.comingSoon ? std::string("Coming Soon") : !g.known ? std::string("Not Playable") : std::string(PlatformName(g.platform)) + "   \xC2\xB7   " + saveS;
+        GT(c, cx - GW(meta, 16 * u, true) / 2, (float)tb.metaY, meta, 16 * u, hint, true);
+    };
+    auto drawTiles = [&]() {
+        // (The Tiles home's row of tiles, the chosen one with the arrows framed; its glass is in the kept picture.)
+        for (int i = 0; i < SIDES; i++)
+        {
+            const int x = sp.secX[i], y = sp.secY, w = sp.secW[i], h = sp.secH, r = (int)(16 * u);
+            const bool foc = Focus().page < 0 && Focus().side == i, cur = i == (Focus().page >= 0 ? Focus().page : (int)SIDE_HOME);
+            if (foc) { Glass::Glow(c, x, y, w, h, r, u); Glass::Round(c, x, y, w, h, r, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u); }
+            else if (cur) Glass::Surface(c, 3, x, y, w, h, r, Glass::Button());
+            const uint32_t ink = cur && !foc ? Glass::ButtonInk() : text;
+            Glass::DrawIcon(c, SideIcon(i), x + w * 0.5f, y + 36 * u, 13 * u, ink);
+            const std::string lbl = i == SIDE_HOME ? "Library" : SideName(i);
+            GT(c, x + (w - GW(lbl, 15 * u, true)) / 2, y + 70 * u, lbl, 15 * u, ink, true);
+        }
+    };
     auto drawBannerButtons = [&]() {
         if (cont < 0 || cont >= (int)games.size() || Focus().page >= 0) return;
         const bool played = !ContinueRom().empty() && games[cont].rom == ContinueRom();
@@ -5853,8 +6223,9 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         GT(c, ox + (int)(18 * u), sp.contY + sp.contH * 0.5f, "Game Options", 18 * u, text, true);
     };
     auto moreBelow = [&]() {
+        if (TilesHome()) return;
         if (scroll + (grid.bottom - grid.top) < v.height - grid.gap)
-            Glass::Round(c, sp.tabsX + grid.cols * grid.colStep / 2 - (int)(16 * u), grid.bottom + (int)(4 * u), (int)(32 * u), (int)(4 * u), 2 * u, 0x80FFFFFFu);
+            Glass::Round(c, (PanelHome() ? grid.gx : sp.tabsX) + grid.cols * grid.colStep / 2 - (int)(16 * u), grid.bottom + (int)(4 * u), (int)(32 * u), (int)(4 * u), 2 * u, 0x80FFFFFFu);
     };
     if (key == baseKey && base.size() == c.px.size())
     {
@@ -5867,21 +6238,38 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
 
     // The sidebar: the sections, Home chosen (Settings while it is chosen with the arrows).
     // (Frosted, square, with a soft shadow and a faint line where it meets the rest of the screen.)
+    if (PanelHome())
+    {
+        // The Panel home: one glass panel holds everything (no sidebar: its sections run along the top).
+        const PanelBox pb = PanelGeometry(c);
+        Menu::FrostBox(c, solid, pb.x, pb.y, pb.w, pb.h, 22 * u);
+    }
+    else if (TilesOn())
+    {
+        // The Tiles home: no sidebar; a frosted tile for each section along the foot.
+        for (int i = 0; i < SIDES; i++) Menu::FrostBox(c, solid, sp.secX[i], sp.secY, sp.secW[i], sp.secH, 16 * u);
+    }
+    else
+    {
     Glass::Shadow(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, 18 * u, 0x60);
     if (solid) Glass::Frost(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0);
     else Glass::Round(c, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, Menu::GlassShade);
     Glass::Surface(c, 1, sp.sideX, sp.sideY, sp.sideW, sp.sideH, 0, Glass::Tint(1)); // (the Sidebar: a colour or a picture)
     Glass::Round(c, sp.sideX + sp.sideW - std::max(1, (int)u), sp.sideY, std::max(1, (int)u), sp.sideH, 0, 0x3DFFFFFF);
+    }
     // (Its rows: drawSideRows, over the kept picture.)
 
     // The tabs, as pills: the shown one white.
     {
         // (A bar along the top, flush with the screen's top and right edges, meeting the sidebar.)
         const int barX = sp.sideX + sp.sideW, barW = c.w - barX, barH = sp.tabsY * 2 + sp.tabsH, line = std::max(1, (int)u);
+        if (!PanelHome())
+        {
         if (solid) Glass::Frost(c, barX, 0, barW, barH, 0);
         else Glass::Round(c, barX, 0, barW, barH, 0, Menu::GlassShade);
         Glass::Surface(c, 2, barX, 0, barW, barH, 0, Glass::Tint(2)); // (the Top Bar: a colour or a picture)
         Glass::Round(c, barX, barH - line, barW, line, 0, 0x3DFFFFFF);
+        }
         if (Focus().page < 0) for (int t = 0; t < TabCount(); t++)
         {
             if (TabIsHidden(t)) continue; // (hidden: not drawn)
@@ -5897,10 +6285,10 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     }
 
     // A page of the sidebar (About) in place of the games.
-    if (Focus().page >= 0) DrawPage(c, sp, solid, u);
+    if (Focus().page >= 0 && !TilesOn()) DrawPage(c, sp, solid, u);
 
     // The banner: the game played last, ready to carry on.
-    if (Focus().page < 0 && cont >= 0 && cont < (int)games.size())
+    if (Focus().page < 0 && cont >= 0 && cont < (int)games.size() && !PanelOn() && !TilesOn())
     {
         const Game& g = games[cont];
         Menu::FrostBox(c, solid, sp.bannerX, sp.bannerY, sp.bannerW, sp.bannerH, 18 * u);
@@ -5918,7 +6306,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     if (Focus().page < 0)
     {
     // "Your Games" and how many.
-    GT(c, sp.tabsX, sp.headY + 14 * u, SearchText().empty() ? std::string("Your Games") : "Results For \"" + SearchText() + "\"", 24 * u, text, true);
+    if (!PanelOn() && !TilesOn()) GT(c, sp.tabsX, sp.headY + 14 * u, SearchText().empty() ? std::string("Your Games") : "Results For \"" + SearchText() + "\"", 24 * u, text, true);
+    if (!PanelOn() && !TilesOn())
     {
         const std::string n = std::to_string(v.spots.size()) + (v.spots.size() == 1 ? " Game" : " Games");
         GT(c, sp.bannerX + sp.bannerW - GW(n, 16 * u, true), sp.headY + 14 * u, n, 16 * u, hint, true);
@@ -5932,23 +6321,99 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                                    : tab >= TABS ? std::string("Add Games To This Tab From A Game's Menu (A On A Game)")
                                    : tab == TAB_HOME ? "Add Games To Home From A Game's Menu (A On A Game)"
                                    : tab == TAB_HACKS ? "No Romhacks Yet" : "No " + std::string(TabLabel(tab)) + " Games Yet";
-            GT(c, sp.tabsX + (grid.cols * grid.colStep - GW(none, 16 * u, true)) / 2, (grid.top + grid.bottom) * 0.5f, none, 16 * u, hint, true);
+            GT(c, (TilesHome() ? grid.gx : sp.tabsX) + (grid.cols * grid.colStep - GW(none, 16 * u, true)) / 2, (grid.top + grid.bottom) * 0.5f, none, 16 * u, hint, true);
         }
-    for (const View::Spot& s : v.spots)
-        if (visible(s)) drawCard(s, false);
+    if (TilesHome()) drawCarousel();
+    else for (const View::Spot& s : v.spots)
+        if (visible(s) && !(PanelHome() && s.game == selected)) drawCard(s, false);
     moreBelow();
+    }
+    if (TilesOn() && Focus().page >= 0)
+    {
+        // The Tiles home's pages: over the home, dimmed, in a window.
+        drawCarousel(); drawTiles();
+        Glass::Round(c, 0, 0, c.w, c.h, 0, 0xB0000000u);
+        Glass::Shadow(c, sp.winX, sp.winY, sp.winW, sp.winH, 22 * u, 24 * u, 0x80);
+        Glass::Round(c, sp.winX, sp.winY, sp.winW, sp.winH, 22 * u, 0xF2161A22u, 0x4DFFFFFFu, 1.5f * u);
+        DrawPage(c, sp, solid, u);
     }
     base = c.px;
     baseKey = key;
     }
-    drawSideRows();
-    drawBannerButtons();
+    if (PanelHome()) drawSections(); else if (TilesOn())
+    {
+        if (Focus().page < 0)
+        {
+            drawTiles(); drawBannerButtons();
+            // NOW PLAYING: centred above the tile row, under the buttons.
+            if (Music().shown && !Music().idle && Look().music != "top")
+            {
+                const TilesBox tb = TilesGeometry(c);
+                const int bh2 = (int)(46 * u), bw2 = std::min((int)(480 * u), c.w - (int)(120 * u));
+                const int by2 = (tb.btnY + (int)(44 * u) + tb.tileY) / 2 - bh2 / 2;
+                DrawMusicBar(c, (c.w - bw2) / 2, by2, bw2, bh2, u);
+            }
+        }
+    } else
+    {
+        drawSideRows(); drawBannerButtons();
+        // NOW PLAYING: a square at the foot of the sidebar, almost to its edges.
+        if (Music().shown && !Music().idle && Look().music != "top")
+        {
+            const int m0 = (int)(10 * u), sz = sp.sideW - 2 * m0;
+            DrawMusicSquare(c, sp.sideX + m0, c.h - m0 - sz, sz, u);
+        }
+    }
+    // The Panel home's preview: the chosen game beside the list (its buttons: drawBannerButtons).
+    if (PanelHome())
+    {
+        const PanelBox pb = PanelGeometry(c);
+        const int by = pb.contentY, bh = pb.contentB - pb.contentY;
+        Menu::FrostBox(c, solid, pb.prevX, by, pb.prevW, bh, 18 * u);
+        if (shown)
+        {
+            const Game& g = *shown;
+            const int ix = pb.prevX + (int)(20 * u), iw = pb.prevW - (int)(40 * u);
+            const int ph = bh * 40 / 100, py0 = by + (int)(20 * u);
+            Glass::Round(c, ix, py0, iw, ph, 14 * u, 0x26FFFFFFu, 0x3DFFFFFF, 1.0f * u);
+            const int cov = ph - (int)(20 * u);
+            DrawCover(c, g, ix + (iw - cov) / 2, py0 + (ph - cov) / 2, cov, cov, 12 * u);
+            if (g.comingSoon)
+            {
+                Glass::Round(c, ix + (iw - cov) / 2, py0 + (ph - cov) / 2, cov, cov, 12 * u, 0x99000000u);
+                GT(c, ix + (iw - GW("Coming Soon", 16 * u, true)) / 2, py0 + ph * 0.5f, "Coming Soon", 16 * u, text, true);
+            }
+            float ty = (float)(py0 + ph + 34 * u);
+            GTFit(c, ix, ty, ShortName(g), 34 * u, iw, text, true);
+            ty += 46 * u;
+            const std::string saveS = HubCloudOf(g) == 2 ? "Cloud: Changed On Both" : HubCloudOf(g) ? "Cloud Save" : g.hasSave ? "Save Found" : "New Game";
+            std::string last = "Never";
+            if (g.lastPlayed > 0)
+            {
+                const long long days = ((long long)std::time(nullptr) - g.lastPlayed) / 86400;
+                last = days <= 0 ? std::string("Today") : days == 1 ? std::string("Yesterday") : std::to_string(days) + " Days Ago";
+            }
+            const std::string lab[3] = { "Platform", "Save", "Last Played" };
+            const std::string val[3] = { std::string(PlatformName(g.platform)), saveS, last };
+            const int colW = iw / 3;
+            for (int k = 0; k < 3; k++)
+            {
+                GT(c, ix + k * colW, ty, lab[k], 12 * u, hint, true);
+                GTFit(c, ix + k * colW, ty + 24 * u, val[k], 18 * u, colW - (int)(10 * u), text, true);
+            }
+        }
+        drawBannerButtons();
+    }
     // The tab bar's tools: + (a tab of your own) after the tabs, Search and Sort at its right end
     // (chosen: right past the last tab, then along them).
     for (int k = 1; k < 4; k++) Focus().toolW[k] = 0;
     if (Focus().page < 0 && !sp.tabX.empty())
     {
-        const int barH = sp.tabsY * 2 + sp.tabsH, bh = (int)(40 * u), by = (barH - bh) / 2;
+        const bool pnl = PanelHome();
+        const PanelBox pb = PanelGeometry(c);
+        const int barH = sp.tabsY * 2 + sp.tabsH, bh = (int)(40 * u), by = pnl ? sp.tabsY + (sp.tabsH - bh) / 2 : (barH - bh) / 2;
+        const int toolR = pnl ? pb.x + pb.w - pb.pad : c.w - (int)(28 * u);
+        const bool pnlTool = pnl;
         auto tool = [&](int k, int bx, int bw, const std::string& label, int icon) {
             GlassFocus& F = Focus();
             F.toolX[k] = bx; F.toolW[k] = bw; F.toolY = by; F.toolH = bh;
@@ -5961,34 +6426,41 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             if (icon >= 0)
             {
                 Glass::DrawIcon(c, icon, bx + 22 * u, by + bh * 0.5f, 9 * u, text);
-                GT(c, bx + (int)(40 * u), by + bh * 0.5f, label, 15 * u, text, true);
+                GT(c, bx + (int)(40 * u), by + bh * 0.5f, label, pnlTool ? 13 * u : 15 * u, text, true);
             }
             else
             {
-                const float px = label == "+" ? 24 * u : 15 * u;
+                const float px = label == "+" ? 24 * u : pnlTool ? 13 * u : 15 * u;
                 GT(c, bx + (bw - GW(label, px, true)) / 2, by + bh * 0.5f, label, px, text, true);
             }
         };
         const std::string sortL = std::string("Sort: ") + SortLabel(SortKey());
-        const int sortW = GW(sortL, 15 * u, true) + (int)(52 * u), sortX = c.w - (int)(28 * u) - sortW;
+        const float tpx = pnl ? 13 * u : 15 * u;
+        const int sortW = GW(sortL, tpx, true) + (int)(pnl ? 46 : 52) * u, sortX = toolR - sortW;
         std::string q = SearchText();
         if (q.size() > 14) q = q.substr(0, 13) + "...";
         const std::string searchL = q.empty() ? std::string("Search") : "\"" + q + "\"";
-        const int searchW = GW(searchL, 15 * u, true) + (int)(36 * u), searchX = sortX - (int)(10 * u) - searchW;
+        const int searchW = GW(searchL, tpx, true) + (int)(pnl ? 26 : 36) * u, searchX = sortX - (int)(10 * u) - searchW;
         const int last = LastTab();
         tool(1, sp.tabX[last] + sp.tabW[last] + (int)(10 * u), bh, "+", -1);
         tool(2, searchX, searchW, searchL, -1);
         tool(3, sortX, sortW, sortL, Glass::I_LAYERS);
+        // NOW PLAYING along the top (Launcher > Music Player > Top): between the tabs and Search / Sort.
+        if (Look().music == "top" && !pnl && Music().shown && !Music().idle)
+        {
+            const int mx = sp.tabX[last] + sp.tabW[last] + (int)(10 * u) + bh + (int)(14 * u), avail = searchX - (int)(14 * u) - mx;
+            if (avail >= (int)(200 * u)) { const int mw = std::min(avail, (int)(400 * u)); DrawMusicBar(c, mx + (avail - mw) / 2, by, mw, bh, u); }
+        }
     }
     // The chosen card, over the kept picture: the blurred background put back round it first.
     {
         const int k = v.SpotOf(selected);
-        if (k >= 0 && visible(v.spots[k]) && Focus().page < 0)
+        if (k >= 0 && visible(v.spots[k]) && Focus().page < 0 && !TilesOn())
         {
             const View::Spot& s = v.spots[k];
             const int m = (int)(7 * u), x0 = std::max(0, s.x - m), x1 = std::min(c.w, s.x + grid.cw + m);
             const int y = grid.top + s.y - scroll, y0 = std::max(0, y - m), y1 = std::min(c.h, y + grid.ch + m);
-            if (solid)
+            if (solid && !PanelHome())
                 for (int yy = y0; yy < y1; yy++)
                     std::copy(c.backdrop.begin() + (size_t)yy * c.w + x0, c.backdrop.begin() + (size_t)yy * c.w + x1, c.px.begin() + (size_t)yy * c.w + x0);
             drawCard(s, true);

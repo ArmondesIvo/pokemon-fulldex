@@ -44,6 +44,7 @@
 #include "thirdparty/stb_image.h"
 #undef STB_IMAGE_IMPLEMENTATION
 #include "launcher.h"
+#include "now_playing.h" // (the music bar on the home screen)
 #include "discord_presence.h" // (Discord shows "In the launcher" or the game being played; needs an Application ID)
 #include "cloud_autosync.h"
 #include "library_history.h"
@@ -133,6 +134,8 @@ bool ConfigFullscreen(const std::string& cfg, int& w, int& h)
         }
         fclose(f);
     }
+    // (Test: SSR_LIST_SIZE=1280x720 opens in a window of that size, for the test pictures.)
+    if (const char* ts = getenv("SSR_LIST_SIZE")) { int tw = 0, th = 0; if (sscanf(ts, "%dx%d", &tw, &th) == 2 && tw >= 320 && th >= 240) { w = tw; h = th; on = false; } }
     return on;
 }
 
@@ -763,6 +766,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     if (const char* t = getenv("SSR_LIST_TAB")) tab = std::max(0, std::min(Launcher::TabCount() - 1, atoi(t)));
     // (SSR_LIST_SEARCH=words: the list searched, for the test picture.)
     if (const char* sq = getenv("SSR_LIST_SEARCH")) Launcher::SearchText() = sq;
+    // (SSR_LIST_FAKE=n: n games from the first, the middle one chosen, for the test picture.)
+    if (const char* fk = getenv("SSR_LIST_FAKE")) { const int nf = atoi(fk); if (!games.empty() && nf > 1) { const Launcher::Game b0 = games[0]; for (int i = 1; i < nf; i++) { Launcher::Game g = b0; g.rom += "#" + std::to_string(i); g.customName = "Test Game " + std::to_string(i + 1); games.push_back(g); } selected = nf / 2; } }
     // (SSR_LIST_POPUP=n: the chosen game's menu open on row n, for the test picture.)
     if (const char* pp = getenv("SSR_LIST_POPUP")) Launcher::Focus().popup = atoi(pp);
     // (SSR_LIST_PAGE=side,row: a page of the sidebar open on that row, for the test picture.)
@@ -803,6 +808,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         Launcher::HubMode() = !strncmp(hb, "trade", 5) ? 2 : !strncmp(hb, "move", 4) || !strcmp(hb, "top") ? 0 : 1;
         if (!strcmp(hb, "tradehost")) Launcher::TradeDo(2, 0);
         if (!strcmp(hb, "tradejoin")) Launcher::TradeDo(2, 1);
+        if (!strcmp(hb, "tradeguide")) Launcher::TradeDo(2, 4);
         if (!strncmp(hb, "trade", 5) || !strcmp(hb, "top")) {}
         else if (!strncmp(hb, "move", 4))
         {
@@ -1368,6 +1374,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             }
             if (Launcher::PageMove(dir)) return;
             const bool banner = Launcher::ContinueGame(games, selected) >= 0;
+            const bool panel = Launcher::PanelHome(); const bool tiles = Launcher::TilesHome(); const bool alt = panel || tiles;
             auto intoGames = [&]() {
                 const Launcher::View v = view();
                 if (Launcher::FirstIn(v) < 0) { if (banner) F.banner = 1; else onTabs = true; return; }
@@ -1376,7 +1383,15 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             };
             if (F.side >= 0)
             {
-                if (dir == 3) F.side = std::max(0, F.side - 1);
+                if (panel || tiles)
+                {
+                    // (The Panel home's sections along the top: left and right along them, down to the tabs.)
+                    if (dir == 1) F.side = std::max(0, F.side - 1);
+                    else if (dir == 2) F.side = std::min((int)Launcher::SIDES - 1, F.side + 1);
+                    else if (dir == 4 && panel) { F.side = -1; onTabs = true; }
+                    else if (dir == 3 && tiles) { F.side = -1; if (banner) F.banner = 1; else intoGames(); }
+                }
+                else if (dir == 3) F.side = std::max(0, F.side - 1);
                 else if (dir == 4) F.side = std::min((int)Launcher::SIDES - 1, F.side + 1);
                 else if (dir == 2) { F.side = -1; intoGames(); }
                 return;
@@ -1386,31 +1401,44 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (F.onSort)
                 {
                     // (Sort: left back to the tabs, down to the games.)
-                    if (dir == 1) { if (F.tool > 1) F.tool--; else F.onSort = false; }
+                    if (panel && dir == 3) { F.onSort = false; onTabs = false; F.side = Launcher::SIDE_HOME; }
+                    else if (dir == 1) { if (F.tool > 1) F.tool--; else F.onSort = false; }
                     else if (dir == 2) F.tool = std::min(3, F.tool + 1);
-                    else if (dir == 4) { F.onSort = false; onTabs = false; if (banner) F.banner = 1; else intoGames(); }
+                    else if (dir == 4) { F.onSort = false; onTabs = false; if (banner && !alt) F.banner = 1; else intoGames(); }
                     return;
                 }
-                if (dir == 1 && tab == Launcher::FirstTab()) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                if (panel && dir == 3) { onTabs = false; F.side = Launcher::SIDE_HOME; }
+                else if (dir == 1 && tab == Launcher::FirstTab()) { if (!alt) { onTabs = false; F.side = Launcher::SIDE_HOME; } }
                 else if (dir == 2 && tab == Launcher::LastTab()) { F.onSort = true; F.tool = 1; }
                 else if (dir == 1 || dir == 2) setTab(Launcher::TabStep(tab, dir == 2 ? 1 : -1), "the arrows");
-                else if (dir == 4) { onTabs = false; if (banner) F.banner = 1; else intoGames(); }
+                else if (dir == 4) { onTabs = false; if (banner && !alt) F.banner = 1; else intoGames(); }
                 return;
             }
             if (F.banner)
             {
-                if (dir == 1) { if (F.banner == 2) F.banner = 1; else { F.banner = 0; F.side = Launcher::SIDE_HOME; } }
+                if (dir == 1) { if (F.banner == 2) F.banner = 1; else { F.banner = 0; if (alt) intoGames(); else F.side = Launcher::SIDE_HOME; } }
                 else if (dir == 2) F.banner = 2;
-                else if (dir == 3) { F.banner = 0; onTabs = true; }
+                else if (dir == 3) { F.banner = 0; if (tiles) intoGames(); else onTabs = true; }
+                else if (tiles && dir == 4) { F.banner = 0; F.side = Launcher::SIDE_HOME; }
                 else if (dir == 4 && Launcher::FirstIn(view()) >= 0) { F.banner = 0; intoGames(); }
                 return;
             }
             follow = true;
             const Launcher::View v = view();
             const int k = v.SpotOf(selected);
+            if (tiles)
+            {
+                if (dir == 3) { onTabs = true; return; }
+                if (dir == 4) { if (banner) F.banner = 1; else F.side = Launcher::SIDE_HOME; return; }
+                const int to2 = v.spots.empty() ? -1 : Launcher::Step(v, selected, dir == 1 ? 3 : 4);
+                if (to2 >= 0) selected = to2;
+                return;
+            }
+            if (panel && dir == 1) return;
+            if (panel && dir == 2 && banner) { F.banner = 1; return; }
             if (dir == 1 && (k < 0 || v.spots[k].x == v.g.gx)) { F.side = Launcher::SIDE_HOME; return; }
             const int to = v.spots.empty() ? -1 : Launcher::Step(v, selected, dir);
-            if (to < 0) { if (dir == 3) { if (banner) F.banner = 1; else onTabs = true; } return; }
+            if (to < 0) { if (dir == 3) { if (banner && !alt) F.banner = 1; else onTabs = true; } return; }
             selected = to;
             return;
         }
@@ -2104,6 +2132,12 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     }
                     if (held) break;
                 }
+                // The music bar: previous, play / pause, next.
+                if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging)
+                {
+                    const int mb = Launcher::MusicAt(mx, my);
+                    if (mb >= 0) { Launcher::Music().action = mb; break; }
+                }
                 // The glass launcher: a section in the sidebar (Settings opens the settings), or Continue.
                 if (Launcher::Glassy(canvas) && !guide && e.type == SDL_MOUSEBUTTONUP && !dragging)
                 {
@@ -2521,7 +2555,26 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         else
         {
             FillUpdateStatus();
-            Launcher::Draw(canvas, games, tab, onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner ? -1 : selected, scroll, note, (Launcher::Focus().popup >= 0 || Launcher::Focus().dialog || Launcher::Focus().page >= 0) ? (padIn ? btn(Controls::A) + ": CHOOSE    " + btn(Controls::B) + ": BACK" : std::string("ENTER: CHOOSE    ESC: BACK")) : hint, theme, follow, onTabs, onSettings);
+            // NOW PLAYING: the music app's song, now and then, for the bar on the home screen (SSR_LIST_NOWPLAYING: a made-up song, for the test picture).
+            {
+                Launcher::MusicBar& MB = Launcher::Music();
+                NowPlaying::Start(); NowPlaying::Want(2);
+                NowPlaying::Info np = NowPlaying::Now();
+                const bool fake = getenv("SSR_LIST_NOWPLAYING") != nullptr;
+                if (fake)
+                {
+                    np.active = true; np.playing = true; np.canPrev = np.canNext = true; np.title = "Midnight City"; np.artist = "M83"; np.app = "Spotify";
+                    if (np.art.empty()) { np.artW = np.artH = 64; np.art.resize(64 * 64); for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) np.art[y * 64 + x] = 0xFF000000u | ((60 + x * 3) << 16) | ((40 + y) << 8) | (200 - y * 2); np.artVersion = 1; }
+                }
+                MB.shown = NowPlaying::Supported() || fake;
+                MB.idle = !np.active && !np.needAccess;
+                MB.blind = np.needAccess; MB.playing = np.playing; MB.canPrev = np.canPrev; MB.canNext = np.canNext;
+                MB.title = np.title; MB.artist = np.artist; MB.app = np.app;
+                static unsigned artSeen = ~0u;
+                if (np.artVersion != artSeen) { artSeen = np.artVersion; MB.art = np.art; MB.artW = np.artW; MB.artH = np.artH; }
+                if (MB.action >= 0) { if (!fake) NowPlaying::Command(MB.action); MB.action = -1; }
+            }
+            Launcher::Draw(canvas, games, tab, !Launcher::TilesOn() && (onSettings || onTabs || Launcher::Focus().side >= 0 || Launcher::Focus().banner) ? -1 : selected, scroll, note, (Launcher::Focus().popup >= 0 || Launcher::Focus().dialog || Launcher::Focus().page >= 0) ? (padIn ? btn(Controls::A) + ": CHOOSE    " + btn(Controls::B) + ": BACK" : std::string("ENTER: CHOOSE    ESC: BACK")) : hint, theme, follow, onTabs, onSettings);
         }
 #ifdef SSR_UPDATER
         if (updateMenu.open)
@@ -2652,6 +2705,10 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             loggedPresent = true;
         }
 #endif
+        // (SSR_LIST_KEYS=lrud...: those arrow presses, once, before the first picture, for the navigation tests.)
+        static int keysAge = -1;
+        if (keysAge >= 0) keysAge++;
+        if (const char* tk = getenv("SSR_LIST_KEYS")) { static bool keysDone = false; if (!keysDone) { keysDone = true; keysAge = 0; for (const char* q = tk; *q; q++) move(*q == 'l' ? 1 : *q == 'r' ? 2 : *q == 'u' ? 3 : 4); } }
         if (testPick && *testPick)
         {
             for (size_t i = 0; i < games.size(); i++)
@@ -2680,7 +2737,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (ls.state == HubLink::State::Linked && ls.mine.any && ls.theirs.any && ls.theyCanTake && !ls.iAccepted && !autoAccepted) { HubLink::Accept(true); autoAccepted = true; }
         }
         const char* shotWait = getenv("SSR_LIST_SHOT_WAIT");
-        if (testShot && *testShot && (!shotWait || std::chrono::steady_clock::now() - shotStart >= std::chrono::seconds(atoi(shotWait))))
+        if (testShot && *testShot && (keysAge < 0 || keysAge >= 4) && (!shotWait || std::chrono::steady_clock::now() - shotStart >= std::chrono::seconds(atoi(shotWait))))
         {
             if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(canvas.px.data(), canvas.w, canvas.h, 32, canvas.w * 4, SDL_PIXELFORMAT_ARGB8888))
             {
