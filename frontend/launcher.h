@@ -1712,6 +1712,8 @@ inline void ThemesRefresh()
 }
 #ifdef __ANDROID__
 static const int kLauncherMenuRows = 6; // (Layout, Theme Editor, My Themes, Theme Gallery, Music Player, Camera Cutout)
+#elif defined(__SWITCH__)
+static const int kLauncherMenuRows = 4; // (No Music Player on a Switch: there is nothing to play from.)
 #else
 static const int kLauncherMenuRows = 5;
 #endif
@@ -1893,6 +1895,9 @@ inline void LookFrom(const std::map<std::string, std::string>& p)
     l.badges = get("badges", "on") != "off";
     { const std::string lv = get("layout", l.layout); l.layout = lv == "panel" || lv == "tiles" ? lv : "sidebar"; }
     { const std::string mv = get("music", l.music); l.music = mv == "top" || mv == "compact" || mv == "compactb" || mv == "off" ? mv : "corner"; }
+#ifdef __SWITCH__
+    l.music = "off"; // (No music player on a Switch.)
+#endif
     l.avoidCutout = get("cutout", "on") != "off";
     LookApply();
 }
@@ -5157,7 +5162,9 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 row(1, Glass::I_SPARKLE, "Theme Editor", "Colours, pictures, blur and the rest of the launcher's look", "");
                 row(2, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
                 row(3, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Online");
+#ifndef __SWITCH__
                 row(4, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: full size, a small pill of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact Top" : Look().music == "compactb" ? "Compact Bottom" : Look().music == "off" ? "Off" : "Bottom Left");
+#endif
 #ifdef __ANDROID__
                 row(5, Glass::I_FULLSCREEN, "Camera Cutout", "Keep every launcher screen clear of the camera hole, or fill the whole screen", Look().avoidCutout ? "Avoid" : "Fill");
 #endif
