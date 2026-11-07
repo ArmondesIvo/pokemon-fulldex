@@ -2613,7 +2613,8 @@ struct App
                     const uint32_t dirs = GameKeys() & dirMask;
                     if (dirs & ~tapDirs) tapSince = SDL_GetTicks();
                     tapDirs = dirs;
-                    if (speed > 1 && dirs && SDL_GetTicks() - tapSince < 250) speed = 1;
+                    // (Not with fast forward switched on with its button: it stays fast, as in My Boy.)
+                    if (speed > 1 && !fastToggle && dirs && SDL_GetTicks() - tapSince < 250) speed = 1;
                 }
                 for (int i = 0; i < run * speed; i++) RunFrame(true, speed > 1);
             }

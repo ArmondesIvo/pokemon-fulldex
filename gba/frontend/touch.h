@@ -3,7 +3,9 @@
 // pressed with any number of fingers. Shown while the last input was a touch.
 #pragma once
 #include <cmath>
+#include <algorithm>
 #include <cstdint>
+#include <utility>
 #include <string>
 
 #include <SDL.h>
@@ -118,38 +120,133 @@ inline void Circle(Canvas& c, int cx, int cy, int r, uint32_t argb)
     }
 }
 
-// Drawn see-through over the game; a pressed button is brighter.
+// Drawn in the style of My Boy's controls: thin grey outlines over the game, with no fill, so
+// the picture stays visible; a pressed control gets a white outline and a faint white fill.
+// Each shape is drawn from its distance to the outline, which keeps the curves even.
+namespace Style
+{
+const uint32_t Line = 0xFFA8A8A8, LineOn = 0xFFFFFFFF, FillOn = 0x40FFFFFF;
+const float Thick = 1.2f;
+
+// Distance from (px, py) to a rectangle with round corners (negative inside).
+inline float RoundRectDist(float px, float py, float cx, float cy, float hw, float hh, float rr)
+{
+    rr = std::min(rr, std::min(hw, hh));
+    const float qx = std::fabs(px - cx) - (hw - rr), qy = std::fabs(py - cy) - (hh - rr);
+    const float ox = std::max(qx, 0.0f), oy = std::max(qy, 0.0f);
+    return std::sqrt(ox * ox + oy * oy) + std::min(std::max(qx, qy), 0.0f) - rr;
+}
+inline void RoundRect(Canvas& c, float cx, float cy, float hw, float hh, float rr, bool on)
+{
+    const int x0 = (int)std::floor(cx - hw - 2), x1 = (int)std::ceil(cx + hw + 2);
+    const int y0 = (int)std::floor(cy - hh - 2), y1 = (int)std::ceil(cy + hh + 2);
+    for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++)
+        {
+            const float d = RoundRectDist(x + 0.5f, y + 0.5f, cx, cy, hw, hh, rr);
+            if (d <= 0 && d > -Thick) c.Fill(x, y, 1, 1, on ? LineOn : Line);
+            else if (on && d <= 0) c.Fill(x, y, 1, 1, FillOn);
+        }
+}
+inline void Ring(Canvas& c, float cx, float cy, float r, bool on) { RoundRect(c, cx, cy, r, r, r, on); }
+
+// A thick line from (ax, ay) to (bx, by).
+inline void Line2(Canvas& c, float ax, float ay, float bx, float by, uint32_t col, float t = Thick)
+{
+    const int x0 = (int)std::floor(std::min(ax, bx) - t), x1 = (int)std::ceil(std::max(ax, bx) + t);
+    const int y0 = (int)std::floor(std::min(ay, by) - t), y1 = (int)std::ceil(std::max(ay, by) + t);
+    const float dx = bx - ax, dy = by - ay, len2 = std::max(dx * dx + dy * dy, 1e-6f);
+    for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++)
+        {
+            const float px = x + 0.5f - ax, py = y + 0.5f - ay;
+            const float k = std::clamp((px * dx + py * dy) / len2, 0.0f, 1.0f);
+            const float ex = px - k * dx, ey = py - k * dy;
+            if (ex * ex + ey * ey <= t * t / 4) c.Fill(x, y, 1, 1, col);
+        }
+}
+
+// One key of the D-pad: a square with round corners and an arrow like a house's outline,
+// pointing out from the middle (dir: 0 up, 1 right, 2 down, 3 left).
+inline void DpadKey(Canvas& c, float cx, float cy, float half, int dir, bool on)
+{
+    RoundRect(c, cx, cy, half, half, half * 0.22f, on);
+    const float a = half * 0.62f;
+    // The arrow pointing up, then turned.
+    const float pts[5][2] = { { 0, -a * 1.05f }, { a, -a * 0.05f }, { a, a }, { -a, a }, { -a, -a * 0.05f } };
+    float p[5][2];
+    for (int i = 0; i < 5; i++)
+    {
+        float x = pts[i][0], y = pts[i][1];
+        for (int k = 0; k < dir; k++) { const float t = x; x = -y; y = t; }
+        p[i][0] = cx + x; p[i][1] = cy + y;
+    }
+    for (int i = 0; i < 5; i++)
+        Line2(c, p[i][0], p[i][1], p[(i + 1) % 5][0], p[(i + 1) % 5][1], on ? LineOn : Line);
+}
+}
+
 inline void Draw(Canvas& c, const Layout& t, uint32_t held, bool fastOn)
 {
-    const uint32_t off = 0x60FFFFFF, on = 0xB0FFFFFF, text = 0xD0202020, edge = 0x50000000;
-    auto col = [&](Button b) { return (held >> b) & 1 ? on : off; };
-    // The D-pad: a cross, each arm lit when pressed, on a darker edge so it shows on light
-    // ground too.
-    const int arm = t.padR, thick = std::max(8, t.padR * 3 / 5);
-    c.Fill(t.padX - thick / 2 - 2, t.padY - arm - 2, thick + 4, 2 * arm + 4, edge);
-    c.Fill(t.padX - arm - 2, t.padY - thick / 2 - 2, 2 * arm + 4, thick + 4, edge);
-    c.Fill(t.padX - thick / 2, t.padY - thick / 2, thick, thick, off);
-    c.Fill(t.padX - thick / 2, t.padY - arm, thick, arm - thick / 2, col(UP));
-    c.Fill(t.padX - thick / 2, t.padY + thick / 2, thick, arm - thick / 2, col(DOWN));
-    c.Fill(t.padX - arm, t.padY - thick / 2, arm - thick / 2, thick, col(LEFT));
-    c.Fill(t.padX + thick / 2, t.padY - thick / 2, arm - thick / 2, thick, col(RIGHT));
-    Circle(c, t.aX, t.aY, t.abR + 2, edge);
-    Circle(c, t.bX, t.bY, t.bR + 2, edge);
-    Circle(c, t.aX, t.aY, t.abR, col(A));
-    Circle(c, t.bX, t.bY, t.bR, col(B));
-    c.TextCentred(t.aX, t.aY - 7, "A", 2, text);
-    c.TextCentred(t.bX, t.bY - 7, "B", 2, text);
-    auto button = [&](const SDL_Rect& r, const std::string& label, uint32_t argb) {
-        c.Fill(r.x - 2, r.y - 2, r.w + 4, r.h + 4, edge);
-        c.Fill(r.x, r.y, r.w, r.h, argb);
-        c.TextCentred(r.x + r.w / 2, r.y + (r.h - 7) / 2, label, 1, text);
+    using namespace Style;
+    auto pressed = [&](Button b) { return ((held >> b) & 1) != 0; };
+
+    // The D-pad: four separate keys around an empty middle.
+    const float key = t.padR * 0.31f, off = t.padR * 0.69f;
+    DpadKey(c, t.padX, t.padY - off, key, 0, pressed(UP));
+    DpadKey(c, t.padX + off, t.padY, key, 1, pressed(RIGHT));
+    DpadKey(c, t.padX, t.padY + off, key, 2, pressed(DOWN));
+    DpadKey(c, t.padX - off, t.padY, key, 3, pressed(LEFT));
+
+    // A and B: rings with their letter.
+    Ring(c, t.aX, t.aY, t.abR, pressed(A));
+    Ring(c, t.bX, t.bY, t.bR, pressed(B));
+    c.TextCentred(t.aX, t.aY - 7, "A", 2, pressed(A) ? LineOn : Line);
+    c.TextCentred(t.bX, t.bY - 7, "B", 2, pressed(B) ? LineOn : Line);
+
+    // L and R: shoulder buttons, round on the outer side, with the letter there.
+    auto shoulder = [&](const SDL_Rect& r, const char* label, bool right, bool on) {
+        const float cx = r.x + r.w / 2.0f, cy = r.y + r.h / 2.0f, hh = r.h / 2.0f;
+        RoundRect(c, cx, cy, r.w / 2.0f, hh, hh * 0.9f, on);
+        const int lx = right ? r.x + r.w - (int)hh - 3 : r.x + (int)hh - 2;
+        c.TextCentred(lx, (int)cy - 7, label, 2, on ? LineOn : Line);
     };
-    button(t.l, "L", col(L));
-    button(t.r, "R", col(R));
-    button(t.select, "SELECT", col(SELECT));
-    button(t.start, "START", col(START));
-    button(t.menu, "MENU", col(MENU));
-    button(t.fast, ">>", fastOn ? on : col(FAST));
+    shoulder(t.l, "L", false, pressed(L));
+    shoulder(t.r, "R", true, pressed(R));
+
+    // START and SELECT: plain pills, as on the console.
+    auto pill = [&](const SDL_Rect& r, bool on) {
+        const float hh = std::min(r.h / 2.0f, 7.0f);
+        RoundRect(c, r.x + r.w / 2.0f, r.y + r.h / 2.0f, r.w / 2.0f, hh, hh, on);
+    };
+    pill(t.select, pressed(SELECT));
+    pill(t.start, pressed(START));
+
+    // The pause menu and fast forward: square icons in the middle of their spaces. Fast
+    // forward stays lit while it is on.
+    auto icon = [&](const SDL_Rect& r, bool on) {
+        const float s = std::min(r.w, r.h) / 2.0f;
+        const float cx = r.x + r.w / 2.0f, cy = r.y + r.h / 2.0f;
+        RoundRect(c, cx, cy, s, s, s * 0.25f, on);
+        return std::make_pair(cx, s);
+    };
+    {
+        const bool on = pressed(MENU);
+        auto [cx, s] = icon(t.menu, on);
+        const float cy = t.menu.y + t.menu.h / 2.0f, w = s * 0.55f;
+        for (int i = -1; i <= 1; i++) Line2(c, cx - w, cy + i * s * 0.4f, cx + w, cy + i * s * 0.4f, on ? LineOn : Line);
+    }
+    {
+        const bool on = fastOn || pressed(FAST);
+        auto [cx, s] = icon(t.fast, on);
+        const float cy = t.fast.y + t.fast.h / 2.0f, h = s * 0.45f;
+        for (int i = 0; i < 2; i++)
+        {
+            const float x = cx - s * 0.35f + i * s * 0.4f;
+            Line2(c, x, cy - h, x + h * 0.8f, cy, on ? LineOn : Line);
+            Line2(c, x + h * 0.8f, cy, x, cy + h, on ? LineOn : Line);
+        }
+    }
 }
 
 }
