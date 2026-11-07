@@ -2130,6 +2130,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         const int dx = mx - swX, dy = my - swY;
                         if (std::abs(dx) > (int)(48 * su) && std::abs(dx) > std::abs(dy) * 3 / 2)
                         {
+                            // (The games, never the tiles or the buttons: whatever was chosen with a tap or the arrows is let go.)
+                            Launcher::Focus() = Launcher::GlassFocus{}; onSettings = onTabs = false; follow = true;
                             move(dx < 0 ? 2 : 1); // (left: the next game)
                             tapPlay = -1; pressed = dragging = false;
                             break;
