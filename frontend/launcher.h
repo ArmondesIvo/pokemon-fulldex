@@ -285,7 +285,7 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     int nScroll = 0, nMax = 0, nX = 0, nY = 0, nW = 0, nH = 0, nLine = 0;
                     // (The ROMs page: pact the chosen ROM's action, -1 the list; rScroll its first row shown, rVis how many;
                     // aX..aRow where the actions were drawn.)
-                    bool freeScroll = false; int pact = -1, rScroll = 0, rVis = 0, aX = 0, aY = 0, aW = 0, aRow = 0;
+                    bool freeScroll = false; int abX = 0, abW = 0, abRow = 0, abKey = -1; int pact = -1, rScroll = 0, rVis = 0, aX = 0, aY = 0, aW = 0, aRow = 0;
                     // (Sort at the tab bar's right end: chosen (with the tabs), the list's order, where it was drawn.)
                     bool onSort = false; std::string sortKey; int sortX = 0, sortY = 0, sortW = 0, sortH = 0;
                     // (The tab bar's tools: which is chosen while onSort (1 +, 2 Search, 3 Sort), where they were drawn; the
@@ -1441,7 +1441,7 @@ inline GlassSpots Spots(const Canvas& c)
         else { s.sideW = (int)(60 * u); s.tabsX = s.sideW + (int)(14 * u); s.tabsY = (int)(8 * u); s.tabsH = (int)(44 * u); }
     }
     // (The tabs smaller as they grow in number, to leave room for + after them and Search and Sort.)
-    const int room = pnl ? pb.x + pb.w - pb.pad - (int)(280 * u) - s.tabsX : c.h > c.w ? c.w - (int)(12 * u) - s.tabsX : c.w - (int)(28 * u) - (int)((phn ? 190 : 470) * u) - s.tabsX;
+    const int room = pnl ? pb.x + pb.w - pb.pad - (int)(280 * u) - s.tabsX : c.h > c.w ? c.w - (int)(12 * u) - s.tabsX : c.w - (int)(28 * u) - (int)((phn ? 300 : 470) * u) - s.tabsX;
     s.tabFont = 18 * u;
     float pad = 40 * u;
     auto total = [&]() { int w = 0; for (int t = 0; t < TabCount(); t++) w += GW(TabLabel(t), s.tabFont, true) + (int)pad + (int)(2 * u); return w; };
@@ -5066,8 +5066,10 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         if (lk.edit >= 0) F.prow = lk.edit == 8 ? 9 : lk.edit;
         F.prow = std::max(0, std::min(F.prow, n - 1));
         F.pact = -1;
-        F.rScroll = 0;
-        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = n;
+        const int vis = std::max(1, std::min(n, (bottom - top - 2 * pad + rg) / (rowH + rg))); // (a short screen: the list scrolls)
+        if (!F.freeScroll) { if (F.prow < F.rScroll) F.rScroll = F.prow; if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1; }
+        F.rScroll = std::max(0, std::min(F.rScroll, n - vis));
+        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
         F.aW = 0;
         static const char* const names[10] = { "Accent", "Panels", "Sidebar", "Top Bar", "Buttons", "Background", "Grain", "Cloud Badges", "Font", "Text Size" };
         static const char* const subs[10] = { "The frame round what is chosen, and its glow", "The glass panels: a colour or a picture, see-through to solid",
@@ -5076,9 +5078,9 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                                              "The fine speckle in the glass panels", "A cloud on the cards of games whose saves sync",
                                               "The letters everywhere in the launcher", "How big the writing is" };
         static const int icons[10] = { Glass::I_SPARKLE, Glass::I_LAYERS, Glass::I_LAYOUT, Glass::I_WINDOW, Glass::I_PLAY, Glass::I_SCREENS, Glass::I_GAUGE, Glass::I_GLOBE, Glass::I_NOTE, Glass::I_EXPAND };
-        for (int i = 0; i < n; i++)
+        for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
         {
-            const int rx = L + pad, ry = top + pad + i * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+            const int rx = L + pad, ry = top + pad + (i - F.rScroll) * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
             if (i == F.prow)
             {
                 if (F.side < 0 && lk.edit < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
@@ -5136,7 +5138,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             else
             {
                 // The wheel: round the edge the colours, out from the middle stronger; at the Brightness below.
-                const int D = std::min(iw - (int)(40 * u), fl.size() >= 8 ? (int)(96 * u) : fl.size() >= 6 ? (int)(128 * u) : fl.size() == 5 ? (int)(146 * u) : (int)(170 * u)), wr = D / 2, wcx = ix + iw / 2, wcy = y + wr;
+                const int fitD = bottom - y - (int)(12 * u) - (int)fl.size() * (int)(35 * u) - (int)(62 * u), D = std::max((int)(36 * u), std::min(fitD, std::min(iw - (int)(40 * u), fl.size() >= 8 ? (int)(96 * u) : fl.size() >= 6 ? (int)(128 * u) : fl.size() == 5 ? (int)(146 * u) : (int)(170 * u)))), wr = D / 2, wcx = ix + iw / 2, wcy = y + wr;
                 for (int py = -wr - 1; py <= wr + 1; py++)
                 {
                     const int yy = wcy + py;
@@ -5954,6 +5956,25 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #else
     const char* open = "Choose it to open it in your browser";
 #endif
+    F.rVis = 0; F.abX = px; F.abW = pw; F.abRow = (int)(60 * u);
+    if (F.abKey != F.prow) { F.abKey = F.prow; F.rScroll = 0; }
+    struct Blk { int h; std::function<void()> draw; };
+    // (A section too long for the screen: its blocks drawn from the one scrolled to, a finger dragging moves along them.)
+    auto runBlocks = [&](std::vector<Blk>& bl, int step) {
+        const int avail = bottom - ip - y, total = (int)bl.size();
+        int maxStart = total, acc = 0;
+        while (maxStart > 0 && acc + bl[maxStart - 1].h <= avail) { acc += bl[maxStart - 1].h; maxStart--; }
+        const int start = std::max(0, std::min(F.rScroll, maxStart));
+        F.rScroll = start; F.rVis = maxStart > 0 ? 1 : 0; F.abRow = step;
+        const int y0 = y;
+        int used = 0;
+        for (int i = start; i < total && used + bl[i].h <= avail; i++) { bl[i].draw(); used += bl[i].h; }
+        if (maxStart > 0)
+        {
+            const int th = std::max((int)(24 * u), avail * (total - maxStart) / std::max(1, total));
+            Glass::Round(c, px + pw - (int)(10 * u), y0 + (avail - th) * start / maxStart, (int)(4 * u), th, 2 * u, 0x80FFFFFFu);
+        }
+    };
     if (F.prow == 0)
     {
         heading("Support Fulldex");
@@ -5992,8 +6013,10 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             { "Nils Menn", "Fucking legend" },
             { "Everyone who reported bugs and helped test", "Thank you" } };
         const int gap = (int)(12 * u), cw = (pw - 2 * ip - gap) / 2, ch = (int)(62 * u);
-        for (int i = 0; i < 10; i++)
-            card(px + ip + (i % 2) * (cw + gap), y + (i / 2) * (ch + (int)(10 * u)), cw, ch, credits[i][0], credits[i][1]);
+        std::vector<Blk> bl;
+        for (int r = 0; r < 5; r++)
+            bl.push_back({ ch + (int)(10 * u), [&, r]() { for (int k = 0; k < 2; k++) card(px + ip + k * (cw + gap), y, cw, ch, credits[r * 2 + k][0], credits[r * 2 + k][1]); y += ch + (int)(10 * u); } });
+        runBlocks(bl, ch + (int)(10 * u));
     }
     else if (F.prow == 2)
     {
@@ -6009,18 +6032,20 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             { "Fulldex", "GPL-3.0-or-later" }, { "melonDS", "GPL-3.0" }, { "Pok\xC3\xA9" "Daisy readers", "GPL-3.0" },
             { "HOME Menu icon loader (nx-hbloader)", "GPL-3.0" }, { "mGBA", "MPL-2.0" }, { "The launcher's fonts", "SIL Open Font License" } };
         const int rh = (int)(44 * u);
+        const std::string p1 = "Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.";
+        const std::string p2 = "Not affiliated with or endorsed by Nintendo, Game Freak, The Pok\xC3\xA9mon Company or the melonDS project. Pok\xC3\xA9mon is a trademark of its owners. The full licence texts are on the GitHub page.";
+        auto paraH = [&](const std::string& s) { return (int)WrapLines(s, 16 * u, pw - 2 * ip).size() * (int)(24 * u) + (int)(10 * u); };
+        std::vector<Blk> bl;
         for (int i = 0; i < 6; i++)
-        {
-            Glass::Round(c, px + ip, y, pw - 2 * ip, rh, 12 * u, 0x14FFFFFFu);
-            GT(c, px + ip + (int)(14 * u), y + rh * 0.5f, lic[i][0], 16 * u, text, true);
-            GT(c, px + pw - ip - (int)(14 * u) - GW(lic[i][1], 15 * u, true), y + rh * 0.5f, lic[i][1], 15 * u, hint, true);
-            y += rh + (int)(6 * u);
-        }
-        y += (int)(4 * u);
-        para("Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.");
-        card(px + ip, y, pw - 2 * ip, (int)(64 * u), "FONT-LICENSES.txt", open);
-        y += (int)(78 * u);
-        para("Not affiliated with or endorsed by Nintendo, Game Freak, The Pok\xC3\xA9mon Company or the melonDS project. Pok\xC3\xA9mon is a trademark of its owners. The full licence texts are on the GitHub page.");
+            bl.push_back({ rh + (int)(6 * u), [&, i]() {
+                Glass::Round(c, px + ip, y, pw - 2 * ip, rh, 12 * u, 0x14FFFFFFu);
+                GT(c, px + ip + (int)(14 * u), y + rh * 0.5f, lic[i][0], 16 * u, text, true);
+                GT(c, px + pw - ip - (int)(14 * u) - GW(lic[i][1], 15 * u, true), y + rh * 0.5f, lic[i][1], 15 * u, hint, true);
+                y += rh + (int)(6 * u); } });
+        bl.push_back({ (int)(4 * u) + paraH(p1), [&]() { y += (int)(4 * u); para(p1); } });
+        bl.push_back({ (int)(78 * u), [&]() { card(px + ip, y, pw - 2 * ip, (int)(64 * u), "FONT-LICENSES.txt", open); y += (int)(78 * u); } });
+        bl.push_back({ paraH(p2), [&]() { para(p2); } });
+        runBlocks(bl, rh + (int)(6 * u));
     }
     else
     {
@@ -6097,6 +6122,22 @@ inline void DrawMusicBar(Canvas& c, int x, int y, int w, int h, float u)
         GTFit(c, tx, y + h * 0.36f, l1, h * 0.34f, tw, text, true);
         GTFit(c, tx, y + h * 0.72f, l2, h * 0.27f, tw, hint, true);
     }
+}
+// A phone sideways: just the buttons (previous, play / pause, next) in a slim pill, to leave the room to the tabs.
+inline void DrawMusicButtons(Canvas& c, int x, int y, int w, int h, float u)
+{
+    MusicBar& m = Music();
+    Glass::Round(c, x, y, w, h, h * 0.5f, Menu::GlassRow, 0x3DFFFFFF, 1.0f * u);
+    const int gap = w / 3, cy = y + h / 2, cxB = x + gap / 2, cxP = x + gap * 3 / 2, cxN = x + gap * 5 / 2;
+    m.bx[0] = cxB; m.bx[1] = cxP; m.bx[2] = cxN; m.by = cy; m.bs = gap / 2;
+    const int pr = (int)(h * 0.34f), sr = (int)(h * 0.27f);
+    const uint32_t ink = Glass::ButtonInk(), inkOff = (ink & 0x00FFFFFFu) | 0x66000000u;
+    Glass::Surface(c, 3, cxB - sr, cy - sr, 2 * sr, 2 * sr, (float)sr, Glass::Button());
+    Glass::Surface(c, 3, cxN - sr, cy - sr, 2 * sr, 2 * sr, (float)sr, Glass::Button());
+    Glass::Surface(c, 3, cxP - pr, cy - pr, 2 * pr, 2 * pr, (float)pr, Glass::Button());
+    Glass::DrawIcon(c, m.playing ? Glass::I_PAUSE : Glass::I_PLAY, cxP + (m.playing ? 0 : h * 0.03f), cy, h * 0.16f, ink);
+    Glass::DrawIcon(c, Glass::I_PREV, cxB, cy, h * 0.15f, m.canPrev ? ink : inkOff);
+    Glass::DrawIcon(c, Glass::I_NEXT, cxN, cy, h * 0.15f, m.canNext ? ink : inkOff);
 }
 // The sidebar layout's music player: a square at the foot of the sidebar, the album art filling it, the song over the
 // art's darkened foot and the controls under that.
@@ -6591,7 +6632,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         tool(2, searchX, searchW, searchL, icn ? Glass::I_SEARCH : -1);
         tool(3, sortX, sortW, icn ? std::string() : sortL, icn ? Glass::I_SORT : Glass::I_LAYERS);
         // NOW PLAYING along the top (Launcher > Music Player > Top): between the tabs and Search / Sort.
-        if ((Look().music == "top" || ShortNow()) && !pnl && Music().shown && !Music().idle)
+        if (ShortNow() && Music().shown && !Music().idle) { const int mw = 3 * (int)(bh * 0.9f); DrawMusicButtons(c, searchX - (int)(10 * u) - mw, by, mw, bh, u); }
+        else if ((Look().music == "top" || ShortNow()) && !pnl && Music().shown && !Music().idle)
         {
             const int mx = sp.tabX[last] + sp.tabW[last] + (int)(10 * u) + bh + (int)(14 * u), avail = searchX - (int)(14 * u) - mx;
             if (avail >= (int)(200 * u)) { const int mw = std::min(avail, (int)(400 * u)); DrawMusicBar(c, mx + (avail - mw) / 2, by, mw, bh, u); }

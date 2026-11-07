@@ -2159,15 +2159,15 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     if (held) break;
                 }
                 // The ROMs, Hub and Launcher lists: a finger dragged up or down scrolls them (the chosen row stays where the list was put).
-                if (Launcher::Glassy(canvas) && !guide && (Launcher::Focus().page == Launcher::SIDE_ROMS || Launcher::Focus().page == Launcher::SIDE_HUB || Launcher::Focus().page == Launcher::SIDE_LAUNCHER) && Launcher::Focus().rVis > 0)
+                if (Launcher::Glassy(canvas) && !guide && (Launcher::Focus().page == Launcher::SIDE_ROMS || Launcher::Focus().page == Launcher::SIDE_HUB || Launcher::Focus().page == Launcher::SIDE_LAUNCHER || Launcher::Focus().page == Launcher::SIDE_ABOUT) && Launcher::Focus().rVis > 0)
                 {
                     static bool lsOn = false; static int lsY = 0, lsS = 0;
                     Launcher::GlassFocus& LF = Launcher::Focus();
-                    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) { lsOn = mx >= LF.pX && mx < LF.pX + LF.pW && my >= LF.pY; lsY = my; lsS = LF.rScroll; dragging = false; }
+                    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) { const bool ab = LF.page == Launcher::SIDE_ABOUT; lsOn = ab ? (mx >= LF.abX && mx < LF.abX + LF.abW && my >= LF.pY) : (mx >= LF.pX && mx < LF.pX + LF.pW && my >= LF.pY); lsY = my; lsS = LF.rScroll; dragging = false; }
                     else if (e.type == SDL_MOUSEMOTION && lsOn)
                     {
                         if (!dragging && std::abs(my - lsY) > 8 * s) dragging = true;
-                        if (dragging) { LF.freeScroll = true; LF.rScroll = std::max(0, lsS - (my - lsY) / std::max(1, LF.pRow)); break; }
+                        if (dragging) { LF.freeScroll = true; LF.rScroll = std::max(0, lsS - (my - lsY) / std::max(1, LF.page == Launcher::SIDE_ABOUT ? LF.abRow : LF.pRow)); break; }
                     }
                     else if (e.type == SDL_MOUSEBUTTONUP && lsOn) { lsOn = false; if (dragging) { dragging = pressed = false; break; } }
                 }
