@@ -2804,6 +2804,8 @@ int main(int argc, char** argv)
         int battleList = -1, battleBag = -1, battleChoice = -1, battleYesNo = -1;
         int battleYesNoPoll = -1;
         int setupSingle = -1, setupDouble = -1, setupTriple = -1, setupRotation = -1;
+        std::vector<int> setupOther; // the other kinds of battle (multi, link), where named
+        int fieldmap = -1;           // the overworld, every frame
         int save = -1, saveWrite = -1;
         std::vector<int> levelUpWin; // the level-up window in a battle (BtlvCore_Wait*LevelUp*)
         int battleTarget = -1;       // choosing a move's target (double, triple, rotation battles)
@@ -2858,6 +2860,10 @@ int main(int argc, char** argv)
         bw2.setupDouble = bw2Find("BtlMain_SetupAloneDouble");
         bw2.setupTriple = bw2Find("BtlMain_SetupAloneTriple");
         bw2.setupRotation = bw2Find("BtlMain_SetupAloneRotation");
+        for (const char* f : { "BtlMain_SetupAloneMulti", "BtlMain_SetupCommSingle", "BtlMain_SetupCommDouble",
+                               "BtlMain_SetupCommTriple", "BtlMain_SetupCommRotation" })
+            bw2.setupOther.push_back(bw2Find(f));
+        bw2.fieldmap = bw2Find("FieldmapProc_Update");
         bw2.save = bw2Find("EventSave_Callback");       // SAVE from the X menu, until it is done
         // Waits for the save memory: while the game writes its save it does nothing else, for
         // over a second, not even the overworld (see the save layout).
@@ -3390,6 +3396,12 @@ int main(int argc, char** argv)
                     seen = funcWatch.LastFrame(setups[k]);
                     kind = k == 0 ? 1 : 2;
                 }
+            for (int f : bw2.setupOther)
+                if (funcWatch.LastFrame(f) > seen) { seen = funcWatch.LastFrame(f); kind = 2; }
+            // A setup from before the overworld last ran was an earlier battle's: this one started
+            // some other way (Black and White's multi battles, with a partner, have no named setup)
+            // and is told by its boxes below, not taken for the last battle's kind (GitHub #112).
+            if (kind && funcWatch.LastFrame(bw2.fieldmap) > seen) kind = 0;
             if (!kind && screens && screens[0].flags)
             {
                 // Not seen: a single battle has one box at each of these places.
