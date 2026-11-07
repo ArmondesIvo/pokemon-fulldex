@@ -4518,11 +4518,11 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     GlassFocus& F = Focus();
     const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
     const int barH = sp.tabsY * 2 + sp.tabsH;
-    const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)(18 * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : c.h - (int)(64 * u);
+    const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)(18 * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : c.h - (int)((ShortNow() ? 14 : 64) * u); // (a phone sideways: the panels run to the foot of the screen, the back button is in the bar)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
     GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_UPDATES ? "Updates" : F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
-    GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
+    if (!ShortNow()) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
     {
         const std::vector<Game>& roms = RomList();
@@ -4894,7 +4894,14 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             }
         }
 #endif
-        const int na = (int)acts.size(), ah = (int)(44 * u), ag = (int)(6 * u);
+        const int na = (int)acts.size();
+        int ah = (int)(44 * u), ag = (int)(6 * u);
+        if (ShortNow() && na > 0)
+        {
+            // (A phone sideways: the writing above can run long, so the buttons give way, down to a smaller size, instead of lying over it.)
+            const int room = bottom - (int)(18 * u) - (y + (int)(8 * u));
+            if (na * ah + (na - 1) * ag > room) { ag = (int)(4 * u); ah = std::max((int)(30 * u), (room - (na - 1) * ag) / na); }
+        }
         const int ay = bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag;
         const std::string word = !t.msg.empty() ? t.msg : s.note;
         if (!word.empty())
@@ -5737,7 +5744,14 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #else
         para("Moving Pok\xC3\xA9mon is not in this build of Fulldex.", hint, 14 * u);
 #endif
-        const int na = (int)acts.size(), ah = (int)(44 * u), ag = (int)(6 * u);
+        const int na = (int)acts.size();
+        int ah = (int)(44 * u), ag = (int)(6 * u);
+        if (ShortNow() && na > 0)
+        {
+            // (A phone sideways: the writing above can run long, so the buttons give way, down to a smaller size, instead of lying over it.)
+            const int room = bottom - (int)(18 * u) - (y + (int)(8 * u));
+            if (na * ah + (na - 1) * ag > room) { ag = (int)(4 * u); ah = std::max((int)(30 * u), (room - (na - 1) * ag) / na); }
+        }
         const int ay = bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag;
         if (!m.msg.empty())
         {
@@ -5924,7 +5938,14 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             y += (int)(48 * u);
         }
         // What can be done (and the last word, above it).
-        const int na = (int)acts.size(), ah = (int)(44 * u), ag = (int)(6 * u);
+        const int na = (int)acts.size();
+        int ah = (int)(44 * u), ag = (int)(6 * u);
+        if (ShortNow() && na > 0)
+        {
+            // (A phone sideways: the writing above can run long, so the buttons give way, down to a smaller size, instead of lying over it.)
+            const int room = bottom - (int)(18 * u) - (y + (int)(8 * u));
+            if (na * ah + (na - 1) * ag > room) { ag = (int)(4 * u); ah = std::max((int)(30 * u), (room - (na - 1) * ag) / na); }
+        }
         const int ay = bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag;
         if (!msg.empty())
         {
@@ -6617,7 +6638,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     BackRect().s = 0;
     if (ShortNow() && Focus().page >= 0)
     {
-        const int bs = (int)(34 * u), bx = c.w - (int)(16 * u) - bs, by = c.h - (int)(12 * u) - bs;
+        const int bs = (int)(34 * u), bx = c.w - (int)(16 * u) - bs;
+        const int by = (int)((sp.pageTitleY > 0 ? (float)sp.pageTitleY : (sp.tabsY * 2 + sp.tabsH) * 0.5f) - bs * 0.5f); // (in the top bar, right)
         Glass::Round(c, bx, by, bs, bs, bs * 0.5f, 0x40000000u, 0x80FFFFFFu, 1.5f * u);
         Glass::DrawIcon(c, Glass::I_BACK, bx + bs * 0.5f, by + bs * 0.5f, 9 * u, text);
         BackRect() = { bx, by, bs };
