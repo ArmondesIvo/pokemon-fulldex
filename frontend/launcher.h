@@ -6554,14 +6554,28 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     {
         // The Tiles home's pages: over the home, dimmed, in a window.
         drawCarousel(); drawTiles();
-        // (The window follows the theme: its dim is the Background's Dim, its fill the Panels colour once that is changed; the usual dark otherwise.)
+        // (The window is the launcher's own glass: inside it the theme's Background, so its boxes and rows take the Panels, Buttons and
+        // Accent as on the other homes; outside it the home dimmed by the Background's Dim.)
         const int dimA = std::min(255, (int)(0xB0 * (0.5f + Look().dim / 20.0f)));
-        uint32_t winFill = 0xF2161A22u;
-        if (Look().op[1] >= 0 || LookRgb(1) != 0xFFFFFFu)
-            winFill = Glass::Over(winFill, (uint32_t)(Look().op[1] >= 0 ? LookOpacity(1) * 255 / 100 : 0x99) << 24 | (LookRgb(1) & 0xFFFFFFu));
         Glass::Round(c, 0, 0, c.w, c.h, 0, (uint32_t)dimA << 24);
         Glass::Shadow(c, sp.winX, sp.winY, sp.winW, sp.winH, 22 * u, 24 * u, 0x80);
-        Glass::Round(c, sp.winX, sp.winY, sp.winW, sp.winH, 22 * u, winFill, 0x4DFFFFFFu, 1.5f * u);
+        {
+            const std::vector<uint32_t> keep = c.px;
+            solid = Glass::Backdrop(c);
+            const int wr = (int)(22 * u), wx0 = sp.winX, wx1 = sp.winX + sp.winW - 1, wy0 = sp.winY, wy1 = sp.winY + sp.winH - 1;
+            for (int py = 0; py < c.h; py++)
+                for (int px = 0; px < c.w; px++)
+                {
+                    bool in = px >= wx0 && px <= wx1 && py >= wy0 && py <= wy1;
+                    if (in)
+                    {
+                        const int dx = std::max(0, std::max(wx0 + wr - px, px - (wx1 - wr))), dy = std::max(0, std::max(wy0 + wr - py, py - (wy1 - wr)));
+                        in = dx * dx + dy * dy <= wr * wr;
+                    }
+                    if (!in) c.px[(size_t)py * c.w + px] = keep[(size_t)py * c.w + px];
+                }
+            Glass::Round(c, sp.winX, sp.winY, sp.winW, sp.winH, 22 * u, 0x28000000u, 0x4DFFFFFFu, 1.5f * u);
+        }
         DrawPage(c, sp, solid, u);
     }
     base = c.px;
