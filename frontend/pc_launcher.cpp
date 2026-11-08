@@ -667,6 +667,42 @@ static std::string PickSaveFile(SDL_Window* window)
 }
 #endif
 
+#ifdef _WIN32
+// SAVES FOLDER on Windows: the system's folder picker.
+#include <shlobj.h>
+static std::string PickFolder(SDL_Window* window)
+{
+    typedef PIDLIST_ABSOLUTE(WINAPI * BrowseFn)(LPBROWSEINFOW);
+    typedef BOOL(WINAPI * PathFn)(PCIDLIST_ABSOLUTE, LPWSTR);
+    typedef HRESULT(WINAPI * InitFn)(LPVOID, DWORD);
+    typedef void(WINAPI * FreeFn)(LPVOID);
+    static HMODULE shell = LoadLibraryW(L"shell32.dll"), ole = LoadLibraryW(L"ole32.dll");
+    BrowseFn browse = shell ? (BrowseFn)GetProcAddress(shell, "SHBrowseForFolderW") : nullptr;
+    PathFn path = shell ? (PathFn)GetProcAddress(shell, "SHGetPathFromIDListW") : nullptr;
+    InitFn init = ole ? (InitFn)GetProcAddress(ole, "CoInitializeEx") : nullptr;
+    FreeFn freeMem = ole ? (FreeFn)GetProcAddress(ole, "CoTaskMemFree") : nullptr;
+    if (!browse || !path) return std::string();
+    if (init) init(nullptr, COINIT_APARTMENTTHREADED);
+    BROWSEINFOW bi = {};
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (SDL_GetWindowWMInfo(window, &info)) bi.hwndOwner = info.info.win.window;
+    bi.lpszTitle = L"Choose the folder for your saves (they are copied there)";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    PIDLIST_ABSOLUTE id = browse(&bi);
+    if (!id) return std::string();
+    wchar_t dir[MAX_PATH * 2] = L"";
+    const bool ok = path(id, dir);
+    if (freeMem) freeMem(id);
+    if (!ok) return std::string();
+    const int n = WideCharToMultiByte(CP_UTF8, 0, dir, -1, nullptr, 0, nullptr, nullptr);
+    std::string out(n > 0 ? n : 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, dir, -1, &out[0], n, nullptr, nullptr);
+    if (!out.empty() && out.back() == '\0') out.pop_back();
+    return out;
+}
+#endif
+
 #include "save_backups.h"
 
 // The Updates page: the updater's state, as the list draws it (Android: its own, in Java).
@@ -914,6 +950,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     if (const char* dd = getenv("SSR_LIST_DIALOG")) { Launcher::Focus().dialog = atoi(dd); Launcher::Focus().text = "My HeartGold Run"; if (Launcher::Focus().dialog == 16) Launcher::OpenSortMenu(""); }
     if (Launcher::Focus().dialog == 9) Launcher::OpenTabMenu(tab); // (test: 9 the shown tab's menu)
     if (const char* nt = getenv("SSR_LIST_NOTE")) note = nt; // (test: a message showing)
+    if (const char* cs = getenv("SSR_TEST_COPYSAVES")) { std::string said; const int n = Launcher::CopySavesTo(fo.saves, cs, said); fprintf(stderr, "test: copysaves %d %s\n", n, said.c_str()); } // (test: SAVES FOLDER's copy)
     // (Tests: SSR_LIST_SAVES=game[,slot]: Manage Saves open on it; SSR_LIST_SAVESDO=row:n or slot:n, that done.)
     if (const char* sv = getenv("SSR_LIST_SAVES"))
     {
@@ -1199,6 +1236,27 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             const int made = Shortcuts::Make(fo.dir, games, where);
             page.items[page.selected].values[0].second =
                 games.empty() ? "NO GAMES YET" : made > 0 ? std::to_string(made) + " MADE " + where : "FAILED: " + where;
+            return;
+        }
+#endif
+#if !defined(__ANDROID__) && !defined(SSR_IOS)
+        // SAVES FOLDER: a folder of the player's own (copied into, nothing replaced), used from the next start; again: back beside the ROMs.
+        if (key && !strcmp(key, "!saves_folder"))
+        {
+            std::string& shown = page.items[page.selected].values[0].second;
+            if (!Launcher::ConfigValue(fo.cfg, "saves_folder").empty()) { SetConfigValues(fo.cfg, { { "saves_folder", "" } }); shown = "BESIDE THE ROMS FROM THE NEXT START"; return; }
+#ifdef _WIN32
+            const std::string dir = PickFolder(window);
+            if (dir.empty()) return;
+            std::string said;
+            const int copied = Launcher::CopySavesTo(fo.saves, dir, said);
+            if (copied < 0) { shown = said; return; }
+            SetConfigValues(fo.cfg, { { "saves_folder", dir } });
+            fprintf(stderr, "[launcher] saves folder: %s (%d files copied from %s)\n", dir.c_str(), copied, fo.saves.c_str());
+            shown = std::to_string(copied) + " FILES COPIED: USED FROM THE NEXT START";
+#else
+            shown = "SET SAVES_FOLDER= IN SETTINGS.CFG";
+#endif
             return;
         }
 #endif
@@ -2739,7 +2797,10 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         {
             raPoll();
             for (Launcher::Setting& it : page.items)
+            {
                 if (it.key && !strcmp(it.key, "!ra_login") && !it.values.empty()) it.values[0].second = raAccountShown();
+                if (it.key && !strcmp(it.key, "!saves_folder") && !it.values.empty() && it.values[0].second == "BESIDE THE ROMS") { const std::string sf = Launcher::ConfigValue(fo.cfg, "saves_folder"); if (!sf.empty()) it.values[0].second = sf; }
+            }
             if (Launcher::Glassy(canvas))
             {
                 // (The pause menu's glass settings pages, ui_settings.h, over the chosen game's picture blurred.)
@@ -3107,6 +3168,13 @@ bool Start(int& argc, char**& argv)
     fo.roms = fo.dir + "/roms";
     fo.saves = fo.dir + "/saves";
     fo.cfg = fo.dir + "/settings.cfg";
+    // SAVES FOLDER (the settings): a folder of the player's own, when it is there.
+    if (const std::string sf = Launcher::ConfigValue(fo.cfg, "saves_folder"); !sf.empty())
+    {
+        std::error_code ec;
+        if (std::filesystem::is_directory(std::filesystem::u8path(sf), ec)) { fo.saves = sf; fprintf(stderr, "[launcher] saves folder %s (the settings)\n", sf.c_str()); }
+        else fprintf(stderr, "[launcher] saves folder %s is not there: the one beside the ROMs is used\n", sf.c_str());
+    }
     fo.art = fo.dir;
     MakeDir(fo.roms);
     MakeDir(fo.saves);
@@ -3124,6 +3192,7 @@ bool Start(int& argc, char**& argv)
     }
     if (freopen(logPath.c_str(), "w", stderr)) setvbuf(stderr, nullptr, _IOLBF, 0);
     fprintf(stderr, "[launcher] folder %s\n", fo.dir.c_str());
+    if (fo.saves != fo.dir + "/saves") fprintf(stderr, "[launcher] saves folder %s\n", fo.saves.c_str()); // (SAVES FOLDER, or the phone's ROM folder)
 
 #ifdef SSR_GBA
     for (int i = 1; i < argc; i++)

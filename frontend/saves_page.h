@@ -538,6 +538,31 @@ inline bool SavesLoadBmp(const std::string& path, Glass::Picture& p)
     return true;
 }
 
+// SAVES FOLDER (the settings, desktops): everything in the saves folder copied into the one chosen, nothing
+// there replaced. The number of files copied, or -1 (said: why).
+inline int CopySavesTo(const std::string& from, const std::string& to, std::string& said)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (to.empty() || from.empty()) { said = "NO FOLDER CHOSEN"; return -1; }
+    const fs::path a = fs::weakly_canonical(fs::u8path(from), ec), b = fs::weakly_canonical(fs::u8path(to), ec);
+    if (a == b) { said = "THAT IS THE SAVES FOLDER ALREADY"; return -1; }
+    const std::string as = a.u8string(), bs = b.u8string();
+    if (bs.size() > as.size() && bs.compare(0, as.size(), as) == 0) { said = "CHOOSE A FOLDER OUTSIDE THE SAVES FOLDER"; return -1; }
+    fs::create_directories(b, ec);
+    if (ec) { said = "CANNOT MAKE THAT FOLDER"; return -1; }
+    int n = 0;
+    for (fs::recursive_directory_iterator it(a, ec), end; !ec && it != end; it.increment(ec))
+    {
+        const fs::path rel = fs::relative(it->path(), a, ec), dst = b / rel;
+        if (it->is_directory(ec)) { fs::create_directories(dst, ec); ec.clear(); continue; }
+        if (!it->is_regular_file(ec) || fs::exists(dst, ec)) { ec.clear(); continue; }
+        fs::copy_file(it->path(), dst, ec);
+        if (ec) { said = "COULD NOT COPY " + rel.u8string(); return -1; }
+        n++;
+    }
+    return n;
+}
 inline std::vector<std::string> WrapLines(const std::string& msg0, float px, int w, bool bold); // (below)
 // The page, in DrawPage's place for the Hub's page 3.
 inline void DrawSavesPage(Canvas& c, bool solid, float u, int L, int R, int top, int bottom)

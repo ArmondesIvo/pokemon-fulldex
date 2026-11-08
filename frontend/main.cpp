@@ -9236,7 +9236,9 @@ int main(int argc, char** argv)
             // so fast forward stays on. Menus, text boxes, battles and games without field detection keep the rule.)
             const bool freeWalk = pokeActions.Supported() && (pokeActions.Flags() & PK_NDS_FIELD_SCREEN) &&
                                   !(pokeActions.Flags() & (PK_NDS_FIELD_LOCKED | PK_NDS_FIELD_TEXT | PK_NDS_FIELD_MENU));
-            if (speed > 1 && dirs && !freeWalk && now - dirSince < 250) speed = 1;
+            // (FAST FORWARD turned on in the menu stays on whatever is pressed (#111): the quarter second is for
+            // fast forward held on its button, where a quick tap in a menu would otherwise move two or three places.)
+            if (speed > 1 && dirs && !freeWalk && !fastLock && now - dirSince < 250) speed = 1;
         }
         prevPad = ps;
 

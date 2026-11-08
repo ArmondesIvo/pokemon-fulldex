@@ -2501,9 +2501,12 @@ inline HubState& Hub() { static HubState h; return h; }
 struct HubGame { std::string name, path; const Game* g; };
 // (A game's other folder as the old list wrote it, "IN BLACK2": just the folder.)
 inline std::string WhereName(const std::string& w) { return w.rfind("IN ", 0) == 0 ? w.substr(3) : w; }
+// (A platform whose saves are not where the list found the game: its own answer, e.g. the Switch's saves folder.)
+inline std::function<std::string(const Game&)>& PlatformSavePath() { static std::function<std::string(const Game&)> f; return f; }
 inline std::string HubSavePath(const Game& g)
 {
     if (g.platform == GBA) return g.folder + "/" + g.saveName;
+    if (PlatformSavePath()) return PlatformSavePath()(g);
 #ifdef __SWITCH__
     return g.folder + "/" + g.saveName;
 #else
@@ -7571,6 +7574,11 @@ inline std::vector<Setting> SettingsList()
                   "CHECKS GITHUB FOR A NEW VERSION. CHOOSE AGAIN TO INSTALL IT: IT IS CHECKED AGAINST THE RELEASE SHA256SUMS.TXT "
                   "AND THE OLD VERSION IS KEPT IN THE UPDATE FOLDER. YOUR ROMS / SAVES AND SETTINGS STAY AS THEY ARE." });
 #endif
+#if !defined(__ANDROID__) && !defined(__SWITCH__) && !defined(SSR_IOS)
+    l.push_back({ "!saves_folder", "SAVES FOLDER", { { "", "BESIDE THE ROMS" } }, "",
+                  "WHERE YOUR SAVES ARE KEPT. CHOOSE A FOLDER OF YOUR OWN: YOUR SAVES AND FULLDEX FILES ARE COPIED THERE (NOTHING THERE IS REPLACED / THE OLD FOLDER STAYS AS IT IS) "
+                  "AND FULLDEX USES IT FROM ITS NEXT START. A FOLDER DROPBOX OR ONEDRIVE OR SYNCTHING KEEPS IN SYNC WORKS TOO. CHOOSE AGAIN TO GO BACK TO THE FOLDER BESIDE THE ROMS." });
+#endif
     l.push_back({ "!releases", "RELEASE PAGE", { { "", "OPEN" } }, "",
                   "OPENS THE LIST OF RELEASES ON GITHUB: THE CHANGES IN EACH VERSION, AND THE DOWNLOADS." });
     l.push_back({ nullptr, "RELEASE NOTES", {}, "",
@@ -7732,6 +7740,7 @@ inline int GroupOf(const Setting& s)
 {
     if (s.key && (!strcmp(s.key, "!updates") || !strcmp(s.key, "!releases"))) return 8;
     if (s.key && !strcmp(s.key,"!favourite")) return 6;
+    if (s.key && !strcmp(s.key, "!saves_folder")) return 6; // (GAME LIST)
     if (!s.key) return !strcmp(s.name, "KEYS AND BUTTONS") ? 3 : !strcmp(s.name, "RELEASE NOTES") ? 8 : 7;
     if (!strncmp(s.key,"extra_",6)) return 9;
     if (!strcmp(s.key, "list_lang")) return 0;

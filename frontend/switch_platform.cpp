@@ -56,6 +56,7 @@ void ExitTraceIn(const std::string& dir);
 namespace
 {
 std::vector<std::string> g_args;
+static std::string SavePath(const Launcher::Game& g); // (below: a DS game's save in its folder's saves folder)
 std::vector<char*> g_argv;
 // A test run from test.txt (testrun.h), and the .nro to start again for the next one.
 TestRun::State g_test;
@@ -1273,6 +1274,8 @@ static std::string SavePathFor(const Launcher::Game& g, const std::string& name)
     return g.folder + "/saves/" + name;
 }
 static std::string SavePath(const Launcher::Game& g) { return SavePathFor(g, g.saveName); }
+// (Cloud saves and the Hub sync and move this one: the save the game really reads.)
+static const bool g_hubSavePath = (Launcher::PlatformSavePath() = [](const Launcher::Game& g) { return SavePath(g); }, true);
 
 // The games to choose from: rom.nds, or the ROMs in the program's folder (and its roms/ folder);
 // in the all-games program also those in the other folders of /switch (the one-game programs'
@@ -1620,7 +1623,7 @@ bool Start(int& argc, char**& argv)
         fprintf(stderr, "[switch] GBA: %s, saves in %s\n", game.rom.c_str(), game.folder.c_str());
         // (Cloud saves: a newer save comes down first; the save goes up when the game closes.)
         const std::string cfgAt = SettingsPath(dir);
-        CloudAuto::Start(cfgAt.substr(0, cfgAt.find_last_of('/')), game.folder + "/" + game.saveName);
+        CloudAuto::Start(cfgAt.substr(0, cfgAt.find_last_of('/')), Launcher::HubSavePath(game)); // (the save the game reads: its saves folder)
         const u64 gbaStart = armGetSystemTick();
         GbaRa::Play(game.rom, o, SettingsPath(dir));
         PlayTime::Add(cfgAt.substr(0, cfgAt.find_last_of('/')), (long long)(armTicksToNs(armGetSystemTick() - gbaStart) / 1000000000ULL));
