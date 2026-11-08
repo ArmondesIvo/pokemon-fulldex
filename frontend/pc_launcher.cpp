@@ -639,6 +639,34 @@ static std::string PickZipFile(SDL_Window* window)
 }
 #endif
 
+#ifdef _WIN32
+// Manage Saves' Import Save on Windows: the system's file picker for a save.
+static std::string PickSaveFile(SDL_Window* window)
+{
+    typedef BOOL(WINAPI * OpenFn)(LPOPENFILENAMEW);
+    static HMODULE dll = LoadLibraryW(L"comdlg32.dll");
+    OpenFn open = dll ? (OpenFn)GetProcAddress(dll, "GetOpenFileNameW") : nullptr;
+    if (!open) return std::string();
+    wchar_t file[1024] = L"";
+    OPENFILENAMEW o = {};
+    o.lStructSize = sizeof o;
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (SDL_GetWindowWMInfo(window, &info)) o.hwndOwner = info.info.win.window;
+    o.lpstrFilter = L"Saves (SAV, DSV)\0*.sav;*.dsv\0All files\0*.*\0\0";
+    o.lpstrFile = file;
+    o.nMaxFile = 1024;
+    o.lpstrTitle = L"Choose a save to import";
+    o.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!open(&o)) return std::string();
+    const int n = WideCharToMultiByte(CP_UTF8, 0, file, -1, nullptr, 0, nullptr, nullptr);
+    std::string out(n > 0 ? n : 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, file, -1, &out[0], n, nullptr, nullptr);
+    if (!out.empty() && out.back() == '\0') out.pop_back();
+    return out;
+}
+#endif
+
 #include "save_backups.h"
 
 // The Updates page: the updater's state, as the list draws it (Android: its own, in Java).
@@ -886,6 +914,32 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     if (const char* dd = getenv("SSR_LIST_DIALOG")) { Launcher::Focus().dialog = atoi(dd); Launcher::Focus().text = "My HeartGold Run"; if (Launcher::Focus().dialog == 16) Launcher::OpenSortMenu(""); }
     if (Launcher::Focus().dialog == 9) Launcher::OpenTabMenu(tab); // (test: 9 the shown tab's menu)
     if (const char* nt = getenv("SSR_LIST_NOTE")) note = nt; // (test: a message showing)
+    // (Tests: SSR_LIST_SAVES=game[,slot]: Manage Saves open on it; SSR_LIST_SAVESDO=row:n or slot:n, that done.)
+    if (const char* sv = getenv("SSR_LIST_SAVES"))
+    {
+        const int gi = atoi(sv);
+        if (gi >= 0 && gi < (int)games.size())
+        {
+            Launcher::OpenSaves(games[gi], fo.saves + "/" + games[gi].saveName);
+            if (const char* k = strchr(sv, ',')) Launcher::Focus().pact = atoi(k + 1);
+            if (const char* all = getenv("SSR_LIST_SAVESDO"))
+            {
+                // (Several, between |: row:n, slot:n, pick:<what a dialog row does>.)
+                std::string rest = all;
+                while (!rest.empty())
+                {
+                    const size_t bar = rest.find('|');
+                    const std::string d = rest.substr(0, bar);
+                    rest = bar == std::string::npos ? std::string() : rest.substr(bar + 1);
+                    if (!d.compare(0, 4, "row:")) { Launcher::Focus().prow = atoi(d.c_str() + 4); Launcher::SavesEnter(atoi(d.c_str() + 4)); }
+                    else if (!d.compare(0, 5, "slot:")) { Launcher::Focus().pact = atoi(d.c_str() + 5); Launcher::SavesSlotDo(atoi(d.c_str() + 5)); }
+                    else if (!d.compare(0, 5, "pick:")) Launcher::SavesPick(d.substr(5));
+                    fprintf(stderr, "test: saves %s: %s (request %s)\n", d.c_str(), Launcher::Saves().msg.c_str(), Launcher::Saves().request.c_str());
+                    Launcher::Saves().request.clear();
+                }
+            }
+        }
+    }
     // (SSR_LIST_ITEM=n: the chosen game's menu row n chosen at once, for test pictures of its dialogs.)
     const char* testItem = listsShown == 1 ? getenv("SSR_LIST_ITEM") : nullptr;
     // (The game chosen last, if it is in that tab; else the tab's first. The games are in the
@@ -1176,6 +1230,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
         }
     };
+    std::function<void()> savesRequestFn; // (savesRequest, below: what Manage Saves leaves to do)
     auto choose = [&]() {
         if (guide && onBack)
         {
@@ -1259,7 +1314,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     // (The Hub: A on the list goes to the chosen row's actions; on those, does it.)
                     if (F.pact < 0)
                     {
-                        if (Launcher::HubEnter(F.prow)) return;
+                        if (Launcher::HubEnter(F.prow)) { if (savesRequestFn) savesRequestFn(); return; }
                         if (!Launcher::HubActions(F.prow).empty()) F.pact = 0;
                         else if (Launcher::HubTop() && F.prow == 3 && SDL_OpenURL(Launcher::kDiscordUrl) != 0) fprintf(stderr, "[launcher] could not open Discord: %s\n", SDL_GetError());
                         return;
@@ -1308,34 +1363,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (item == 3 && valid) { F.dialog = 4; F.drow = 0; return; }
                 if (item == 4 && valid)
                 {
-                    // Manage Saves: the newest backups (save_backups.h), the saves folder, close.
-                    const Launcher::Game& g = games[selected];
-                    if (g.saveName.empty()) { note = "THIS GAME'S SAVES CANNOT BE MANAGED HERE YET"; return; }
-                    const std::string save = fo.saves + "/" + g.saveName;
-                    const auto list = SaveBackups::List(save);
-                    std::error_code ec;
-                    const bool has = std::filesystem::exists(std::filesystem::u8path(save), ec);
-                    static const char* months[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
-                    F.dTitle = "Manage Saves";
-                    F.dMsg = !has ? "There is no save for this game yet."
-                           : list.empty() ? "Fulldex backs up this save every time the game starts. There are no backups yet."
-                                          : "Fulldex backs up this save every time the game starts. Choose one to go back to it.";
-                    F.dItems.clear();
-                    F.dPaths.clear();
-                    for (size_t k = 0; k < list.size() && k < 5; k++)
-                    {
-                        // (2026-11-04 12:44:55 as Restore 4 Nov 2026, 12:44)
-                        const std::string& l = list[k].label;
-                        const int m = std::max(1, std::min(12, atoi(l.substr(5, 2).c_str())));
-                        F.dItems.push_back("Restore " + std::to_string(atoi(l.substr(8, 2).c_str())) + " " + months[m - 1] + " " + l.substr(0, 4) + ", " + l.substr(11, 5));
-                        F.dPaths.push_back(list[k].path);
-                    }
-                    F.dItems.push_back("Open Saves Folder");
-                    F.dPaths.push_back("#folder");
-                    F.dItems.push_back("Close");
-                    F.dPaths.push_back("#close");
-                    F.dialog = 5;
-                    F.drow = 0;
+                    // Manage Saves: the game's saves on a page of their own (saves_page.h).
+                    Launcher::OpenSaves(games[selected], fo.saves + "/" + games[selected].saveName);
                     return;
                 }
                 if (item >= 2) { if (valid) note = Launcher::PopupLabel(games[selected], item) + ": COMING SOON"; return; }
@@ -1376,6 +1405,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             // (A ROM not yet checked is, now: a hack plays with a save of its own.)
             Launcher::ConfirmHack(games, (size_t)selected, fo.saves,
                                   [](const Launcher::Game& g, const std::string& name) { return g.folder + "/" + name; });
+            if (Launcher::SavesPlayCheck(games[selected], fo.saves + "/" + games[selected].saveName)) return; // (a save with a problem: says so first)
             note = PrepareLaunch(games[selected]);
             if (!note.empty()) { fprintf(stderr, "[launcher] launch blocked: %s: %s\n", games[selected].rom.c_str(), note.c_str()); return; }
             result = selected;
@@ -1534,6 +1564,34 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     int kbLayer = 0;
     auto kbBuild = [&]() { Launcher::BuildKeyboard(kb, kbIds, Launcher::Focus().text, kbLayer, Launcher::KbPrompt(), Launcher::KbDone()); };
     auto dialogClose = [&]() { Launcher::Focus().dialog = 0; kb.open = false; SDL_StopTextInput(); };
+    // What Manage Saves leaves for the platform (saves_page.h): a folder opened, or the game
+    // started from a state (Play From Slot, Play Anyway).
+    auto savesRequest = [&]() {
+        std::string q;
+        std::swap(q, Launcher::Saves().request);
+        if (q.rfind("#folder:", 0) == 0)
+        {
+#ifdef __ANDROID__
+            note = "SAVES ARE IN " + q.substr(8);
+#else
+            OpenFolder(q.substr(8));
+#endif
+        }
+        else if (q.rfind("#play:", 0) == 0 || q == "#replay")
+        {
+            int idx = -1;
+            for (size_t i = 0; i < games.size(); i++) if (games[i].rom == Launcher::Saves().rom) idx = (int)i;
+            if (idx < 0) { note = "THAT GAME IS NOT IN THE LIST ANY MORE"; return; }
+            if (q != "#replay") Launcher::PlayState() = q.substr(6);
+            Launcher::GlassFocus& G = Launcher::Focus();
+            Launcher::HubMode() = 0; G.page = -1; G.side = -1; G.banner = 0; G.pact = -1;
+            selected = idx; follow = true;
+            G.popup = 0; // (Play, as the game's menu does it)
+            choose();
+            if (!quit) Launcher::PlayState().clear(); // (not started: no state left over for the next game)
+        }
+    };
+    savesRequestFn = savesRequest;
     auto dialogAct = [&]() {
         Launcher::GlassFocus& F = Launcher::Focus();
         const bool noGame = selected < 0 || selected >= (int)games.size();
@@ -1607,6 +1665,22 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (pick.rfind("#open:", 0) == 0 && SDL_OpenURL(pick.c_str() + 6) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", pick.c_str() + 6, SDL_GetError());
             dialogClose();
             if (pick == "#quit") quit = true; // (Quit Fulldex?: yes)
+            return;
+        }
+        if (F.dialog == 17 || F.dialog == 18)
+        {
+            // (Manage Saves' dialogs: saves_page.h does them, then the platform's part.)
+            const std::string pick = F.drow >= 0 && F.drow < (int)F.dPaths.size() ? F.dPaths[F.drow] : std::string("#close");
+            if (pick == "#pick")
+            {
+                dialogClose();
+#ifdef _WIN32
+                const std::string path = PickSaveFile(window);
+                if (!path.empty()) Launcher::SavesPick("#import:" + path);
+#endif
+            }
+            else Launcher::SavesPick(pick);
+            savesRequest();
             return;
         }
         if (F.dialog >= 5)
@@ -2270,7 +2344,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                         Launcher::GlassFocus& RF = Launcher::Focus();
                         const int a = Launcher::RomActionAt(mx, my), r = Launcher::RomRowAt(mx, my);
                         if (a >= 0) { RF.side = -1; RF.pact = a; choose(); }
-                        else if (r >= 0) { const bool again = RF.page == Launcher::SIDE_HUB && Launcher::HubTop() && RF.prow == r && RF.side < 0; RF.side = -1; RF.pact = -1; RF.prow = r; if (again) choose(); }
+                        else if (r >= 0) { const bool again = RF.page == Launcher::SIDE_HUB && (Launcher::HubTop() || Launcher::HubMode() == 3) && RF.prow == r && RF.side < 0; RF.side = -1; RF.pact = -1; RF.prow = r; if (again) choose(); }
                         break;
                     }
                     if (Launcher::Focus().page == Launcher::SIDE_LAUNCHER)
@@ -3186,6 +3260,9 @@ bool Start(int& argc, char**& argv)
     g_args = { argc > 0 && argv[0] ? argv[0] : "pokemon-ds-wide", game.rom, "--save", fo.saves + "/" + game.saveName,
                "--config", fo.cfg };
     if (game.hack) g_args.push_back("--rom-hack"); // (says once that widescreen is tried on it)
+    // (Play From Slot, Manage Saves: the game starts from that state.)
+    if (!Launcher::PlayState().empty() && game.platform == Launcher::DS && StateSlots::Exists(Launcher::PlayState())) { g_args.push_back("--state-load"); g_args.push_back(Launcher::PlayState()); }
+    Launcher::PlayState().clear();
     // (Tests: SSR_TEST_ARGS, more arguments for the game chosen, e.g. "--frames 600".)
     if (const char* extra = getenv("SSR_TEST_ARGS"))
     {

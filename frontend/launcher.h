@@ -45,6 +45,8 @@
 #include <set>
 #include "support_qr.h"
 #include "play_time.h"
+#include "state_slots.h"
+#include "save_backups.h"
 #ifdef SSR_POKEMON_HUB
 #include "pokemon_hub.h"
 #include "companion_rom.h"
@@ -3170,8 +3172,18 @@ inline void DrawCloud(Canvas& c, float cx, float cy, float s, uint32_t col)
     Glass::Round(c, (int)(cx - s * 0.15f), (int)(cy - s * 0.8f), (int)(s * 1.0f), (int)(s * 1.0f), s * 0.5f, col);
 }
 // A on the Hub's first page: Cloud Saves or Move Pokémon opened. (False: not that page.)
+// (Manage Saves, the Hub's page 3: saves_page.h, below.)
+inline bool SavesEnter(int row);
+inline int SavesRows();
+inline std::string SavesSlotDo(int slot);
+inline bool SavesDs();
+inline bool SavesBack();
+inline bool SavesMove(int dir);
+inline int SavesSlotAt(int x, int y);
+inline std::string SavesTitle();
 inline bool HubEnter(int row)
 {
+    if (HubMode() == 3 && !Mover().open) return SavesEnter(row);
     if (Mover().open || HubMode() != 0) return false;
     GlassFocus& F = Focus();
     if (row == 0) { HubMode() = 1; F.prow = 0; }
@@ -4257,11 +4269,12 @@ inline int ThemePick(const std::string& pick)
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
 static const char* const kReleasesUrl = "https://github.com/mamesj/pokemon-fulldex/releases";
-inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 4 : HubMode() == 2 ? TradeRows() : HUB_FIRST + (int)HubGames().size(); }
+inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 4 : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
     if (Mover().open) return MoverActions(row);
     if (HubMode() == 2) return TradeActions(row);
+    if (HubMode() == 3) return SavesDs() ? std::vector<std::string>(10, "Slot") : std::vector<std::string>(); // (Manage Saves: its slots)
     if (HubMode() == 0) return {};
     HubLoad();
     const std::vector<HubGame> games = HubGames();
@@ -4377,6 +4390,7 @@ inline std::string HubDo(int row, int act)
 {
     if (Mover().open) return MoverDo(row, act);
     if (HubMode() == 2) return TradeDo(row, act);
+    if (HubMode() == 3) return SavesSlotDo(act);
     const std::vector<std::string> acts = HubActions(row);
     if (act < 0 || act >= (int)acts.size()) return "";
     const std::string a = acts[act];
@@ -4497,6 +4511,8 @@ inline void OpenSupportAsk()
     F.dItems = { "Buy Me A Coffee", "PayPal", "Close" };
     F.dPaths = { "#open:https://buymeacoffee.com/mamesj", "#open:https://paypal.me/mamesj", "#close" };
 }
+#include "saves_page.h"
+inline std::string SavesTitle() { return LauncherText::Tr("Manage Saves") + "   \xC2\xB7   " + Saves().name; }
 inline int PageRows(int page) { return page == SIDE_LAUNCHER ? LauncherRows() : page == SIDE_ABOUT ? 5 : page == SIDE_ROMS ? std::max(1, (int)RomList().size()) : page == SIDE_HUB ? HubRows() : 0; }
 // The cards of the About page that open a page when tapped, as drawn (cleared each frame it is drawn).
 struct AboutLink { int x, y, w, h; const char* url; };
@@ -4559,6 +4575,7 @@ inline bool PageMove(int dir)
     if (F.page == SIDE_ROMS || F.page == SIDE_HUB)
     {
         // (The list, and right of it the chosen row's actions: a ROM's, or the Hub's.)
+        if (F.page == SIDE_HUB && HubMode() == 3 && !Mover().open && SavesMove(dir)) return true; // (Manage Saves: its slots, a grid)
         const int n = F.page == SIDE_HUB ? HubRows() : (int)RomList().size();
         const int na = F.page == SIDE_HUB ? (int)HubActions(F.prow).size() : RomActions();
         if (F.pact >= 0)
@@ -4610,6 +4627,7 @@ inline bool PageBack()
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 5) { LauncherMode() = 0; F.prow = 3; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Gallery: back to its menu)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 3) { LauncherMode() = 2; F.prow = 2; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Library: back to My Themes)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMode() == 1 ? 1 : 2; LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
+    if (F.page == SIDE_HUB && F.side < 0 && HubMode() == 3 && !Mover().open) return SavesBack(); // (Manage Saves: off a slot, then the games)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
@@ -4666,6 +4684,7 @@ inline int RomRowAt(int x, int y)
 inline int RomActionAt(int x, int y)
 {
     const GlassFocus& f = Focus();
+    if (f.page == SIDE_HUB && HubMode() == 3 && !Mover().open) return SavesSlotAt(x, y); // (Manage Saves' slots)
     if ((f.page != SIDE_ROMS && f.page != SIDE_HUB) || f.aW <= 0 || f.aRow <= 0 || x < f.aX || x >= f.aX + f.aW || y < f.aY) return -1;
     const int i = (y - f.aY) / f.aRow;
     return i < (f.page == SIDE_HUB ? (int)HubActions(f.prow).size() : RomActions()) ? i : -1;
@@ -4809,7 +4828,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const int barH = portP ? (int)(44 * u) : sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)((portP ? 10 : 18) * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : PhoneLook() && c.h > c.w && sp.navY > 0 ? sp.navY - (int)(12 * u) : c.h - (int)((ShortNow() ? 14 : 64) * u); // (a phone sideways: the panels run to the foot of the screen, the back button is in the bar)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
-    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : "Hub") : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     if (!ShortNow() && !portP) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -4942,7 +4961,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             }
             // What can be done with it.
             const int na = RomActions(), ah = (int)(44 * u), ag = (int)(6 * u);
-            const int ay = bottom - (int)(18 * u) - na * ah - (na - 1) * ag;
+            const int ay = std::max(bottom - (int)(18 * u) - na * ah - (na - 1) * ag, PhoneLook() && c.h > c.w ? y + (int)(10 * u) : 0); // (upright: under the writing, the panel scrolling to them)
             F.aX = ix; F.aY = ay; F.aW = iw; F.aRow = ah + ag;
             const std::string labels[2] = { g.hidden ? "Show In List Again" : "Hide From List", "Open Folder" };
             const int icons[2] = { Glass::I_GRID, Glass::I_LOAD };
@@ -5224,7 +5243,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             const int room = bottom - (int)(18 * u) - (y + (int)(8 * u));
             if (na * ah + (na - 1) * ag > room) { ag = (int)(4 * u); ah = std::max((int)(30 * u), (room - (na - 1) * ag) / na); }
         }
-        const int ay = bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag;
+        const int ay = std::max(bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag, PhoneLook() && c.h > c.w ? y + (int)(10 * u) : 0); // (upright: under the writing, the panel scrolling to them)
         const std::string word = !t.msg.empty() ? t.msg : s.note;
         if (!word.empty())
         {
@@ -5773,6 +5792,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #endif
         return;
     }
+    if (F.page == SIDE_HUB && !Mover().open && HubMode() == 3) { DrawSavesPage(c, solid, u, L, R, top, bottom); return; } // (Manage Saves)
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 0)
     {
         // The Hub's first page: what it holds, each opened with A.
@@ -6121,7 +6141,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             const int room = bottom - (int)(18 * u) - (y + (int)(8 * u));
             if (na * ah + (na - 1) * ag > room) { ag = (int)(4 * u); ah = std::max((int)(30 * u), (room - (na - 1) * ag) / na); }
         }
-        const int ay = bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag;
+        const int ay = std::max(bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag, PhoneLook() && c.h > c.w ? y + (int)(10 * u) : 0); // (upright: under the writing, the panel scrolling to them)
         if (!m.msg.empty())
         {
             const std::vector<std::string> ml = WrapLines(m.msg, 13 * u, iw);
@@ -6319,7 +6339,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             const int room = bottom - (int)(18 * u) - (y + (int)(8 * u));
             if (na * ah + (na - 1) * ag > room) { ag = (int)(4 * u); ah = std::max((int)(30 * u), (room - (na - 1) * ag) / na); }
         }
-        const int ay = bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag;
+        const int ay = std::max(bottom - (int)(18 * u) - na * ah - std::max(0, na - 1) * ag, PhoneLook() && c.h > c.w ? y + (int)(10 * u) : 0); // (upright: under the writing, the panel scrolling to them)
         if (!msg.empty())
         {
             const std::vector<std::string> ml = WrapLines(msg, 13 * u, iw);
@@ -6734,7 +6754,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             const int mg = cmp ? (int)(7 * u) : (int)(16 * u);
             const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + mg, rw = sp.sideW - 2 * mg;
             const int fs = Focus().side;
-            const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == (Focus().page >= 0 ? Focus().page : (int)SIDE_HOME);
+            const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == (Focus().page >= 0 && !(Focus().page == SIDE_HUB && HubMode() == 3) ? Focus().page : (int)SIDE_HOME);
             const bool lit = fs >= 0 ? i == fs : settingsChosen && i == SIDE_SETTINGS; // (chosen with the arrows)
             if (on)
             {
@@ -6797,7 +6817,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         for (int i = 0; i < SIDES; i++)
         {
             const int x = sp.secX[i], y = sp.secYv[i], w = sp.secW[i], h = sp.secH, r = (int)(16 * u);
-            const bool foc = Focus().page < 0 && Focus().side == i, cur = i == (Focus().page >= 0 ? Focus().page : (int)SIDE_HOME);
+            const bool foc = Focus().page < 0 && Focus().side == i, cur = i == (Focus().page >= 0 && !(Focus().page == SIDE_HUB && HubMode() == 3) ? Focus().page : (int)SIDE_HOME);
             if (foc) { Glass::Glow(c, x, y, w, h, r, u); Glass::Round(c, x, y, w, h, r, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u); }
             else if (cur) Glass::Surface(c, 3, x, y, w, h, r, Glass::Button());
             const uint32_t ink = cur && !foc ? Glass::ButtonInk() : text;
@@ -6811,7 +6831,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         for (int i = 0; i < SIDES; i++)
         {
             const int x = sp.secX[i], w = sp.secW[i], py = sp.navY + (int)(5 * u), ph = sp.navH - (int)(10 * u);
-            const bool foc = Focus().page < 0 && Focus().side == i, cur = i == (Focus().page >= 0 ? Focus().page : (int)SIDE_HOME);
+            const bool foc = Focus().page < 0 && Focus().side == i, cur = i == (Focus().page >= 0 && !(Focus().page == SIDE_HUB && HubMode() == 3) ? Focus().page : (int)SIDE_HOME);
             if (foc) { Glass::Glow(c, x, py, w, ph, 14 * u, u); Glass::Round(c, x, py, w, ph, 14 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u); }
             else if (cur) Glass::Surface(c, 3, x, py, w, ph, 14 * u, Glass::Button());
             const uint32_t ink = cur && !foc ? Glass::ButtonInk() : text;
@@ -7173,6 +7193,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             const int ph = n * rowH + (n - 1) * rg + 2 * pad;
             int px = cx + grid.cw + (int)(12 * u);
             if (px + pw > c.w - (int)(28 * u)) px = cx - (int)(12 * u) - pw;
+            px = std::max((int)(12 * u), std::min(px, c.w - (int)(12 * u) - pw)); // (upright: no room beside the card, so over it, never off the screen)
             const int py = std::max((int)(28 * u), std::min(cyy, c.h - (int)(82 * u) - ph));
             Focus().popX = px + pad; Focus().popY = py + pad; Focus().popW = pw - 2 * pad; Focus().popRow = rowH + rg;
             // (The rest of the screen dimmed, and the blurred background put back under the menu so
@@ -7225,7 +7246,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             msg = "This deletes " + (sl == std::string::npos ? g.rom : g.rom.substr(sl + 1)) + " from your folder. Your saves are kept.";
             rows = { "Delete ROM File", "Cancel" }; red = 0;
         }
-        else if (F.dialog >= 5) { title = F.dTitle; msg = F.dMsg; rows = F.dItems; red = F.dialog == 6 ? 0 : -1; }
+        else if (F.dialog >= 5) { title = F.dTitle; msg = F.dMsg; rows = F.dItems; red = F.dialog == 6 || F.dialog == 18 ? 0 : -1; }
         else if (F.dialog == 4) { title = "Change Picture"; msg = "Pictures stay on this device. Only use pictures you have permission to use."; rows = { "Import A Picture", "Find Artwork Online", "Plain Card", "Restore Original", "Cancel" }; }
         else { title = "Rename " + ShortName(own); msg = "Type a new name. Leave it empty to go back to the game's own name."; rows = { "Save", "Cancel" }; }
         const int pw = std::min((int)(560 * u), c.w - (int)(24 * u)), pad = (int)(24 * u), rowH = (int)(48 * u), rg = (int)(8 * u), fieldH = (int)(52 * u);
