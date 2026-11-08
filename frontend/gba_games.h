@@ -40,6 +40,7 @@ inline void Add(const std::string& roms, const std::string& saves, std::vector<L
         g.name = l.name;
         g.saveName = l.key + ".sav";
         g.known = true; // (any GBA game plays: with widescreen when it is one of these)
+        g.hack = l.hack;
         g.hasSave = l.hasSave;
         auto it = artCache.find(g.rom);
         if (it == artCache.end())

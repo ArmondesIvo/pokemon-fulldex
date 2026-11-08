@@ -293,7 +293,7 @@ void ExtractFuncs(const Folders& fo)
 bool Playable(const Folders& fo, const Launcher::Game& g)
 {
     if (g.platform == Launcher::GBA) return true; // (any GBA game plays, with widescreen or without)
-    if (!g.known) return false;
+    if (!g.known || !g.problem.empty()) return false;
     if (IsGame(g.code, "IPGE") || IsGame(g.code, "IPKE")) return rc_num_chunks > 0 && rc_portable_knows(g.code.c_str());
     return Exists(fo.funcs + "/" + g.code + ".txt");
 }
@@ -430,11 +430,37 @@ void TakeInbox(const Folders& fo)
     }
 }
 
+// Where the ROM hacks made from patch files go: hacks/ in the program's folder (not saves/, which
+// cloud saves copy, nor the ROM folder, which a phone may not let it write in).
+std::string HacksFolder(const Folders& fo)
+{
+    return (fo.dir.empty() ? std::string(".") : fo.dir) + "/hacks";
+}
+
 // The ROMs in the roms folder (and any left beside the program), their saves in saves/.
 std::vector<Launcher::Game> FindGames(const Folders& fo, std::map<std::string, std::vector<uint32_t>>& artCache)
 {
     std::vector<Launcher::Game> games;
     std::set<std::string> seen;
+    // (Each DS ROM checked against the clean releases, in the background the first time: a hack
+    // gets a save of its own. romhacks.h)
+    Launcher::BeginScan(fo.saves);
+    // A picture of the player's own (icons/IREO.jpg, or Black 2.jpg beside Black 2.nds), read once.
+    auto artFor = [&](Launcher::Game& g) {
+        auto it = artCache.find(g.rom);
+        if (it == artCache.end())
+        {
+            Launcher::FindArt(g, fo.art);
+#ifdef SSR_PC_ART
+            // Without one, the picture built into the program (SSR_PC_ART), if any (a hack: its game's).
+            size_t size = 0;
+            if (g.art.empty())
+                if (const unsigned char* data = BuiltInArt(g.code.c_str(), size)) Launcher::LoadArt(data, size, g.art);
+#endif
+            it = artCache.emplace(g.rom, g.art).first;
+        }
+        g.art = it->second;
+    };
     for (const std::string& dir : { fo.roms, fo.dir })
     {
         if (dir.empty()) continue;
@@ -452,24 +478,18 @@ std::vector<Launcher::Game> FindGames(const Folders& fo, std::map<std::string, s
             if (canonicalError || !seen.insert(canonical).second) continue;
             Launcher::Game g;
             if (!Launcher::ReadGame(dir + "/" + n, fo.saves, g)) continue;
-            // A picture of the player's own (icons/IREO.jpg, or Black 2.jpg beside Black 2.nds),
-            // read once.
-            auto it = artCache.find(g.rom);
-            if (it == artCache.end())
-            {
-                Launcher::FindArt(g, fo.art);
-#ifdef SSR_PC_ART
-                // Without one, the picture built into the program (SSR_PC_ART), if any.
-                size_t size = 0;
-                if (g.art.empty())
-                    if (const unsigned char* data = BuiltInArt(g.code.c_str(), size)) Launcher::LoadArt(data, size, g.art);
-#endif
-                it = artCache.emplace(g.rom, g.art).first;
-            }
-            g.art = it->second;
+            artFor(g);
             games.push_back(std::move(g));
         }
     }
+    // ROM hacks as patch files (.xdelta, .bps, .ups) beside the ROMs: each made once into hacks/.
+    {
+        const size_t before = games.size();
+        Launcher::AddPatchedHacks({ fo.roms, fo.dir }, HacksFolder(fo), fo.saves, games, false);
+        for (size_t i = before; i < games.size(); i++) artFor(games[i]);
+        Launcher::AdoptHackSaves(games, [](const Launcher::Game& g, const std::string& name) { return g.folder + "/" + name; });
+    }
+    Launcher::EndScan();
 #ifdef SSR_GBA
     // The GBA games in the roms folder (saves in saves/: emerald.sav ...), in a GBA folder inside
     // it, and loose in the app folder. On iPhone the Files app shows that folder, and a ROM
@@ -959,6 +979,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         if (games.empty() || selected < 0 || selected >= (int)games.size()) return;
         if (Playable(fo, games[selected]))
         {
+            // (A ROM not yet checked is, now: a hack plays with a save of its own.)
+            Launcher::ConfirmHack(games, (size_t)selected, fo.saves,
+                                  [](const Launcher::Game& g, const std::string& name) { return g.folder + "/" + name; });
             note = PrepareLaunch(games[selected]);
             if (!note.empty()) { fprintf(stderr, "[launcher] launch blocked: %s: %s\n", games[selected].rom.c_str(), note.c_str()); return; }
             result = selected;
@@ -966,6 +989,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         }
         else
             note = games[selected].comingSoon ? games[selected].name + ": COMING SOON"
+                 : !games[selected].problem.empty() ? "PATCH: " + games[selected].problem
                  : games[selected].known ? "THIS DOWNLOAD DOES NOT HAVE THIS GAME" : "THIS GAME IS NOT ONE THAT THIS PLAYS";
     };
     auto move = [&](int dir) { // 1 left, 2 right, 3 up, 4 down
@@ -1925,12 +1949,10 @@ bool Start(int& argc, char**& argv)
     int winW = 1280, winH = 720;
     bool fullscreen = ConfigFullscreen(fo.cfg, winW, winH);
     int directGame = -1;
+    // (The game itself, not a hack of it: a shortcut is for the game.)
     for (size_t i = 0; i < games.size() && !direct.empty(); i++)
-        if (games[i].code == direct && Playable(fo, games[i]))
-        {
+        if (games[i].code == direct && Playable(fo, games[i]) && (directGame < 0 || (games[directGame].hack && !games[i].hack)))
             directGame = (int)i;
-            break;
-        }
     if (!direct.empty() && directGame < 0) fprintf(stderr, "[launcher] --game %s: not in the list\n", direct.c_str());
     if (!directRom.empty())
     {
@@ -2009,8 +2031,10 @@ bool Start(int& argc, char**& argv)
         break;
     }
     g_canChange = true;
+    Launcher::ConfirmHack(games, (size_t)chosen, fo.saves,
+                          [](const Launcher::Game& g, const std::string& name) { return g.folder + "/" + name; });
     const Launcher::Game& game = games[chosen];
-    if (const Launcher::KnownGame* k = Launcher::Known(game.code)) g_name = k->name;
+    if (const Launcher::KnownGame* k = Launcher::Known(game.code)) g_name = game.hack ? Launcher::TitleCase(game.name) : k->name;
     if (FILE* f = fopen(lastPath.c_str(), "w"))
     {
         fprintf(f, "%s\n", game.rom.c_str());
@@ -2020,6 +2044,18 @@ bool Start(int& argc, char**& argv)
         game.saveName.c_str());
     g_args = { argc > 0 && argv[0] ? argv[0] : "pokemon-ds-wide", game.rom, "--save", fo.saves + "/" + game.saveName,
                "--config", fo.cfg };
+    if (game.hack) g_args.push_back("--rom-hack"); // (says once that widescreen is tried on it)
+    // (Tests: SSR_TEST_ARGS, more arguments for the game chosen, e.g. "--frames 600".)
+    if (const char* extra = getenv("SSR_TEST_ARGS"))
+    {
+        std::string a;
+        for (const char* c = extra;; c++)
+        {
+            if (*c && *c != ' ') a += *c;
+            else if (!a.empty()) { g_args.push_back(a); a.clear(); }
+            if (!*c) break;
+        }
+    }
 #ifndef SSR_IOS
     // (melonDS's JIT; iOS lets no app make code as it runs, so there the interpreter plays.)
     g_args.push_back("--jit");
