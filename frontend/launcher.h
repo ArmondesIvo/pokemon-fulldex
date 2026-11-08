@@ -1291,7 +1291,7 @@ inline Grid Layout(const Canvas& c)
         g.top = (int)(304 * u); g.bottom = c.h - (int)(82 * u);
         if (PhoneLook())
         {
-            // A phone. Upright: two columns of cards under the banner, down; sideways: one row of cards under it, along.
+            // A phone. Upright: two columns of cards under the banner; sideways: rows of smaller cards under it. Both scroll down.
             g.labelH = 0; g.headH = 0;
             if (c.h > c.w)
             {
@@ -1303,9 +1303,10 @@ inline Grid Layout(const Canvas& c)
             else
             {
                 g.panelX = (int)(74 * u); g.panelW = c.w - g.panelX - (int)(14 * u); g.gap = (int)(14 * u);
-                g.top = (int)(196 * u); g.tile = (int)(190 * u); g.cw = g.tile + (int)(16 * u); g.ch = g.tile + (int)(38 * u); g.bottom = g.top + g.ch;
+                // (Rows that scroll down, as on every other screen: they went along in one row.)
+                g.top = (int)(196 * u); g.tile = (int)(150 * u); g.cw = g.tile + (int)(16 * u); g.ch = g.tile + (int)(38 * u); g.bottom = c.h - (int)(10 * u);
                 g.cols = std::max(1, (g.panelW + g.gap) / (g.cw + g.gap)); g.gx = g.panelX; g.colStep = g.cw + g.gap; g.rowStep = g.ch + g.gap;
-                g.horiz = true;
+                g.horiz = false;
             }
             return g;
         }
