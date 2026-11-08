@@ -864,6 +864,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     }
     // (SSR_LIST_DIALOG=n: a dialog open, for the test picture: 1 Remove Game, 2 Delete, 3 Rename.)
     if (const char* dd = getenv("SSR_LIST_DIALOG")) { Launcher::Focus().dialog = atoi(dd); Launcher::Focus().text = "My HeartGold Run"; if (Launcher::Focus().dialog == 16) Launcher::OpenSortMenu(""); }
+    if (Launcher::Focus().dialog == 9) Launcher::OpenTabMenu(tab); // (test: 9 the shown tab's menu)
+    if (const char* nt = getenv("SSR_LIST_NOTE")) note = nt; // (test: a message showing)
     // (SSR_LIST_ITEM=n: the chosen game's menu row n chosen at once, for test pictures of its dialogs.)
     const char* testItem = listsShown == 1 ? getenv("SSR_LIST_ITEM") : nullptr;
     // (The game chosen last, if it is in that tab; else the tab's first. The games are in the

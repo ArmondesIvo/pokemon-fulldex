@@ -7090,12 +7090,15 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         else if (F.dialog >= 5) { title = F.dTitle; msg = F.dMsg; rows = F.dItems; red = F.dialog == 6 ? 0 : -1; }
         else if (F.dialog == 4) { title = "Change Picture"; msg = "Pictures stay on this device. Only use pictures you have permission to use."; rows = { "Import A Picture", "Find Artwork Online", "Plain Card", "Restore Original", "Cancel" }; }
         else { title = "Rename " + ShortName(own); msg = "Type a new name. Leave it empty to go back to the game's own name."; rows = { "Save", "Cancel" }; }
-        const int pw = (int)(560 * u), pad = (int)(24 * u), rowH = (int)(48 * u), rg = (int)(8 * u), fieldH = (int)(52 * u);
+        const int pw = std::min((int)(560 * u), c.w - (int)(24 * u)), pad = (int)(24 * u), rowH = (int)(48 * u), rg = (int)(8 * u), fieldH = (int)(52 * u);
         std::vector<std::string> lines;
         {
             std::string line, word;
-            auto flush = [&]() { if (!word.empty()) { const std::string t = line.empty() ? word : line + " " + word; if (!line.empty() && GW(t, 15 * u, false) > pw - 2 * pad) { lines.push_back(line); line = word; } else line = t; word.clear(); } };
-            for (char ch : msg) { if (ch == ' ') flush(); else word += ch; }
+            const int avail = pw - 2 * pad;
+            auto flush = [&]() { if (!word.empty()) { const std::string t = line.empty() ? word : line + " " + word; if (!line.empty() && GW(t, 15 * u, false) > avail) { lines.push_back(line); line = word; } else line = t; word.clear();
+                while (GW(line, 15 * u, false) > avail) { size_t cut = 0, i = 0; while (i < line.size()) { size_t j = i + 1; while (j < line.size() && ((unsigned char)line[j] & 0xC0) == 0x80) j++; if (cut > 0 && GW(line.substr(0, j), 15 * u, false) > avail) break; cut = j; i = j; } if (cut == 0 || cut >= line.size()) break; lines.push_back(line.substr(0, cut)); line = line.substr(cut); } } };
+            const std::string tmsg = LauncherText::Tr(msg); // (the player's language first: then the lines are cut where its words are)
+            for (char ch : tmsg) { if (ch == ' ') flush(); else word += ch; }
             flush();
             if (!line.empty()) lines.push_back(line);
         }
@@ -7166,9 +7169,21 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         if (!note.empty())
         {
             const std::string n = CleanFont::Title(UiLang::Tr(note));
-            const int w = (int)(26 * u) + GW(n, 16 * u, true), x0 = bx + bw - w;
-            Glass::DrawIcon(c, Glass::I_INFO, x0 + 9 * u, cy, 9 * u, text);
-            GT(c, x0 + (int)(26 * u), cy, n, 16 * u, text, true);
+            const bool up = c.h > c.w && sp.navY > 0; // (upright: its own bar over the sections, not on them)
+            const int room = up ? c.w - 2 * sp.navX - (int)(66 * u) : bw - (int)(26 * u);
+            float fp = 16 * u;
+            while (fp > 11 * u && GW(n, fp, true) > room) fp -= 0.5f * u;
+            const int tw = std::min(room, GW(n, fp, true)), w = (int)(26 * u) + tw;
+            int x0 = bx + bw - w;
+            float ny = cy;
+            if (up)
+            {
+                const int ph = (int)(40 * u), py = sp.navY - (int)(10 * u) - ph;
+                x0 = (c.w - w) / 2; ny = py + ph * 0.5f;
+                Glass::Round(c, x0 - (int)(16 * u), py, w + (int)(32 * u), ph, ph * 0.5f, 0xE6101418u, 0x3DFFFFFFu, 1.0f * u);
+            }
+            Glass::DrawIcon(c, Glass::I_INFO, x0 + 9 * u, ny, 9 * u, text);
+            GTFit(c, x0 + (int)(26 * u), ny, n, fp, tw + 1, text, true);
         }
         else if (c.h <= c.w && !ShortNow()) // (not upright or a phone sideways: it is a touch screen)
         {
