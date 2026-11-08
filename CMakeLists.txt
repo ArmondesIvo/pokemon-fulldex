@@ -102,8 +102,14 @@ file(GLOB_RECURSE SSR_RCHEEVOS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/frontend/thi
 add_library(rcheevos STATIC ${SSR_RCHEEVOS_SOURCES})
 target_include_directories(rcheevos PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/frontend/thirdparty/rcheevos/include")
 
+# ROM hacks' xdelta patches (frontend/romhacks.h): their LZMA2-compressed sections, with the LZMA
+# SDK's decoder (public domain; frontend/thirdparty/lzma, as mGBA carries it).
+add_library(romhacks_lzma OBJECT frontend/romhacks_lzma.c frontend/thirdparty/lzma/LzmaDec.c frontend/thirdparty/lzma/Lzma2Dec.c)
+target_include_directories(romhacks_lzma PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/frontend/thirdparty/lzma")
+
 set(SSRECOMP_SOURCES
     frontend/main.cpp
+    $<TARGET_OBJECTS:romhacks_lzma>
     frontend/achievements.cpp
     frontend/achievements_http.cpp
     frontend/cloud_saves.cpp

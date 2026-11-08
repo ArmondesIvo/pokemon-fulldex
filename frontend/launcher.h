@@ -30,6 +30,7 @@
 #include <dirent.h>
 #include "ssr_os.h"
 #include "gamecode.h"
+#include "romhacks.h"
 #include <sys/stat.h>
 
 #include "ui.h"
@@ -263,6 +264,12 @@ struct Game
     // (The ROMs page: taken off the list (fulldex-hidden.txt); the file's size.)
     bool hidden = false;
     long long fileSize = 0;
+    // A ROM hack (romhacks.h): a modified ROM of a game this plays, with a save of its own (named
+    // after its file) rather than the game's (baseSave). Widescreen is tried on it as on the game.
+    bool hack = false;
+    std::string baseSave;
+    // A patch file that could not be made into a game: why (shown, and it cannot be played).
+    std::string problem;
 };
 
 inline std::string& ContinueRom() { static std::string r; return r; } // the game played last (last-game.txt)
@@ -393,10 +400,56 @@ inline int PopupAt(int x, int y)
     const int i = (y - f.popY) / f.popRow;
     return i < PopupCount() ? i : -1;
 }
-// A romhack: a GBA game that is not one of the official ones by its code (Ultra Violet, ...). (DS
-// hacks keep their game's code: they will be told apart by the ROMs page's checks.)
+// What the list found out about the ROMs and patches (a whole DS ROM is read to tell a clean one
+// from a hack), kept between looks in a file of the saves folder: BeginScan before reading the
+// ROMs, EndScan after. Without BeginScan no ROM is checked (a one-game program's rom.nds).
+inline RomHacks::Cache*& ScanCache()
+{
+    static RomHacks::Cache* cache = nullptr;
+    return cache;
+}
+// (Tests: SSR_ROM_CHECK_WAIT=1 waits for each check while looking, so that a first look, e.g.
+// SSR_LIST_SHOT's, shows what was found.)
+inline bool ScanWaits()
+{
+    static const bool wait = getenv("SSR_ROM_CHECK_WAIT") && *getenv("SSR_ROM_CHECK_WAIT") == '1';
+    return wait;
+}
+inline void BeginScan(const std::string& savesFolder)
+{
+    static RomHacks::Cache cache;
+    cache = RomHacks::Cache();
+    RomHacks::MakeDir(savesFolder);
+    cache.Load(savesFolder + "/rom-check.txt");
+    ScanCache() = &cache;
+}
+inline void EndScan()
+{
+    if (ScanCache()) ScanCache()->Save();
+    ScanCache() = nullptr;
+}
+// A hack's (or another ROM's) save, from its file name: hack-blaze-black-2-redux.sav (never the
+// name of a game's own save).
+inline std::string HackSave(const std::string& rom)
+{
+    std::string k;
+    for (char c : RomHacks::Lower(RomHacks::Stem(rom))) k += isalnum((unsigned char)c) ? c : '-';
+    while (k.find("--") != std::string::npos) k.erase(k.find("--"), 1);
+    if (!k.empty() && k.back() == '-') k.pop_back();
+    if (!k.empty() && k.front() == '-') k.erase(0, 1);
+    return "hack-" + (k.empty() ? std::string("game") : k) + ".sav";
+}
+inline std::string HackName(const std::string& rom)
+{
+    std::string n;
+    for (char c : RomHacks::Stem(rom)) n += c == '_' ? ' ' : (char)toupper((unsigned char)c);
+    return n.empty() ? "ROM HACK" : n;
+}
+// A romhack: a DS ROM romhacks.h found is not a clean release (hack), or a GBA game that is not one
+// of the official ones by its code (Ultra Violet, ...).
 inline bool IsHack(const Game& g)
 {
+    if (g.hack) return true; // (a DS hack: told apart from its clean game by romhacks.h)
     if (!g.known || g.comingSoon || g.platform != GBA) return false;
     const std::string c = g.code.substr(0, 3);
     return c != "AXV" && c != "AXP" && c != "BPE" && c != "BPR" && c != "BPG";
@@ -632,11 +685,19 @@ inline bool ReadGame(const std::string& rom, const std::string& folder, Game& g)
         g.known = true;
         g.name = k->name;
         g.saveName = k->save;
+        // A hack keeps its game's code: told by the ROM not being one of the clean releases.
+        if (ScanCache() && RomHacks::CheckDs(rom, g.code, *ScanCache(), ScanWaits()) == RomHacks::Kind::Modified)
+        {
+            g.hack = true;
+            g.baseSave = k->save;
+            g.name = HackName(rom);
+            g.saveName = HackSave(rom);
+        }
     }
     else
     {
         if (g.name.empty()) g.name = rom.substr(rom.find_last_of('/') + 1);
-        g.saveName = "game.sav";
+        g.saveName = HackSave(rom); // (each its own, not one game.sav for all)
     }
     for (char& c : g.name) c = (char)toupper((unsigned char)c);
     struct stat st;
@@ -885,6 +946,82 @@ inline void ScanFolder(const std::string& folder, std::vector<Game>& out, bool s
     }
 }
 
+// The DS hacks made from patch files (romhacks.h) in `folders`, put on the clean DS ROMs already in
+// `games`, made into outDir once; added to `games` (saves in savesFolder), and any patch that could
+// not be used as a game that cannot be played, saying why. Between BeginScan and EndScan. wait
+// false: a patch whose ROM is still being read (in the background) shows up on a later look.
+inline void AddPatchedHacks(const std::vector<std::string>& folders, const std::string& outDir, const std::string& savesFolder,
+                            std::vector<Game>& games, bool wait, const std::function<void(const std::string&)>& status = {})
+{
+    if (!ScanCache()) return;
+    std::vector<std::string> clean;
+    for (const Game& g : games)
+        if (g.platform == DS && g.known && !g.hack) clean.push_back(g.rom);
+    std::vector<RomHacks::Problem> problems;
+    for (const std::string& rom : RomHacks::MakeDsHacks(folders, clean, outDir, *ScanCache(), problems, wait || ScanWaits(), status))
+    {
+        bool dup = false;
+        for (const Game& g : games) dup |= g.rom == rom;
+        Game g;
+        if (!dup && ReadGame(rom, savesFolder, g)) games.push_back(g);
+    }
+    for (const RomHacks::Problem& p : problems)
+    {
+        Game g;
+        g.platform = DS;
+        g.rom = p.patch;
+        g.folder = savesFolder;
+        g.code = "PTCH";
+        g.name = HackName(p.patch);
+        g.problem = p.why;
+        games.push_back(std::move(g));
+    }
+}
+
+// A hack played before this told hacks apart used its game's save: when the game itself (a clean
+// ROM of it) isn't in the list, that save is the hack's, and is copied to the hack's own the first
+// time (the game's is left as it was). savePath: where a game's save of that name is.
+inline void AdoptHackSaves(std::vector<Game>& games, const std::function<std::string(const Game&, const std::string&)>& savePath)
+{
+    for (Game& h : games)
+    {
+        if (!h.hack || h.baseSave.empty()) continue;
+        bool cleanToo = false;
+        for (const Game& g : games) cleanToo |= g.platform == DS && !g.hack && g.known && g.code == h.code && g.folder == h.folder;
+        if (cleanToo) continue;
+        const std::string own = savePath(h, h.saveName), base = savePath(h, h.baseSave);
+        if (RomHacks::Exists(own) || !RomHacks::Exists(base)) continue;
+        if (RomHacks::CopyFile(base, own))
+        {
+            fprintf(stderr, "[launcher] %s: save %s copied to %s (its own from now on)\n", h.rom.c_str(), base.c_str(), own.c_str());
+            h.hasSave = true;
+        }
+    }
+}
+
+// Before a DS game starts: its ROM checked for certain (waiting while it is read, the first time),
+// so that a hack never plays with its game's save. games[index] is the game; cacheFolder holds
+// rom-check.txt (BeginScan's folder).
+inline void ConfirmHack(std::vector<Game>& games, size_t index, const std::string& cacheFolder,
+                        const std::function<std::string(const Game&, const std::string&)>& savePath)
+{
+    Game& g = games[index];
+    if (g.platform != DS || !g.known || g.hack) return;
+    const KnownGame* k = Known(g.code);
+    if (!k) return;
+    RomHacks::Cache cache;
+    cache.Load(cacheFolder + "/rom-check.txt");
+    const bool hack = RomHacks::CheckDs(g.rom, g.code, cache, true) == RomHacks::Kind::Modified;
+    cache.Save(false);
+    if (!hack) return;
+    g.hack = true;
+    g.baseSave = k->save;
+    g.name = HackName(g.rom);
+    g.saveName = HackSave(g.rom);
+    g.hasSave = RomHacks::Exists(savePath(g, g.saveName));
+    AdoptHackSaves(games, savePath);
+}
+
 // By console (the list's sections), then known games first, in the list's order, then the rest
 // by name.
 inline void Sort(std::vector<Game>& games)
@@ -893,6 +1030,7 @@ inline void Sort(std::vector<Game>& games)
         if (a.platform != b.platform) return a.platform < b.platform;
         const int oa = Order(a.code), ob = Order(b.code);
         if (oa != ob) return oa < ob;
+        if (a.hack != b.hack) return b.hack; // (a game, then its hacks)
         return a.name < b.name;
     });
 }
@@ -7342,10 +7480,14 @@ inline void DrawClassic(Canvas& c, const std::vector<Game>& games, int tab, int 
         // The name (shortened: POKEMON is the same for all) and the save.
         std::string name = g.name;
         if (name.rfind("POKEMON ", 0) == 0) name = name.substr(8);
-        const int ns = Canvas::TextWidth(name, s) <= tile ? s : std::max(1, s - 1);
+        int ns = Canvas::TextWidth(name, s) <= tile ? s : std::max(1, s - 1);
+        // (A hack's name is its file's, which can be long: cut to fit.)
+        if (Canvas::TextWidth(name, ns) > tile && ns > 1 && (g.hack || !g.problem.empty())) ns--;
+        while ((g.hack || !g.problem.empty()) && name.size() > 4 && Canvas::TextWidth(name, ns) > tile) name = name.substr(0, name.size() - 3) + "..";
         c.Text(x + (tile - Canvas::TextWidth(name, ns)) / 2, y + tile + 3 * s, name, ns, sel ? th.nameSel : th.name);
         if (sel && th.selBar) c.Fill(x + tile / 4, y + tile + (UiLang::Tall() ? 31 : 19) * s, tile / 2, s, th.selBar);
-        std::string sub = g.comingSoon ? "COMING SOON" : !g.known ? "NOT PLAYABLE" : g.hasSave ? "SAVE FOUND" : "NEW GAME";
+        std::string sub = g.comingSoon ? "COMING SOON" : !g.problem.empty() ? "PATCH PROBLEM" : !g.known ? "NOT PLAYABLE"
+                        : g.hack ? (g.hasSave ? "HACK: SAVE FOUND" : "HACK: NEW GAME") : g.hasSave ? "SAVE FOUND" : "NEW GAME";
         if (!g.where.empty() && g.known) sub = (g.hasSave ? "SAVE " : "NEW ") + g.where; // e.g. SAVE IN BLACK2
         if(g.favourite)c.Text(x+tile-24*s,y+4*s,"FAV",s,th.nameSel);
         const int ss = std::max(1, s * 2 / 3);

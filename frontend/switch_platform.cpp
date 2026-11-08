@@ -92,7 +92,7 @@ bool RomfsReady()
 bool Playable(const Launcher::Game& g)
 {
     if (g.platform == Launcher::GBA) return true; // (any GBA game plays, with widescreen or without)
-    if (!g.known) return false;
+    if (!g.known || !g.problem.empty()) return false;
     if (IsGame(g.code, "IPGE") || IsGame(g.code, "IPKE")) return rc_num_chunks > 0 && rc_portable_knows(g.code.c_str());
     struct stat st;
     if (stat((g.folder + "/funcs.txt").c_str(), &st) == 0) return true;
@@ -142,7 +142,7 @@ std::string InstallHomeIcons(const std::vector<Launcher::Game>& games)
     std::vector<std::string> done;
     for (const Launcher::Game& g : games)
     {
-        if (!Playable(g) || std::find(done.begin(), done.end(), g.code) != done.end()) continue;
+        if (!Playable(g) || g.hack || std::find(done.begin(), done.end(), g.code) != done.end()) continue;
         done.push_back(g.code);
         SwitchForwarder::Entry e;
         const Launcher::KnownGame* k = Launcher::Known(g.code);
@@ -1088,6 +1088,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                     break;
                 }
                 note = games[selected].comingSoon ? games[selected].name + ": COMING SOON"
+                     : !games[selected].problem.empty() ? "PATCH: " + games[selected].problem
                      : games[selected].known ? "THIS DOWNLOAD DOES NOT HAVE THIS GAME" : "THIS GAME IS NOT ONE THAT THIS PLAYS";
             }
             if (down & (HidNpadButton_Plus | (ctl.PadCustom() ? action(Controls::B) : (u64)HidNpadButton_B))) break;
@@ -1278,12 +1279,14 @@ static void MoveSavesIn(const std::string& folder)
 }
 
 // Where a DS game's save is: the saves folder of the game's folder (MoveSavesIn), made when missing.
-static std::string SavePath(const Launcher::Game& g)
+// (name: another save of the game's folder, e.g. a hack's game's: Launcher::AdoptHackSaves.)
+static std::string SavePathFor(const Launcher::Game& g, const std::string& name)
 {
-    if (!FulldexFolder(g.folder)) return g.folder + "/" + g.saveName; // (another app's folder: beside the ROM, as it was)
+    if (!FulldexFolder(g.folder)) return g.folder + "/" + name; // (another app's folder: beside the ROM, as it was)
     mkdir((g.folder + "/saves").c_str(), 0777);
-    return g.folder + "/saves/" + g.saveName;
+    return g.folder + "/saves/" + name;
 }
+static std::string SavePath(const Launcher::Game& g) { return SavePathFor(g, g.saveName); }
 
 // The games to choose from: rom.nds, or the ROMs in the program's folder (and its roms/ folder);
 // in the all-games program also those in the other folders of /switch (the one-game programs'
@@ -1301,6 +1304,13 @@ std::vector<Launcher::Game> FindGames(const std::string& dir, bool& ownFolder)
             if (x.platform == Launcher::DS) x.hasSave = stat(SavePath(x).c_str(), &st) == 0;
     };
     MoveSavesIn(dir);
+    // (Each DS ROM checked against the clean releases, in the background the first time: a hack
+    // gets a save of its own. romhacks.h)
+    Launcher::BeginScan(dir + "/saves");
+    struct EndScan
+    {
+        ~EndScan() { Launcher::EndScan(); }
+    } endScan;
     if (Launcher::ReadGame(dir + "/rom.nds", dir, g))
     {
         games = { g };
@@ -1330,6 +1340,9 @@ std::vector<Launcher::Game> FindGames(const std::string& dir, bool& ownFolder)
         }
         ownFolder = own > 0;
     }
+    // ROM hacks as patch files (.xdelta, .bps, .ups) in this folder or its roms: each made once
+    // into hacks/ (waiting here for the ROMs it needs read: the list is looked at only once).
+    Launcher::AddPatchedHacks({ dir, dir + "/roms" }, dir + "/hacks", dir, games, true);
 #ifdef SSR_GBA
     // The GBA games: in this folder's roms (their saves in saves/ with the DS games') and a GBA folder in
     // it (with that folder's saves), and in Pokemon GBA Widescreen's own folder if it is on the
@@ -1353,6 +1366,7 @@ std::vector<Launcher::Game> FindGames(const std::string& dir, bool& ownFolder)
 #endif
 #endif
     savesIn(games);
+    Launcher::AdoptHackSaves(games, SavePathFor);
     Launcher::AddComingSoon(games);
     Launcher::Sort(games);
     // The same game in two folders (two ROMs, two saves): each says where it is.
@@ -1497,12 +1511,10 @@ bool Start(int& argc, char**& argv)
     }
 #else
     int directGame = -1;
+    // (The game itself, not a hack of it: a HOME Menu icon is for the game.)
     for (size_t i = 0; i < games.size() && !direct.empty(); i++)
-        if (games[i].code == direct && Playable(games[i]))
-        {
+        if (games[i].code == direct && Playable(games[i]) && (directGame < 0 || (games[directGame].hack && !games[i].hack)))
             directGame = (int)i;
-            break;
-        }
     if (!direct.empty() && directGame < 0) fprintf(stderr, "[switch] --game %s: not in the list\n", direct.c_str());
     if (directGame >= 0)
     {
@@ -1636,6 +1648,8 @@ bool Start(int& argc, char**& argv)
         return false;
     }
 #endif
+    // (A ROM not yet checked is, now: a hack plays with a save of its own.)
+    Launcher::ConfirmHack(games, (size_t)chosen, dir + "/saves", SavePathFor);
     const Launcher::Game& game = games[chosen];
     const std::string rom = game.rom, gameDir = game.folder;
     char code[5] = {};
@@ -1650,6 +1664,7 @@ bool Start(int& argc, char**& argv)
     const std::string cfgPath = SettingsPath(dir);
     g_args = { argc > 0 && argv[0] ? argv[0] : "pokemon-ds-wide", rom, "--save", SavePath(game), "--fullscreen",
                "--config", cfgPath };
+    if (game.hack) g_args.push_back("--rom-hack"); // (says once that widescreen is tried on it)
     // A game that is not recompiled (Black, White, Black 2, White 2) comes with its function table, made on the
     // PC by tools/bw2/funcmap.py or tools/bw1/funcmap.py; its layouts follow the functions that
     // run. SoulSilver and HeartGold need none (their layouts come from their own tables, built into the program)
