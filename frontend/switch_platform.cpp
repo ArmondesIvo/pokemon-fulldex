@@ -832,7 +832,7 @@ int PickGame(const std::vector<Launcher::Game>& gamesIn, int selected, const std
                 if (bDown) F.popup = -1;
                 else if (aDown && valid)
                 {
-                    const int item = F.popup;
+                    const int item = Launcher::PopupItem(F.popup); // (the row shown -> what it does)
                     F.popup = -1;
                     const Launcher::Game& g = games[selected];
                     if (item == 0) play = true;

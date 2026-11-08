@@ -307,6 +307,9 @@ struct GlassFocus { int side = -1; int banner = 0; int popup = -1; int popX = 0,
                     std::string pageTitle; int sX = 0, sY = 0, sW = 0, sH = 0, sListW = 0, sPvX = 0, sListH = 0, sPvY = 0, pdY = 0, dScroll = 0, dMax = 0; };
 inline GlassFocus& Focus() { static GlassFocus f; return f; }
 inline int PopupCount() { return 7; }
+// The game's menu in the order shown: Play, Manage Saves, Add To Home, Rename, Change Picture, Add To
+// Tab, Remove Game (row -> what it is, PopupLabel's numbers).
+inline int PopupItem(int row) { static const int order[] = { 0, 4, 1, 2, 3, 5, 6 }; return row >= 0 && row < 7 ? order[row] : row; }
 inline std::string PopupLabel(const Game& g, int i)
 {
     static const char* n[] = { "Play", "", "Rename", "Change Picture", "Manage Saves", "Add To Tab", "Remove Game" };
@@ -7217,14 +7220,14 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             for (int i = 0; i < n; i++)
             {
                 const int ry = py + pad + i * (rowH + rg), rx = px + pad, rw = pw - 2 * pad;
-                const uint32_t ink = i == 6 ? 0xFFF2A08Au : text;
+                const uint32_t ink = PopupItem(i) == 6 ? 0xFFF2A08Au : text;
                 if (i == Focus().popup)
                 {
                     Glass::Glow(c, rx, ry, rw, rowH, 12 * u, u);
                     Glass::Round(c, rx, ry, rw, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
                 }
-                Glass::DrawIcon(c, icons[i], rx + 22 * u, ry + rowH * 0.5f, 9 * u, ink);
-                GT(c, rx + (int)(44 * u), ry + rowH * 0.5f, PopupLabel(g, i), 17 * u, ink, true);
+                Glass::DrawIcon(c, icons[PopupItem(i)], rx + 22 * u, ry + rowH * 0.5f, 9 * u, ink);
+                GT(c, rx + (int)(44 * u), ry + rowH * 0.5f, PopupLabel(g, PopupItem(i)), 17 * u, ink, true);
             }
         }
     }

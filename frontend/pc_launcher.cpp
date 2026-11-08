@@ -1411,7 +1411,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             }
             if (F.popup >= 0)
             {
-                const int item = F.popup;
+                const int item = Launcher::PopupItem(F.popup); // (the row shown -> what it does)
                 F.popup = -1;
                 if (item == 1) { toggleFavourite(); return; }
                 const bool valid = selected >= 0 && selected < (int)games.size();
