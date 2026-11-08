@@ -175,6 +175,12 @@ printf 'package io.github.mamesj.pokemonds; final class BuildInfo { static final
 for d in mdpi:48:108 hdpi:72:162 xhdpi:96:216 xxhdpi:144:324 xxxhdpi:192:432; do
     IFS=: read -r dens legacy layer <<< "$d"
     mkdir -p "$W/res/mipmap-$dens"
+    # SSR_ANDROID_ICON_RES=folder: ready-made mipmap-<dens>/ic_launcher*.png (e.g. taken from an
+    # earlier APK) copied as they are, so the icon stays exactly the same.
+    if [ -n "${SSR_ANDROID_ICON_RES:-}" ]; then
+        cp "$SSR_ANDROID_ICON_RES/mipmap-$dens/ic_launcher.png" "$SSR_ANDROID_ICON_RES/mipmap-$dens/ic_launcher_background.png" "$W/res/mipmap-$dens/"
+        continue
+    fi
     python3 - "$ICON" "$W/res/mipmap-$dens" "$legacy" "$layer" "${SSR_ANDROID_ICON_FILL:-0.7}" <<'PY'
 import sys
 from PIL import Image
