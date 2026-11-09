@@ -5753,12 +5753,13 @@ inline void PcDrawMon(Canvas& c, int species, bool shiny, bool egg, int x, int y
 #endif
     Glass::DrawIcon(c, Glass::I_POKEBALL, x + bw * 0.5f, y + bh * 0.5f, std::min(bw, bh) * 0.25f, Menu::GlassHint);
 }
-// PKVault's colours (its light theme, frontend/src/ui/base-theme.ts): cream cards and slots,
-// brown ink, terracotta for what is chosen; its type, stat and gender colours.
+// PKVault's look (frontend/src/ui/base-theme.ts) in PokeHub's green: light cards and slots, dark
+// ink, green for what is chosen (PKVault's terracotta, to the player's taste); PKVault's type, stat
+// and gender colours. (My PC, the Pokédex and the trades all use it.)
 namespace PcPal {
-constexpr uint32_t Body = 0xFFFAF6F0u, Card = 0xFFF4EAE0u, Slot = 0xFFE4DBD0u, Line = 0xFFCFC4B8u, Btn = 0xFFEDE2D8u,
-    Ink = 0xFF3A1E08u, Hint = 0xFF7B7467u, Primary = 0xFFB6634Eu, PrimaryDark = 0xFF934E3Du, PrimaryPale = 0xFFECDEDAu,
-    OnPrimary = 0xFFFAF6F0u, Shiny = 0xFFEAB000u, Male = 0xFF00C6ADu, Female = 0xFFFF4273u;
+constexpr uint32_t Body = 0xFFF5F8F0u, Card = 0xFFEAF1E2u, Slot = 0xFFDCE7D2u, Line = 0xFFC2D3B6u, Btn = 0xFFE3ECD9u,
+    Ink = 0xFF1F3520u, Hint = 0xFF697A62u, Primary = 0xFF4E8A56u, PrimaryDark = 0xFF3A6C41u, PrimaryPale = 0xFFDCEBD8u,
+    OnPrimary = 0xFFF5F8F0u, Shiny = 0xFFEAB000u, Male = 0xFF00C6ADu, Female = 0xFFFF4273u;
 // (HP, Atk, Def, Spe, SpA, SpD: the order of MonDetail's stats.)
 constexpr uint32_t Stat[6] = { 0xFF4CAF70u, 0xFFF08030u, 0xFFE0A820u, 0xFFF85888u, 0xFF6890F0u, 0xFF5FA83Bu };
 }
@@ -6130,7 +6131,7 @@ inline void PcDrawEvolution(Canvas& c, float u, int L, int R, int top, int botto
     for (int y = std::max(0, top); y < std::min(c.h, bottom); y++)
     {
         uint32_t* row = &c.px[(size_t)y * c.w];
-        for (int x = std::max(0, L); x < std::min(c.w, R); x++) { const uint32_t p = row[x]; row[x] = 0xFF000000u + (((p >> 2) & 0x3F3F3Fu) + ((p >> 3) & 0x1F1F1Fu)) + 0x080402u; }
+        for (int x = std::max(0, L); x < std::min(c.w, R); x++) { const uint32_t p = row[x]; row[x] = 0xFF000000u + (((p >> 2) & 0x3F3F3Fu) + ((p >> 3) & 0x1F1F1Fu)) + 0x040804u; }
     }
     const int w = std::min((int)(620 * u), R - L - (int)(40 * u)), h = std::min((int)(470 * u), bottom - top - (int)(40 * u));
     const int x0 = (L + R - w) / 2, y0 = (top + bottom - h) / 2;
@@ -6142,7 +6143,7 @@ inline void PcDrawEvolution(Canvas& c, float u, int L, int R, int top, int botto
     const float rad = std::min(stageW, stageH) * (0.42f + 0.12f * glow);
     // (The stage dark while it changes, as the games' is, so the white shapes stand out.)
     const float dark = t < EVO_SWAP ? t / EVO_SWAP : t < EVO_SHOWN ? 1.0f : std::max(0.0f, 1.0f - (t - EVO_SHOWN) * 2.5f);
-    Glass::Round(c, stageX, stageY, stageW, stageH, 12 * u, PcMix(PcPal::Slot, 0xFF2B1A12u, dark * 0.9f), PcPal::Line, 1.0f * u);
+    Glass::Round(c, stageX, stageY, stageW, stageH, 12 * u, PcMix(PcPal::Slot, 0xFF16261Au, dark * 0.9f), PcPal::Line, 1.0f * u);
     const float r2 = rad * rad;
     for (int y = std::max(stageY + (int)(2 * u), (int)(cy - rad)); y < std::min(stageY + stageH - (int)(2 * u), (int)(cy + rad)); y++)
     {
@@ -6152,7 +6153,7 @@ inline void PcDrawEvolution(Canvas& c, float u, int L, int R, int top, int botto
         {
             const float d2 = ((x - cx) * (x - cx) + dy2) / r2;
             if (d2 >= 1) continue;
-            row[x] = PcMix(row[x], 0xFFFFE7B0u, glow * (1 - d2) * (1 - d2) * 1.3f);
+            row[x] = PcMix(row[x], 0xFFE9F7C8u, glow * (1 - d2) * (1 - d2) * 1.3f);
         }
     }
     // The Pokémon: its picture, then the shapes swapping faster and faster, then the new one.

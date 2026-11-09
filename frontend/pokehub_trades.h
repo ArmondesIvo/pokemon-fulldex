@@ -12,14 +12,8 @@
 // Drawn in PKVault's look, as My PC: HubMode 8, from the bell.
 // (Included inside namespace Launcher, by launcher.h.)
 #ifdef SSR_POKEMON_HUB
-// (The trades' page in green, PokeHub's own, where My PC keeps PKVault's terracotta: the same
-// shades, a green for the terracotta and a little green in the creams.)
-namespace TradePal {
-constexpr uint32_t Body = 0xFFF5F8F0u, Card = 0xFFEAF1E2u, Slot = 0xFFDCE7D2u, Line = 0xFFC2D3B6u, Btn = 0xFFE3ECD9u,
-    Ink = 0xFF1F3520u, Hint = 0xFF697A62u, Primary = 0xFF4E8A56u, PrimaryDark = 0xFF3A6C41u, PrimaryPale = 0xFFDCEBD8u,
-    OnPrimary = 0xFFF5F8F0u, Shiny = PcPal::Shiny, Male = PcPal::Male, Female = PcPal::Female;
-constexpr const uint32_t* Stat = PcPal::Stat;
-}
+// (The trades' page: My PC's colours, PokeHub's green.)
+namespace TradePal = PcPal;
 inline void TradePanel(Canvas& c, int x, int y, int w, int h, float r, float u) { Glass::Round(c, x, y, w, h, r, TradePal::Card, TradePal::Line, 1.5f * u); }
 inline void TradeButton(Canvas& c, int x, int y, int w, int h, float r, bool on, float u)
 {
