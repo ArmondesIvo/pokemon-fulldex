@@ -778,7 +778,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1"); // (taps come as clicks here; the game takes fingers one by one)
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "0");
     fullscreen = true;
-    // No ROM folder yet, or no access to files: the list asks for them (GameActivity).
+    // No ROM folder yet, or no access to files: the list asks for them (GameActivity). The ROMs page
+    // has a button for it too, to choose another folder at any time.
+    Launcher::RomFolderButton() = true;
     bool needFolder = (fo.roms.empty() || !JavaBool("canUseFiles")) && !getenv("SSR_ANDROID_ROMS");
     bool wasPicking = false;
     Uint32 lastFolderCheck = 0;
@@ -2430,6 +2432,10 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 const int mx = (e.type == SDL_MOUSEMOTION ? e.motion.x : e.button.x) * canvas.w / std::max(1, ww);
                 const int my = (e.type == SDL_MOUSEMOTION ? e.motion.y : e.button.y) * canvas.h / std::max(1, wh);
                 const int s = std::max(1, std::min(canvas.w, canvas.h) / 240);
+#ifdef __ANDROID__
+                // The ROMs page's CHOOSE FOLDER: Android's folder picker (the games found again on return).
+                if (e.type == SDL_MOUSEBUTTONUP && Launcher::Glassy(canvas) && Launcher::Focus().page == Launcher::SIDE_ROMS && Launcher::RomFolderAt(mx, my)) { JavaVoid("chooseFolder"); dragging = pressed = false; break; }
+#endif
                 // The buttons in the title band (touch screens): SETTINGS at the right, and in the
                 // settings BACK at the left; on Android FOLDER at the left of the list.
                 // The Theme Editor's wheel and bars: pressed and dragged along (a mouse or a finger), the value follows.

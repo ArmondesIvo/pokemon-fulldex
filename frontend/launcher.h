@@ -1594,6 +1594,12 @@ inline int FirstIn(const View& v) { return v.spots.empty() ? -1 : v.spots[0].gam
 // Menu::FrostBox) and clean font over the chosen game's picture, blurred. Used on landscape
 // screens with the clean font (Glassy); otherwise the classic list (DrawClassic).
 enum Side { SIDE_HOME, SIDE_HUB, SIDE_ROMS, SIDE_SETTINGS, SIDE_LAUNCHER, SIDE_ABOUT, SIDES }; // (Library is Home: its tabs, Sort)
+// The ROMs page's CHOOSE FOLDER button, where the platform can ask for a folder (Android's picker):
+// on when pc_launcher.cpp says so; where it was drawn, for the tap.
+inline bool& RomFolderButton() { static bool on = false; return on; }
+struct RomFolderRect { int x = 0, y = 0, w = 0, h = 0; };
+inline RomFolderRect& RomFolderHit() { static RomFolderRect r; return r; }
+inline bool RomFolderAt(int x, int y) { const RomFolderRect& r = RomFolderHit(); return r.w > 0 && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
 // (This fork's sidebar: only Library, Settings and About; Hub, ROMs and Launcher open from Settings.)
 inline bool SideShown(int i) { return i == SIDE_HOME || i == SIDE_SETTINGS || i == SIDE_ABOUT; }
 inline int SideRow(int i) { int r = 0; for (int k = 0; k < i; k++) r += SideShown(k); return r; }
@@ -6872,7 +6878,19 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
     GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 5 ? std::string("Import Saves") : HubMode() == 6 ? std::string("My PC") : HubMode() == 8 ? std::string("Trades") : HubMode() == 9 ? std::string("Batalha") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : LauncherThemesOnly() ? "Themes" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("PokeHub   \xC2\xB7   ") + PlatformLabel();
-    if (!ShortNow() && !portP) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
+    if (!ShortNow() && !portP && !(F.page == SIDE_ROMS && RomFolderButton())) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
+    RomFolderHit() = RomFolderRect();
+    if (F.page == SIDE_ROMS && RomFolderButton())
+    {
+        // (CHOOSE FOLDER: at the title's right, a pill like the others.)
+        const std::string l = "Escolher pasta dos jogos";
+        // (Left of the back arrow a phone has at the top right.)
+        const int right = PhoneLook() ? std::min(R, c.w - (int)((c.h > c.w ? 12 : 16) * u) - (int)(34 * u) - (int)(12 * u)) : R;
+        const int bh = (int)(36 * u), bw = GW(l, 13 * u, true) + (int)(30 * u), bx = right - bw, by = (int)(titleY - bh / 2.0f);
+        Glass::Round(c, bx, by, bw, bh, bh / 2.0f, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
+        GT(c, bx + (int)(15 * u), titleY, l, 13 * u, text, true);
+        RomFolderHit() = { bx, by, bw, bh };
+    }
     if (F.page == SIDE_ROMS)
     {
         const std::vector<Game>& roms = RomList();
@@ -6921,7 +6939,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
         if (n == 0)
         {
-            const std::string none = "No ROMs found yet. Put your ROMs in the roms folder beside Fulldex.";
+            const std::string none = RomFolderButton() ? "Nenhuma ROM ainda. Toque em \"Escolher pasta dos jogos\" e escolha a pasta onde est\xC3\xA3o as suas ROMs." : "No ROMs found yet. Put your ROMs in the roms folder beside Fulldex.";
             GT(c, L + (lw2 - GW(none, 16 * u, true)) / 2, (top + (top + lhP)) * 0.5f, none, 16 * u, hint, true);
         }
         for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
