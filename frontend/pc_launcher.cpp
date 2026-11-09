@@ -267,6 +267,7 @@ void JavaBoolArg(const char* method, bool value)
 
 std::mutex& PokeHubSessionLock();
 std::string& PokeHubSessionNow();
+bool& UpdateWatch() { static bool b = false; return b; } // (an update downloading: its window kept up to date)
 // IMPORT SAVES (Launcher::Importer): Shizuku and the folder picker, in GameActivity (SaveImport.java).
 void SetImporter()
 {
@@ -1782,7 +1783,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             dialogClose();
             if (pick == "#quit") quit = true; // (Quit Fulldex?: yes)
 #ifdef __ANDROID__
-            if (pick == "#update") JavaVoid("updateInstall"); // (PokeHub Update: yes)
+            if (pick == "#update") { JavaVoid("updateInstall"); UpdateWatch() = true; Launcher::OpenUpdateAsk("DOWNLOADING"); return; } // (PokeHub Update: yes, and its download shown)
+            if (pick == "#updperm") JavaVoid("updatePermission");
+            if (pick == "#cloudon" || pick == "#cloudoff") { Launcher::HubCloudSwitch(pick == "#cloudon"); Launcher::OpenAccountAsk(); return; }
             if (pick == "#signin")
             {
                 // (Your Account: to Google, in the browser; not yet when this build has no server.)
@@ -2712,6 +2715,22 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         }
         if (quit) break;
 #ifdef __ANDROID__
+        // (An update downloading: how far, in the update window while it is up; then Android's
+        // installer, or why not.)
+        if (UpdateWatch())
+        {
+            static Uint32 lastProgress = 0;
+            if (SDL_GetTicks() - lastProgress > 250)
+            {
+                lastProgress = SDL_GetTicks();
+                const std::string p = JavaString("updateProgress");
+                Launcher::GlassFocus& UF = Launcher::Focus();
+                const bool shown = UF.dialog == 12 && UF.dTitle == "PokeHub Update";
+                if (p == "HANDED") { UpdateWatch() = false; if (shown) dialogClose(); }
+                else if (p.rfind("FAIL\t", 0) == 0) { UpdateWatch() = false; Launcher::OpenUpdateAsk(p); }
+                else if (shown && p.rfind("DOWNLOADING", 0) == 0) Launcher::OpenUpdateAsk(p);
+            }
+        }
         // (PokeHub's update, when the Java side has found one: asked here, in the launcher's look,
         // once nothing else is asked. Looked for twice a second.)
         {

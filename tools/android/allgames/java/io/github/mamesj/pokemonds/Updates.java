@@ -312,23 +312,26 @@ final class Updates {
         }, "Fulldex-update-check").start();
     }
 
+    // How the download goes, for the launcher to show in its own look (GameActivity.updateProgress):
+    // "" none, "DOWNLOADING\t<percent>", "HANDED" (Android's installer asked), "FAIL\t<why>".
+    private static volatile String progress = "";
+    static String progress() { return progress; }
+    static void openInstallPermission(final Activity a) {
+        a.runOnUiThread(() -> {
+            try {
+                a.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + a.getPackageName())));
+            } catch (Exception e) { Log.e(TAG, "unknown sources settings", e); }
+        });
+    }
+
     private static void install(final Activity a, final Release r, final String digest) {
-        // (Android 8 on: the player allows this app to install apps, once, in Android's settings.)
+        // (Android 8 on: the player allows this app to install apps, once, in Android's settings;
+        // the launcher asks, in its look, and opens that page: GameActivity.updatePermission.)
         if (Build.VERSION.SDK_INT >= 26 && !a.getPackageManager().canRequestPackageInstalls()) {
-            new AlertDialog.Builder(a).setTitle(TITLE)
-                .setMessage("O Android precisa da sua permissão para o PokeHub instalar a atualização. "
-                        + "Ligue \"Permitir desta fonte\" na próxima tela, volte e toque em Atualizar de novo.")
-                .setPositiveButton("OK", (x, y) -> {
-                    try {
-                        a.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                Uri.parse("package:" + a.getPackageName())));
-                    } catch (Exception e) { Log.e(TAG, "unknown sources settings", e); }
-                })
-                .setNegativeButton("Cancelar", null).show();
+            offer = "PERMISSION";
             return;
         }
-        final AlertDialog progress = new AlertDialog.Builder(a).setTitle(TITLE)
-            .setMessage("Baixando a versão nova...").setCancelable(false).show();
+        progress = "DOWNLOADING\t0";
         new Thread(() -> {
             File apk = new File(a.getCacheDir(), "update.apk");
             String error = null;
@@ -336,6 +339,7 @@ final class Updates {
                 MessageDigest md = MessageDigest.getInstance("SHA-256");
                 HttpURLConnection c = open(r.url);
                 try (InputStream in = c.getInputStream(); OutputStream out = new FileOutputStream(apk)) {
+                    final long size = c.getContentLengthLong();
                     byte[] buffer = new byte[1 << 16];
                     long total = 0;
                     int n;
@@ -344,6 +348,7 @@ final class Updates {
                         if (total > (512L << 20)) throw new IOException("download too large");
                         md.update(buffer, 0, n);
                         out.write(buffer, 0, n);
+                        if (size > 0) progress = "DOWNLOADING\t" + (int) Math.min(99, total * 100 / size);
                     }
                 } finally { c.disconnect(); }
                 String got = hex(md.digest());
@@ -356,6 +361,7 @@ final class Updates {
                     if (!keep.isDirectory() && !keep.mkdirs()) throw new IOException("cannot make " + keep);
                     copy(new File(a.getApplicationInfo().sourceDir), new File(keep, "previous.apk"));
                     prefs(a).edit().putString("pending_sha", digest).apply();
+                    progress = "HANDED";
                     hand(a, apk);
                 }
             } catch (Exception e) {
@@ -364,12 +370,8 @@ final class Updates {
             } finally {
                 apk.delete();
             }
-            final String message = error;
-            a.runOnUiThread(() -> {
-                progress.dismiss();
-                if (message != null) say(a, message);
-            });
-        }, "Fulldex-update-install").start();
+            if (error != null) progress = "FAIL\t" + error;
+        }, "PokeHub-update-install").start();
     }
 
     private static void copy(File from, File to) throws IOException {
@@ -405,8 +407,8 @@ final class Updates {
                         } else if (status != PackageInstaller.STATUS_SUCCESS) {
                             prefs(c).edit().remove("pending_sha").apply();
                             if (status != PackageInstaller.STATUS_FAILURE_ABORTED)
-                                say(a, "O Android não instalou a atualização: " + i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
-                                        + "\n\nA versão que você tem continua igual.");
+                                progress = "FAIL\tO Android não instalou a atualização: " + i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+                                        + ". A versão que você tem continua igual.";
                         }
                     }
                 };

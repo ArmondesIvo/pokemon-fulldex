@@ -4916,6 +4916,31 @@ inline void HubStart(std::function<void()> job)
     if (h.worker.joinable()) h.worker.join(); // (the last one has finished: busy was 0)
     h.worker = std::thread(std::move(job));
 }
+// PokeHub's cloud saves on (and synced now) or off: the Hub's Turn On / Turn Off, and the account's.
+// (h.m held.)
+inline void HubCloudSwitchLocked(HubState& h, bool on, const std::vector<std::string>& paths)
+{
+    h.set.provider = on ? "pokehub" : "off";
+    if (h.set.deviceName.empty()) h.set.deviceName = HubDevice();
+    const bool ok = CloudSaves::SaveSettings(h.dir + "/cloud.ini", h.set);
+    h.results.clear();
+    if (!ok) { h.msg = "Could not save the cloud settings."; h.version++; return; }
+    if (!on) { h.msg = "Cloud saves are off. Your saves stay here, and in PokeHub's cloud."; h.version++; return; }
+    h.busy = 2; h.msg = "Syncing..."; h.version++;
+    HubStart([paths] { HubSyncJob(paths, -1); });
+}
+inline void HubCloudSwitch(bool on)
+{
+    HubLoad();
+    std::vector<std::string> paths;
+    for (const HubGame& g : HubGames()) paths.push_back(g.path);
+    HubState& h = Hub();
+    std::lock_guard<std::mutex> l(h.m);
+    if (h.busy) return;
+    HubCloudSwitchLocked(h, on, paths);
+}
+inline bool HubCloudOn() { HubLoad(); HubState& h = Hub(); std::lock_guard<std::mutex> l(h.m); return h.set.provider == "pokehub"; }
+inline std::string HubCloudMsg() { HubState& h = Hub(); std::lock_guard<std::mutex> l(h.m); return h.msg; }
 // A on one of the Hub's actions (row, its action). What to say, if anything ("" for nothing).
 inline std::string HubDo(int row, int act)
 {
@@ -4936,18 +4961,7 @@ inline std::string HubDo(int row, int act)
     if (h.busy) return "";
 #ifdef __ANDROID__
     if (a == "Sign In With Google") { if (AccountSignInHook()) AccountSignInHook()(); return ""; }
-    if (a == "Turn On" || a == "Turn Off")
-    {
-        h.set.provider = a == "Turn On" ? "pokehub" : "off";
-        if (h.set.deviceName.empty()) h.set.deviceName = HubDevice();
-        const bool ok = CloudSaves::SaveSettings(h.dir + "/cloud.ini", h.set);
-        h.results.clear();
-        if (!ok) { h.msg = "Could not save the cloud settings."; h.version++; return ""; }
-        if (a == "Turn Off") { h.msg = "Cloud saves are off. Your saves stay here, and in PokeHub's cloud."; h.version++; return ""; }
-        h.busy = 2; h.msg = "Syncing..."; h.version++;
-        HubStart([paths] { HubSyncJob(paths, -1); });
-        return "";
-    }
+    if (a == "Turn On" || a == "Turn Off") { HubCloudSwitchLocked(h, a == "Turn On", paths); return ""; }
 #endif
     if (a == "Sign In With Google")
     {
@@ -5072,9 +5086,13 @@ inline void OpenAccountAsk()
     F.dTitle = "Your Account";
     if (a.signedIn)
     {
-        F.dMsg = (a.name.empty() ? a.email : a.name + "\n" + a.email) + "\n\n" + LauncherText::Tr("Signed in to PokeHub with Google.");
-        F.dItems = { "Close", "Sign Out" };
-        F.dPaths = { "#close", "#signout" };
+        // (Who, and the cloud saves: on and syncing, or off; switched here as in the Hub.)
+        const bool on = HubCloudOn();
+        const std::string last = HubCloudMsg();
+        F.dMsg = (a.name.empty() ? a.email : a.name + "\n" + a.email) + "\n\n" + LauncherText::Tr(on ? "Cloud saves: on. Your saves sync with PokeHub's cloud." : "Cloud saves: off. Your saves stay on this phone only.")
+               + (last.empty() ? std::string() : "\n" + LauncherText::Tr(last));
+        F.dItems = { on ? "Turn Cloud Saves Off" : "Turn Cloud Saves On", "Sign Out", "Close" };
+        F.dPaths = { on ? "#cloudoff" : "#cloudon", "#signout", "#close" };
     }
     else
     {
@@ -5101,6 +5119,32 @@ inline void OpenUpdateAsk(const std::string& offer)
                + "\n\n" + LauncherText::Tr("Your games, saves and settings stay as they are.");
         F.dItems = { "Update", "Later" };
         F.dPaths = { "#update", "#close" };
+        return;
+    }
+    if (offer == "PERMISSION")
+    {
+        F.dialog = 12;
+        F.drow = 0;
+        F.dTitle = "PokeHub Update";
+        F.dMsg = "Android needs your permission, once, for PokeHub to install its updates. On the next page turn on Allow From This Source, then come back and choose Update again.";
+        F.dItems = { "Open Android's Page", "Later" };
+        F.dPaths = { "#updperm", "#close" };
+        return;
+    }
+    if (offer.rfind("DOWNLOADING", 0) == 0 || offer.rfind("FAIL\t", 0) == 0)
+    {
+        F.dialog = 12;
+        F.drow = 0;
+        F.dTitle = "PokeHub Update";
+        if (offer[0] == 'F') { F.dMsg = offer.substr(5); F.dItems = { "OK" }; }
+        else
+        {
+            const size_t t = offer.find('\t');
+            F.dMsg = LauncherText::Tr("Downloading the new version...") + (t == std::string::npos ? std::string() : "  " + offer.substr(t + 1) + "%")
+                   + "\n\n" + LauncherText::Tr("Android asks to install it once it is here.");
+            F.dItems = { "Hide" };
+        }
+        F.dPaths = { "#close" };
         return;
     }
     F.dialog = 12;

@@ -194,6 +194,10 @@ public class GameActivity extends SDLActivity {
 
     // PokeHub's update found (Updates.java), for the launcher to ask about: "" none yet.
     public static String updateOffer() { return Updates.takeOffer(); }
+    // The download's progress, for the launcher's update window (Updates.progress).
+    public static String updateProgress() { return Updates.progress(); }
+    // Android's page to let PokeHub install its updates (asked once).
+    public static void updatePermission() { if (self != null) Updates.openInstallPermission(self); }
     // The launcher's Update: download, check and hand it to Android's installer.
     public static void updateInstall() {
         if (self != null) Updates.installOffered(self);

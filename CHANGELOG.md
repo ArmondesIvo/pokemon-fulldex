@@ -3,6 +3,9 @@
 
 ## Unreleased
 
+- **The update's download in PokeHub's look,** with how far it has got, and Android's permission to
+  install asked there too. **The account window shows the cloud saves** (on or off) and turns them on
+  or off.
 - **Cloud saves in PokeHub's own cloud.** Signed in with the figure, Hub > Cloud Saves > Turn On keeps
   each game's save in PokeHub's server, for that account only: brought down before a game starts when
   another phone played later, sent up after it saves, asked about when both changed; a save about to be

@@ -4344,6 +4344,19 @@ Open it and choose Turn On. Your saves go to PokeHub's cloud, kept for your acco
 Sign in first with the figure at the top of the home screen, then turn them on here.	Entre primeiro pelo bonequinho no topo da tela inicial e depois ligue aqui.
 Cloud saves are off. Your saves stay here, and in PokeHub's cloud.	Saves na nuvem desligados. Seus saves ficam aqui e na nuvem do PokeHub.
 SIGN IN TO POKEHUB AGAIN (THE FIGURE AT THE TOP)	ENTRE DE NOVO NO POKEHUB (O BONEQUINHO NO TOPO)
+Cloud saves: on. Your saves sync with PokeHub's cloud.	Saves na nuvem: ligados. Seus saves sincronizam com a nuvem do PokeHub.
+Cloud saves: off. Your saves stay on this phone only.	Saves na nuvem: desligados. Seus saves ficam só neste celular.
+Turn Cloud Saves Off	Desligar Saves Na Nuvem
+Turn Cloud Saves On	Ligar Saves Na Nuvem
+Close	Fechar
+Syncing...	Sincronizando...
+Hide	Esconder
+Downloading the new version...	Baixando a versão nova...
+Android asks to install it once it is here.	Quando terminar, o Android pede para instalar.
+Open Android's Page	Abrir A Tela Do Android
+Android needs your permission, once, for PokeHub to install its updates. On the next page turn on Allow From This Source, then come back and choose Update again.	O Android precisa da sua permissão, uma vez só, para o PokeHub instalar as atualizações. Na próxima tela ligue Permitir Desta Fonte, volte e escolha Atualizar de novo.
+Synced. {} sent up.	Sincronizado. {} enviados.
+Synced. Everything was already up to date.	Sincronizado. Tudo já estava em dia.
 )FDXLANG";
 inline const char* LauncherLangData(const char* code)
 {
