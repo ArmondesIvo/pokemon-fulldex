@@ -71,7 +71,9 @@ inline const char* PlatformName(int p) { return p == DS ? "DS" : p == GBA ? "GBA
 // console.
 // (HOME: the games the player added with X, their favourites; until they add any, the game played
 // last. ROMHACKS: the hacks, whatever their console.)
-enum TabId { TAB_HOME, TAB_ALL, TAB_DS, TAB_GBA, TAB_3DS, TAB_HACKS, TABS };
+// (GB: the Game Boy and Game Boy Color games, played by the GBA player, apart from the GBA's. MY PC:
+// not a list of games, the Pokémon PC (the Hub's Move Pokémon, with the Bank), opened from the bar.)
+enum TabId { TAB_HOME, TAB_ALL, TAB_DS, TAB_GBA, TAB_3DS, TAB_HACKS, TAB_GB, TAB_MYPC, TABS };
 // Tabs of the player's own, after the built-in ones (tab TABS + k): a name and its games' ROM paths;
 // kept in fulldex-tabs.txt beside the saves, a line a tab (its name, then its ROMs), tab-separated.
 // A tab of the player's own: its games, and the built-in tab it comes after (Move Left / Right; Home stays first).
@@ -111,11 +113,12 @@ inline int FirstTab() { return TabOrder().front(); }
 inline int LastTab() { return TabOrder().back(); }
 inline int TabDistance(int from, int to) { return TabPos(to) - TabPos(from); }
 inline std::string TabOrderPath() { const std::string& f = TabsFile(); return f.size() < 4 ? std::string() : f.substr(0, f.size() - 4) + "-order.txt"; }
+inline bool SaveTabOrder();
 inline void LoadTabOrder()
 {
     TabOrderAll().clear();
     TabHidden().clear();
-    bool found = false;
+    bool found = false, fork = false;
     if (FILE* f = fopen(TabOrderPath().c_str(), "rb"))
     {
         char line[4096];
@@ -126,6 +129,7 @@ inline void LoadTabOrder()
             const size_t tb = l.find('\t');
             if (tb == std::string::npos) continue;
             const std::string key = l.substr(0, tb);
+            if (key == "layout") fork = true;
             if (key != "order" && key != "hidden") continue;
             if (key == "order") found = true;
             std::vector<int>& dst = key == "hidden" ? TabHidden() : TabOrderAll();
@@ -151,6 +155,18 @@ inline void LoadTabOrder()
                 if ((tabs[k].after < 0 || tabs[k].after >= TABS ? TABS - 1 : tabs[k].after) == b) o.push_back(TABS + k);
         }
     }
+    if (!fork)
+    {
+        // (This fork's tabs, once: GB, GBA, DS, 3DS and My PC first, Home and All hidden; the
+        // player's own tabs and what they hid kept. "layout" in the file says it was done.)
+        std::vector<int> o = { TAB_GB, TAB_GBA, TAB_DS, TAB_3DS, TAB_MYPC };
+        for (const int t : TabOrderAll()) if (std::find(o.begin(), o.end(), t) == o.end()) o.push_back(t);
+        TabOrderAll() = o;
+        for (const int t : { (int)TAB_HOME, (int)TAB_ALL }) if (!TabIsHidden(t)) TabHidden().push_back(t);
+        TabOrderFix();
+        SaveTabOrder();
+        return;
+    }
     TabOrderFix();
 }
 inline bool SaveTabOrder()
@@ -162,7 +178,7 @@ inline bool SaveTabOrder()
     std::string o, h;
     for (const int t : TabOrderAll()) o += (o.empty() ? "" : ",") + std::to_string(t);
     for (const int t : TabHidden()) h += (h.empty() ? "" : ",") + std::to_string(t);
-    fprintf(f, "order\t%s\nhidden\t%s\n", o.c_str(), h.c_str());
+    fprintf(f, "layout\tmyboy1\norder\t%s\nhidden\t%s\n", o.c_str(), h.c_str());
     return fclose(f) == 0;
 }
 inline std::string TabsSig()
@@ -229,10 +245,10 @@ inline bool SaveTabs()
 // kept apart from the focus, which a click can start again.
 inline std::string& SearchText() { static std::string s; return s; }
 inline std::string& SortKey() { static std::string s; return s; }
-inline const char* TabName(int t) { static const char* n[] = { "HOME", "ALL", "DS", "GBA", "3DS", "ROMHACKS" }; return t >= 0 && t < TABS ? n[t] : t < TabCount() ? "CUSTOM" : "ALL"; }
+inline const char* TabName(int t) { static const char* n[] = { "HOME", "ALL", "DS", "GBA", "3DS", "ROMHACKS", "GB", "MY PC" }; return t >= 0 && t < TABS ? n[t] : t < TabCount() ? "CUSTOM" : "ALL"; }
 inline std::string TabLabel(int t)
 {
-    static const char* n[] = { "Home", "All", "DS", "GBA", "3DS", "Romhacks" };
+    static const char* n[] = { "Home", "All", "DS", "GBA", "3DS", "Romhacks", "GB", "My PC" };
     if (t >= 0 && t < TABS) return n[t];
     const int k = t - TABS;
     return k >= 0 && k < (int)CustomTabs().size() ? CustomTabs()[k].name : std::string("All");
@@ -274,6 +290,20 @@ struct Game
     std::string problem;
 };
 
+// A Game Boy or Game Boy Color game (.gb, .gbc), played by the GBA player: the GB tab's, and
+// its console as the list names it.
+inline bool IsGbGame(const Game& g)
+{
+    if (g.platform != GBA) return false;
+    std::string e = g.rom.substr(g.rom.rfind('.') == std::string::npos ? g.rom.size() : g.rom.rfind('.'));
+    for (char& ch : e) ch = (char)tolower((unsigned char)ch);
+    return e == ".gb" || e == ".gbc" || e == ".sgb";
+}
+inline const char* ConsoleName(const Game& g)
+{
+    if (IsGbGame(g)) { const std::string& r = g.rom; return r.size() > 4 && tolower((unsigned char)r.back()) == 'c' ? "GBC" : "GB"; }
+    return PlatformName(g.platform);
+}
 inline std::string& ContinueRom() { static std::string r; return r; } // the game played last (last-game.txt)
 // The game whose picture is blurred behind the glass launcher; empty: the chosen one. (The Switch sets
 // it a moment after the chosen game changes: making it again takes most of a redraw there.)
@@ -484,7 +514,9 @@ inline bool InTab(const std::vector<Game>& games, int i, int tab)
             if (o.favourite) return g.favourite;
         return !ContinueRom().empty() && g.rom == ContinueRom();
     case TAB_DS: return g.platform == DS;
-    case TAB_GBA: return g.platform == GBA;
+    case TAB_GBA: return g.platform == GBA && !IsGbGame(g);
+    case TAB_GB: return g.platform == GBA && IsGbGame(g);
+    case TAB_MYPC: return false;
     case TAB_3DS: return g.platform == N3DS;
     case TAB_HACKS: return IsHack(g);
     default: return true;
@@ -1411,6 +1443,7 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
     for (int p = 0; p < PLATFORMS; p++)
     {
         if (tab >= TAB_DS && tab <= TAB_3DS && p != tab - TAB_DS) continue;
+        if ((tab == TAB_GB && p != GBA) || tab == TAB_MYPC) continue;
         std::vector<int> mine;
         for (size_t i = 0; i < games.size(); i++)
             if (games[i].platform == p && InTab(games, (int)i, tab)) mine.push_back((int)i);
@@ -2588,6 +2621,7 @@ struct MoverState
     // Swapping: the Pokémon chosen in this game, while one is chosen in the other.)
     int put = -1;
     bool swapping = false;
+    bool fromTab = false; // (opened from the MY PC tab: back goes back to the games)
     int swapBox = 0, swapSlot = 0;
     std::string swapName;
 #ifdef SSR_POKEMON_HUB
@@ -4958,6 +4992,7 @@ inline bool PageBack()
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMode() == 1 ? 1 : 2; LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
     if (F.page == SIDE_HUB && F.side < 0 && HubMode() == 3 && !Mover().open) return SavesBack(); // (Manage Saves: off a slot, then the games)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().fromTab) { MoverShow(false); Mover().fromTab = false; F.page = -1; F.side = -1; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && (HubMode() == 4 || HubMode() == 5)) { F.prow = HubMode(); HubMode() = 0; F.rScroll = 0; Hub().version++; return true; }
@@ -4977,6 +5012,17 @@ inline bool OpenSide(int side)
     if (side == SIDE_LAUNCHER) { LauncherMode() = 0; Look().edit = -1; ThemesRefresh(); Themes().msg.clear(); Hub().version++; }
     if (PageRows(side) > 0) { F.page = side; F.prow = 0; F.side = -1; F.nScroll = 0; F.pact = -1; F.rScroll = 0; return true; }
     return false;
+}
+// The MY PC tab: the Pokémon PC, i.e. the Hub's Move Pokémon, from the first game to the Bank.
+inline void OpenMyPc()
+{
+    GlassFocus& F = Focus();
+    OpenSide(SIDE_HUB);
+    MoverState& m = Mover();
+    if (MoverGames().size() > 1 && (m.from == m.to || !m.fromTab)) { m.from = 1; m.to = 0; }
+    MoverShow(true);
+    m.fromTab = true;
+    F.prow = MOVER_FIRST; F.pact = -1; F.rScroll = 0;
 }
 inline int PageRowAt(int x, int y)
 {
@@ -5254,7 +5300,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             DrawCover(c, g, ix, y, ps, ps, 12 * u);
             const int tx = ix + ps + (int)(16 * u), tw = iw - ps - (int)(16 * u);
             GT(c, tx, y + 28 * u, fit(ShortName(g), 20 * u, true, tw), 20 * u, text, true);
-            GT(c, tx, y + 54 * u, PlatformName(g.platform), 14 * u, hint, true);
+            GT(c, tx, y + 54 * u, ConsoleName(g), 14 * u, hint, true);
             uint32_t col = 0;
             const std::string st = status(g, col);
             const int chipW = GW(st, 12 * u, true) + (int)(20 * u);
@@ -7298,7 +7344,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             DrawCover(c, g, tx0, ty0, t, t, 8 * u);
             if (g.comingSoon) Glass::Round(c, tx0, ty0, t, t, 8 * u, 0x99000000u);
             const int nx = tx0 + t + (int)(14 * u);
-            const std::string sub = g.comingSoon ? std::string("Coming Soon") : !g.known ? std::string("Not Playable") : std::string(PlatformName(g.platform));
+            const std::string sub = g.comingSoon ? std::string("Coming Soon") : !g.known ? std::string("Not Playable") : std::string(ConsoleName(g));
             const int sw = GW(sub, 13 * u, true);
             GTFit(c, nx, y + rh * 0.5f, ShortName(g), 17 * u, x + grid.cw - nx - sw - (int)(30 * u), text, true);
             GT(c, x + grid.cw - (int)(16 * u) - sw, y + rh * 0.5f, sub, 13 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
@@ -7318,10 +7364,10 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const float cy = iy + ih + 16 * u;
         std::string name = ShortName(g);
         float npx = 17 * u;
-        const int room = iw - GW(PlatformName(g.platform), 13 * u, true) - (int)(14 * u);
+        const int room = iw - GW(ConsoleName(g), 13 * u, true) - (int)(14 * u);
         while (npx > 10 * u && GW(name, npx, true) > room) npx -= u;
         GT(c, ix + (int)(4 * u), cy, name, npx, text, true);
-        const std::string sub = !g.known && !g.comingSoon ? "Not Playable" : PlatformName(g.platform);
+        const std::string sub = !g.known && !g.comingSoon ? "Not Playable" : ConsoleName(g);
         GT(c, ix + iw - (int)(4 * u) - GW(sub, 13 * u, true), cy, sub, 13 * u, !g.known && !g.comingSoon ? 0xFFF2A08Au : hint, true);
         if (g.favourite) Glass::DrawIcon(c, Glass::I_SPARKLE, ix + iw - 14 * u, iy + 14 * u, 7 * u, 0xFFFFFFFFu);
         // (Its save kept in the cloud: a cloud in the corner; amber when it changed on both.)
@@ -7395,7 +7441,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const int nw = std::min(GW(nm, 34 * u, true), (int)(c.w * 0.7f));
         GTFit(c, cx - nw / 2, (float)tb.nameY, nm, 34 * u, nw, text, true);
         const std::string saveS = HubCloudOf(g) == 2 ? "Cloud Save: Changed On Both" : HubCloudOf(g) ? "Cloud Save" : g.hasSave ? "Save Found" : "New Game";
-        const std::string meta = g.comingSoon ? std::string("Coming Soon") : !g.known ? std::string("Not Playable") : std::string(PlatformName(g.platform)) + "   \xC2\xB7   " + saveS;
+        const std::string meta = g.comingSoon ? std::string("Coming Soon") : !g.known ? std::string("Not Playable") : std::string(ConsoleName(g)) + "   \xC2\xB7   " + saveS;
         GT(c, cx - GW(meta, 16 * u, true) / 2, (float)tb.metaY, meta, 16 * u, hint, true);
     };
     auto drawTiles = [&]() {
@@ -7533,14 +7579,14 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         DrawCover(c, g, ax, ay, aw, ah, 12 * u);
         const int tx = phP ? ax : ax + aw + (int)(24 * u);
         const bool played = !ContinueRom().empty() && g.rom == ContinueRom();
-        const std::string meta = std::string(played ? "Continue Playing" : "Ready To Play") + "   \xC2\xB7   " + PlatformName(g.platform)
+        const std::string meta = std::string(played ? "Continue Playing" : "Ready To Play") + "   \xC2\xB7   " + ConsoleName(g)
                                + "   \xC2\xB7   " + (HubCloudOf(g) == 2 ? "Cloud Save: Changed On Both" : HubCloudOf(g) ? "Cloud Save" : g.hasSave ? "Save Found" : "New Game");
         if (phP)
         {
             const std::string sv = HubCloudOf(g) == 2 ? "Cloud Save: Changed On Both" : HubCloudOf(g) ? "Cloud Save" : g.hasSave ? "Save Found" : "New Game";
             GT(c, tx, ay + ah + 18 * u, played ? "Continue Playing" : "Ready To Play", 13 * u, hint, true);
             GTFit(c, tx, ay + ah + 46 * u, ShortName(g), 28 * u, sp.contX - tx - (int)(10 * u), text, true);
-            GT(c, tx, ay + ah + 74 * u, std::string(PlatformName(g.platform)) + "   \xC2\xB7   " + sv, 13 * u, hint, true);
+            GT(c, tx, ay + ah + 74 * u, std::string(ConsoleName(g)) + "   \xC2\xB7   " + sv, 13 * u, hint, true);
         }
         else if (phL)
         {
@@ -7576,8 +7622,26 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             GT(c, (TilesHome() ? grid.gx : sp.tabsX) + (grid.cols * grid.colStep - GW(none, 16 * u, true)) / 2, (grid.top + grid.bottom) * 0.5f, none, 16 * u, hint, true);
         }
     if (TilesHome()) drawCarousel();
-    else for (const View::Spot& s : v.spots)
-        if (visible(s) && !(PanelHome() && s.game == selected)) drawCard(s, false);
+    else
+    {
+        // (Rows cut by the foot of the list, or scrolled under its top, drawn too, clipped there:
+        // the next row's top showing at the foot tells there are more games below.)
+        const bool clip = !grid.horiz && !PanelHome();
+        const int yt = std::max(0, std::min(c.h, grid.top - (int)(10 * u))), yb = std::max(0, std::min(c.h, grid.bottom));
+        std::vector<uint32_t> above, below;
+        if (clip) { above.assign(c.px.begin(), c.px.begin() + (size_t)yt * c.w); below.assign(c.px.begin() + (size_t)yb * c.w, c.px.end()); }
+        for (const View::Spot& s : v.spots)
+        {
+            const int y = grid.top + s.y - scroll;
+            const bool part = clip && y < yb && y + grid.ch > yt;
+            if ((visible(s) || part) && !(PanelHome() && s.game == selected)) drawCard(s, false);
+        }
+        if (clip)
+        {
+            std::copy(above.begin(), above.end(), c.px.begin());
+            std::copy(below.begin(), below.end(), c.px.begin() + (size_t)yb * c.w);
+        }
+    }
     moreBelow();
     }
     if (TilesOn() && Focus().page >= 0)
@@ -7685,7 +7749,7 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
                 last = days <= 0 ? std::string("Today") : days == 1 ? std::string("Yesterday") : std::to_string(days) + " Days Ago";
             }
             const std::string lab[3] = { "Platform", "Save", "Last Played" };
-            const std::string val[3] = { std::string(PlatformName(g.platform)), saveS, last };
+            const std::string val[3] = { std::string(ConsoleName(g)), saveS, last };
             const int colW = iw / 3;
             for (int k = 0; k < 3; k++)
             {
