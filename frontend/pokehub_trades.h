@@ -12,6 +12,20 @@
 // Drawn in PKVault's look, as My PC: HubMode 8, from the bell.
 // (Included inside namespace Launcher, by launcher.h.)
 #ifdef SSR_POKEMON_HUB
+// (The trades' page in green, PokeHub's own, where My PC keeps PKVault's terracotta: the same
+// shades, a green for the terracotta and a little green in the creams.)
+namespace TradePal {
+constexpr uint32_t Body = 0xFFF5F8F0u, Card = 0xFFEAF1E2u, Slot = 0xFFDCE7D2u, Line = 0xFFC2D3B6u, Btn = 0xFFE3ECD9u,
+    Ink = 0xFF1F3520u, Hint = 0xFF697A62u, Primary = 0xFF4E8A56u, PrimaryDark = 0xFF3A6C41u, PrimaryPale = 0xFFDCEBD8u,
+    OnPrimary = 0xFFF5F8F0u, Shiny = PcPal::Shiny, Male = PcPal::Male, Female = PcPal::Female;
+constexpr const uint32_t* Stat = PcPal::Stat;
+}
+inline void TradePanel(Canvas& c, int x, int y, int w, int h, float r, float u) { Glass::Round(c, x, y, w, h, r, TradePal::Card, TradePal::Line, 1.5f * u); }
+inline void TradeButton(Canvas& c, int x, int y, int w, int h, float r, bool on, float u)
+{
+    if (on) Glass::Round(c, x, y, w, h, r, TradePal::Primary, TradePal::PrimaryDark, 1.2f * u);
+    else Glass::Round(c, x, y, w, h, r, TradePal::Btn, TradePal::Line, 1.0f * u);
+}
 struct TradeMon { PokemonHub::Packed p; std::string place; bool ok = false; };
 struct OnlineTrade
 {
@@ -403,35 +417,35 @@ inline std::string TradeStatus(const OnlineTrade& t)
 // A Pokémon's card: its picture, level, origin mark; picked or wanted, framed.
 inline void TradeCard(Canvas& c, float u, int x, int y, int w, int h, const TradeMon& tm, bool chosen, const std::string& tag)
 {
-    Glass::Round(c, x, y, w, h, 8 * u, chosen ? PcPal::Body : PcPal::Btn, chosen ? PcPal::Primary : PcPal::Line, chosen ? 3.0f * u : 1.0f * u);
-    if (!tm.ok) { GT(c, x + (int)(8 * u), y + h / 2.0f, "?", 14 * u, PcPal::Hint, true); return; }
+    Glass::Round(c, x, y, w, h, 8 * u, chosen ? TradePal::Body : TradePal::Btn, chosen ? TradePal::Primary : TradePal::Line, chosen ? 3.0f * u : 1.0f * u);
+    if (!tm.ok) { GT(c, x + (int)(8 * u), y + h / 2.0f, "?", 14 * u, TradePal::Hint, true); return; }
     PcDrawMon(c, tm.p.mon.species, tm.p.mon.shiny, false, x + (int)(6 * u), y + (int)(6 * u), w - (int)(12 * u), h - (int)(24 * u));
     const std::string lv = "Lv." + std::to_string(tm.p.mon.level);
-    GT(c, x + w - (int)(6 * u) - GW(lv, 10 * u, true), y + h - 9 * u, lv, 10 * u, PcPal::Ink, true);
-    if (tm.p.mon.originMark) PcDrawOriginMark(c, tm.p.mon.originMark, x + 9 * u, y + 10 * u, 9 * u, PcPal::Hint, PcPal::Body);
-    if (tm.p.mon.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - 9 * u, y + 9 * u, 5 * u, PcPal::Shiny);
+    GT(c, x + w - (int)(6 * u) - GW(lv, 10 * u, true), y + h - 9 * u, lv, 10 * u, TradePal::Ink, true);
+    if (tm.p.mon.originMark) PcDrawOriginMark(c, tm.p.mon.originMark, x + 9 * u, y + 10 * u, 9 * u, TradePal::Hint, TradePal::Body);
+    if (tm.p.mon.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - 9 * u, y + 9 * u, 5 * u, TradePal::Shiny);
     if (!tag.empty())
     {
         const int tw = GW(tag, 9.5f * u, true) + (int)(10 * u);
-        Glass::Round(c, x + (w - tw) / 2, y - (int)(8 * u), tw, (int)(16 * u), 8 * u, PcPal::Primary);
-        GT(c, x + (w - tw) / 2 + (int)(5 * u), y, tag, 9.5f * u, PcPal::OnPrimary, true);
+        Glass::Round(c, x + (w - tw) / 2, y - (int)(8 * u), tw, (int)(16 * u), 8 * u, TradePal::Primary);
+        GT(c, x + (w - tw) / 2 + (int)(5 * u), y, tag, 9.5f * u, TradePal::OnPrimary, true);
     }
 }
 // A Pokémon's details, as My PC shows them: who, where it came from, its stats and moves.
 inline void TradeDetail(Canvas& c, float u, int x, int y, int w, int h, const TradeMon& tm)
 {
-    PcCard(c, x, y, w, h, 10 * u, u);
+    TradePanel(c, x, y, w, h, 10 * u, u);
     PokemonHub::MonDetail d;
-    if (!tm.ok || !PokemonHub::PackedDetail(tm.p, d)) { GT(c, x + (int)(12 * u), y + 20 * u, "?", 14 * u, PcPal::Hint, true); return; }
+    if (!tm.ok || !PokemonHub::PackedDetail(tm.p, d)) { GT(c, x + (int)(12 * u), y + 20 * u, "?", 14 * u, TradePal::Hint, true); return; }
     const int pad = (int)(12 * u), ps = std::min(h - 2 * pad, (int)(w * 0.3f));
     PcDrawMon(c, d.mon.species, d.mon.shiny, false, x + pad, y + pad, ps, ps, 0, true);
     int tx = x + pad + ps + (int)(12 * u), ty = y + pad;
     const int tw = x + w - pad - tx;
     const std::string nm = PcMonName(d.mon);
-    GTFit(c, tx, ty + 10 * u, nm, 16 * u, tw - (int)(60 * u), PcPal::Ink, true);
-    if (!d.gender.empty()) GT(c, tx + std::min(GW(nm, 16 * u, true), tw - (int)(60 * u)) + (int)(8 * u), ty + 10 * u, d.gender, 13 * u, d.gender == "M" ? PcPal::Male : PcPal::Female, true);
+    GTFit(c, tx, ty + 10 * u, nm, 16 * u, tw - (int)(60 * u), TradePal::Ink, true);
+    if (!d.gender.empty()) GT(c, tx + std::min(GW(nm, 16 * u, true), tw - (int)(60 * u)) + (int)(8 * u), ty + 10 * u, d.gender, 13 * u, d.gender == "M" ? TradePal::Male : TradePal::Female, true);
     const std::string lv = "Lv." + std::to_string(d.mon.level);
-    GT(c, x + w - pad - GW(lv, 13 * u, true), ty + 10 * u, lv, 13 * u, PcPal::Ink, true);
+    GT(c, x + w - pad - GW(lv, 13 * u, true), ty + 10 * u, lv, 13 * u, TradePal::Ink, true);
     ty += (int)(22 * u);
     int cx = tx;
     for (const std::string& t : { d.type1, d.type2 })
@@ -442,11 +456,11 @@ inline void TradeDetail(Canvas& c, float u, int x, int y, int w, int h, const Tr
         GT(c, cx + (int)(6 * u), ty + 8.5f * u, t, 9.5f * u, 0xFFFFFFFFu, true);
         cx += cw + (int)(5 * u);
     }
-    if (d.mon.originMark) PcDrawOriginMark(c, d.mon.originMark, cx + 8 * u, ty + 8.5f * u, 13 * u, PcPal::Ink, PcPal::Card);
+    if (d.mon.originMark) PcDrawOriginMark(c, d.mon.originMark, cx + 8 * u, ty + 8.5f * u, 13 * u, TradePal::Ink, TradePal::Card);
     ty += (int)(24 * u);
     auto line = [&](const std::string& k, const std::string& v) {
-        GT(c, tx, ty + 7 * u, k, 10.5f * u, PcPal::Hint, true);
-        GTFit(c, tx + (int)(64 * u), ty + 7 * u, v.empty() ? std::string("-") : v, 11 * u, tw - (int)(64 * u), PcPal::Ink, true);
+        GT(c, tx, ty + 7 * u, k, 10.5f * u, TradePal::Hint, true);
+        GTFit(c, tx + (int)(64 * u), ty + 7 * u, v.empty() ? std::string("-") : v, 11 * u, tw - (int)(64 * u), TradePal::Ink, true);
         ty += (int)(16 * u);
     };
     line("Origin", d.origin.empty() ? (d.mon.generation <= 2 ? "Game Boy (Gen " + std::to_string(d.mon.generation) + ")" : std::string()) : d.origin);
@@ -459,14 +473,14 @@ inline void TradeDetail(Canvas& c, float u, int x, int y, int w, int h, const Tr
     for (int i = 0; i < 6; i++)
     {
         const int sx = tx + i * sw;
-        GT(c, sx, ty + 7 * u, sn[i], 9.5f * u, PcPal::Stat[i], true);
-        GT(c, sx, ty + 21 * u, std::to_string(d.stats[i]), 11 * u, PcPal::Ink, true);
-        GT(c, sx, ty + 34 * u, std::to_string(d.ivs[i]) + "/" + std::to_string(d.evs[i]), 8.5f * u, PcPal::Hint, false);
+        GT(c, sx, ty + 7 * u, sn[i], 9.5f * u, TradePal::Stat[i], true);
+        GT(c, sx, ty + 21 * u, std::to_string(d.stats[i]), 11 * u, TradePal::Ink, true);
+        GT(c, sx, ty + 34 * u, std::to_string(d.ivs[i]) + "/" + std::to_string(d.evs[i]), 8.5f * u, TradePal::Hint, false);
     }
     ty += (int)(44 * u);
     std::string moves;
     for (const std::string& m : d.moves) if (!m.empty()) moves += (moves.empty() ? "" : " \xC2\xB7 ") + m;
-    GTFit(c, tx, ty + 7 * u, moves, 10.5f * u, tw, PcPal::Ink, true);
+    GTFit(c, tx, ty + 7 * u, moves, 10.5f * u, tw, TradePal::Ink, true);
 }
 inline void DrawTradesPage(Canvas& c, float u, int L, int R, int top, int bottom)
 {
@@ -476,17 +490,17 @@ inline void DrawTradesPage(Canvas& c, float u, int L, int R, int top, int bottom
     GlassFocus& F = Focus();
     F.rVis = 0; F.pdY = c.h; F.prow = 0; F.pact = -1;
     std::lock_guard<std::mutex> lk(T.m);
-    Glass::Round(c, L, top, R - L, bottom - top, 12 * u, PcPal::Body, PcPal::Primary, 4 * u);
+    Glass::Round(c, L, top, R - L, bottom - top, 12 * u, TradePal::Body, TradePal::Primary, 4 * u);
     { const int in = (int)(10 * u); L += in; R -= in; top += in; bottom -= in; }
     const int gap = (int)(10 * u), lw = std::min((int)(300 * u), (R - L) / 3);
     // The list: New Trade, then each trade.
-    PcCard(c, L, top, lw, bottom - top, 10 * u, u);
+    TradePanel(c, L, top, lw, bottom - top, 10 * u, u);
     int y = top + (int)(10 * u);
     {
         const int bw = lw - (int)(20 * u), bh = (int)(40 * u);
-        PcButton(c, L + (int)(10 * u), y, bw, bh, 8 * u, true, u);
+        TradeButton(c, L + (int)(10 * u), y, bw, bh, 8 * u, true, u);
         const std::string nt = LauncherText::Tr("+ New Trade");
-        GT(c, L + (int)(10 * u) + (bw - GW(nt, 14 * u, true)) / 2, y + bh * 0.5f, nt, 14 * u, PcPal::OnPrimary, true);
+        GT(c, L + (int)(10 * u) + (bw - GW(nt, 14 * u, true)) / 2, y + bh * 0.5f, nt, 14 * u, TradePal::OnPrimary, true);
         T.hits.push_back({ L + (int)(10 * u), y, bw, bh, TR_NEW, 0, 0 });
         y += bh + (int)(10 * u);
     }
@@ -498,10 +512,10 @@ inline void DrawTradesPage(Canvas& c, float u, int L, int R, int top, int bottom
         if (y + ih > bottom - (int)(10 * u)) break;
         const bool on = t.id == T.selId;
         if (on) sel = &t;
-        Glass::Round(c, L + (int)(10 * u), y, lw - (int)(20 * u), ih, 8 * u, on ? PcPal::Body : PcPal::Btn, on ? PcPal::Primary : PcPal::Line, on ? 2.5f * u : 1.0f * u);
+        Glass::Round(c, L + (int)(10 * u), y, lw - (int)(20 * u), ih, 8 * u, on ? TradePal::Body : TradePal::Btn, on ? TradePal::Primary : TradePal::Line, on ? 2.5f * u : 1.0f * u);
         const bool mine = (t.role == "b" && t.state == "offered") || (t.role == "a" && t.state == "countered");
-        GTFit(c, L + (int)(22 * u), y + 18 * u, t.partner.empty() ? t.partnerEmail : t.partner, 14 * u, lw - (int)(60 * u), PcPal::Ink, true);
-        GTFit(c, L + (int)(22 * u), y + 40 * u, TradeStatus(t), 11 * u, lw - (int)(44 * u), mine ? PcPal::Primary : PcPal::Hint, mine);
+        GTFit(c, L + (int)(22 * u), y + 18 * u, t.partner.empty() ? t.partnerEmail : t.partner, 14 * u, lw - (int)(60 * u), TradePal::Ink, true);
+        GTFit(c, L + (int)(22 * u), y + 40 * u, TradeStatus(t), 11 * u, lw - (int)(44 * u), mine ? TradePal::Primary : TradePal::Hint, mine);
         if (mine) Glass::Round(c, L + lw - (int)(30 * u), y + (int)(12 * u), (int)(10 * u), (int)(10 * u), 5 * u, 0xFFE03131u);
         T.hits.push_back({ L + (int)(10 * u), y, lw - (int)(20 * u), ih, TR_ITEM, 0, (int)(&t - &T.list[0]) });
         y += ih + (int)(8 * u);
@@ -509,26 +523,26 @@ inline void DrawTradesPage(Canvas& c, float u, int L, int R, int top, int bottom
     if (T.list.empty())
     {
         for (const std::string& l : WrapLines(LauncherText::Tr(T.busy ? "Looking..." : "No trades yet. Start one with New Trade."), 12 * u, lw - (int)(36 * u)))
-        { GT(c, L + (int)(18 * u), y + 10 * u, l, 12 * u, PcPal::Hint, false); y += (int)(18 * u); }
+        { GT(c, L + (int)(18 * u), y + 10 * u, l, 12 * u, TradePal::Hint, false); y += (int)(18 * u); }
     }
     // The trade chosen.
     const int x0 = L + lw + gap, w0 = R - x0;
-    PcCard(c, x0, top, w0, bottom - top, 10 * u, u);
+    TradePanel(c, x0, top, w0, bottom - top, 10 * u, u);
     const int pad = (int)(14 * u);
-    if (!T.msg.empty()) GTFit(c, x0 + pad, bottom - pad - 6 * u, T.msg, 11.5f * u, w0 - 2 * pad, PcPal::Hint, false);
+    if (!T.msg.empty()) GTFit(c, x0 + pad, bottom - pad - 6 * u, T.msg, 11.5f * u, w0 - 2 * pad, TradePal::Hint, false);
     if (!sel)
     {
-        GTFit(c, x0 + pad, top + pad + 12 * u, LauncherText::Tr("Trade your Pokémon with other PokeHub players: choose up to 6 to offer, they choose one and offer as many of theirs, you take one."), 13 * u, w0 - 2 * pad, PcPal::Ink, false);
+        GTFit(c, x0 + pad, top + pad + 12 * u, LauncherText::Tr("Trade your Pokémon with other PokeHub players: choose up to 6 to offer, they choose one and offer as many of theirs, you take one."), 13 * u, w0 - 2 * pad, TradePal::Ink, false);
         return;
     }
     const OnlineTrade& t = *sel;
     const std::string who = t.partner.empty() ? t.partnerEmail : t.partner;
-    GT(c, x0 + pad, top + pad + 10 * u, LauncherText::Tr("Trade with") + " " + who, 17 * u, PcPal::Ink, true);
-    GTFit(c, x0 + pad, top + pad + 32 * u, TradeStatus(t), 12 * u, w0 - 2 * pad, PcPal::Hint, true);
+    GT(c, x0 + pad, top + pad + 10 * u, LauncherText::Tr("Trade with") + " " + who, 17 * u, TradePal::Ink, true);
+    GTFit(c, x0 + pad, top + pad + 32 * u, TradeStatus(t), 12 * u, w0 - 2 * pad, TradePal::Hint, true);
     int cy = top + pad + (int)(52 * u);
     const int cw = std::min((int)(84 * u), (w0 - 2 * pad - 5 * (int)(8 * u)) / 6), ch = (int)(cw * 0.95f);
     auto row = [&](const std::string& label, const std::vector<TradeMon>& mons, int base, int marked, const std::string& tag) {
-        GT(c, x0 + pad, cy + 8 * u, label, 12 * u, PcPal::Hint, true);
+        GT(c, x0 + pad, cy + 8 * u, label, 12 * u, TradePal::Hint, true);
         cy += (int)(22 * u);
         for (int i = 0; i < (int)mons.size(); i++)
         {
@@ -546,14 +560,14 @@ inline void DrawTradesPage(Canvas& c, float u, int L, int R, int top, int bottom
     const int by = bottom - pad - (int)(40 * u) - (T.msg.empty() ? 0 : (int)(20 * u));
     const TradeMon* shown = T.card >= 100 ? (T.card - 100 < (int)mine.size() ? &mine[(size_t)(T.card - 100)] : nullptr) : (T.card >= 0 && T.card < (int)theirs.size() ? &theirs[(size_t)T.card] : nullptr);
     if (shown && by - cy > (int)(120 * u)) TradeDetail(c, u, x0 + pad, cy, w0 - 2 * pad, by - cy - (int)(10 * u), *shown);
-    else if (!shown) GTFit(c, x0 + pad, cy + 10 * u, LauncherText::Tr("Tap a Pokémon to see it."), 12 * u, w0 - 2 * pad, PcPal::Hint, false);
+    else if (!shown) GTFit(c, x0 + pad, cy + 10 * u, LauncherText::Tr("Tap a Pokémon to see it."), 12 * u, w0 - 2 * pad, TradePal::Hint, false);
     int bx = x0 + w0 - pad;
     auto button = [&](const std::string& label, int kind, bool strong) {
         const std::string tl = LauncherText::Tr(label);
         const int bw = GW(tl, 13 * u, true) + (int)(28 * u), bh = (int)(40 * u);
         bx -= bw;
-        PcButton(c, bx, by, bw, bh, 8 * u, strong, u);
-        GT(c, bx + (int)(14 * u), by + bh * 0.5f, tl, 13 * u, strong ? PcPal::OnPrimary : PcPal::Ink, true);
+        TradeButton(c, bx, by, bw, bh, 8 * u, strong, u);
+        GT(c, bx + (int)(14 * u), by + bh * 0.5f, tl, 13 * u, strong ? TradePal::OnPrimary : TradePal::Ink, true);
         T.hits.push_back({ bx, by, bw, bh, kind, 0, 0 });
         bx -= (int)(10 * u);
     };
@@ -627,9 +641,9 @@ inline void DrawTradeAnim(Canvas& c, float u)
     for (auto& p : c.px) p = 0xFF000000u + (((p >> 2) & 0x3F3F3Fu) + ((p >> 3) & 0x1F1F1Fu)) + 0x080402u;
     const int w = std::min((int)(640 * u), c.w - (int)(40 * u)), h = std::min((int)(420 * u), c.h - (int)(40 * u));
     const int x0 = (c.w - w) / 2, y0 = (c.h - h) / 2;
-    Glass::Round(c, x0, y0, w, h, 16 * u, PcPal::Body, PcPal::Primary, 4 * u);
+    Glass::Round(c, x0, y0, w, h, 16 * u, TradePal::Body, TradePal::Primary, 4 * u);
     const int sx = x0 + (int)(20 * u), sy = y0 + (int)(20 * u), sw = w - (int)(40 * u), sh = h - (int)(130 * u);
-    Glass::Round(c, sx, sy, sw, sh, 12 * u, 0xFF2B1A12u, PcPal::Line, 1.0f * u);
+    Glass::Round(c, sx, sy, sw, sh, 12 * u, 0xFF16261Au, TradePal::Line, 1.0f * u);
     const int box = (int)(sh * 0.7f);
     const float cx = sx + sw * 0.5f, cy = sy + sh * 0.5f;
     // (0 to 1.6 s: theirs... ours goes; 1.6 to 2.2: a ball crosses; 2.2 to 3.4: theirs comes; then rests.)
@@ -654,16 +668,16 @@ inline void DrawTradeAnim(Canvas& c, float u)
             for (int i = 0; i < 12; i++)
             {
                 const float ang = i * 0.5236f + t * 0.8f, r = box * (0.45f + 0.08f * std::sin(t * 4 + i));
-                Glass::DrawIcon(c, Glass::I_SPARKLE, cx + std::cos(ang) * r, cy + std::sin(ang) * r * 0.7f, (5 + 2 * std::sin(t * 6 + i)) * u, PcPal::Shiny);
+                Glass::DrawIcon(c, Glass::I_SPARKLE, cx + std::cos(ang) * r, cy + std::sin(ang) * r * 0.7f, (5 + 2 * std::sin(t * 6 + i)) * u, TradePal::Shiny);
             }
     }
     const std::string l1 = t < 2.2f ? LauncherText::Tr("Sending") + " " + a.giveName + "..." : LauncherText::Tr("Trade complete!");
     const std::string l2 = t < 2.2f ? std::string() : a.giveName + " " + LauncherText::Tr("went to") + " " + a.partner + ". " + LauncherText::Tr("You got") + " " + a.getName + "!";
     const int ty = sy + sh + (int)(30 * u);
-    GT(c, x0 + (w - GW(l1, 17 * u, true)) / 2, (float)ty, l1, 17 * u, PcPal::Ink, true);
-    if (!l2.empty()) GTFit(c, x0 + std::max((int)(20 * u), (w - GW(l2, 14 * u, false)) / 2), ty + 26 * u, l2, 14 * u, w - (int)(40 * u), PcPal::Ink, false);
+    GT(c, x0 + (w - GW(l1, 17 * u, true)) / 2, (float)ty, l1, 17 * u, TradePal::Ink, true);
+    if (!l2.empty()) GTFit(c, x0 + std::max((int)(20 * u), (w - GW(l2, 14 * u, false)) / 2), ty + 26 * u, l2, 14 * u, w - (int)(40 * u), TradePal::Ink, false);
     const std::string hint = LauncherText::Tr("Tap to close") + "   \xC2\xB7   " + LauncherText::Tr("It is in your Bank.");
-    GT(c, x0 + (w - GW(hint, 11.5f * u, false)) / 2, (float)(y0 + h - (int)(16 * u)), hint, 11.5f * u, PcPal::Hint, false);
+    GT(c, x0 + (w - GW(hint, 11.5f * u, false)) / 2, (float)(y0 + h - (int)(16 * u)), hint, 11.5f * u, TradePal::Hint, false);
 }
 #else
 inline void TradesPicked(bool) {}

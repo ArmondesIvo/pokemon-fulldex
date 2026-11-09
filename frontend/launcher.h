@@ -8846,6 +8846,52 @@ inline void DrawMusicSquare(Canvas& c, int x, int y, int sz, float u)
     Glass::DrawIcon(c, Glass::I_PREV, cx - gap, cy, 6.5f * u, m.canPrev ? ink : inkOff);
     Glass::DrawIcon(c, Glass::I_NEXT, cx + gap, cy, 6.5f * u, m.canNext ? ink : inkOff);
 }
+// A bell (the online trades' button), s tall, centred on cx, cy, in col, drawn in outline as the
+// bar's other icons are: a rounded dome flaring to a lip, the clapper below and a small ring on top;
+// edges smoothed (4 x 4 samples).
+inline void DrawBellIcon(Canvas& c, float cx, float cy, float s, uint32_t col)
+{
+    auto body = [](float x, float y) {
+        // (In units of the bell's height, its middle at 0, 0.)
+        const float ax = std::fabs(x);
+        if (ax * ax + (y + 0.13f) * (y + 0.13f) < 0.27f * 0.27f && y < -0.13f) return true;  // the dome
+        if (y >= -0.13f && y <= 0.21f)                                                      // the sides, flaring
+        {
+            const float k = (y + 0.13f) / 0.34f;
+            return ax < 0.27f + 0.13f * k * k;
+        }
+        if (y > 0.21f && y <= 0.29f) return ax < 0.43f - (y - 0.21f) * 0.4f;                // the lip
+        return false;
+    };
+    // (The body as a line: in it, but not with all of a ring of points round it in it too.)
+    const float t = 0.085f;
+    auto inside = [&](float x, float y) {
+        if ((x * x + (y + 0.44f) * (y + 0.44f)) < 0.06f * 0.06f) return true;                // the ring on top
+        if ((x * x + (y - 0.38f) * (y - 0.38f)) < 0.08f * 0.08f) return true;                // the clapper
+        if (!body(x, y)) return false;
+        for (int k = 0; k < 8; k++)
+        {
+            const float a = k * 0.7853982f;
+            if (!body(x + t * std::cos(a), y + t * std::sin(a))) return true;
+        }
+        return false;
+    };
+    const int x0 = (int)(cx - s * 0.5f) - 1, x1 = (int)(cx + s * 0.5f) + 1, y0 = (int)(cy - s * 0.56f) - 1, y1 = (int)(cy + s * 0.5f) + 1;
+    const uint32_t cr = (col >> 16) & 255, cg = (col >> 8) & 255, cb = col & 255;
+    for (int y = std::max(0, y0); y < std::min(c.h, y1); y++)
+        for (int x = std::max(0, x0); x < std::min(c.w, x1); x++)
+        {
+            int hit = 0;
+            for (int j = 0; j < 4; j++)
+                for (int i = 0; i < 4; i++)
+                    hit += inside((x + (i + 0.5f) / 4 - cx) / s, (y + (j + 0.5f) / 4 - cy) / s);
+            if (!hit) continue;
+            uint32_t& p = c.px[(size_t)y * c.w + x];
+            const uint32_t a = (uint32_t)hit * 16, na = 256 - a;
+            const uint32_t r = (((p >> 16) & 255) * na + cr * a) >> 8, g = (((p >> 8) & 255) * na + cg * a) >> 8, b = ((p & 255) * na + cb * a) >> 8;
+            p = 0xFF000000u | r << 16 | g << 8 | b;
+        }
+}
 inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, int tab, int selected, int& scroll,
                       const std::string& note, const std::string& hintText, bool follow, bool onTabs, bool settingsChosen)
 {
@@ -9360,11 +9406,14 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             // (The bell, beside the figure: online trades; a red dot when one waits on this player.)
             const int bellX = sortX - (int)(10 * u) - bh;
             tool(2, bellX, bh, std::string(), -1);
-            const float bxc = bellX + bh * 0.5f, byc = by + bh * 0.5f, r = 8 * u;
-            Glass::Round(c, (int)(bxc - r), (int)(byc - r * 1.1f), (int)(2 * r), (int)(1.8f * r), r, text);           // (its dome)
-            Glass::Round(c, (int)(bxc - r * 1.25f), (int)(byc + r * 0.45f), (int)(2.5f * r), (int)(0.35f * r), 0.17f * r, text); // (its rim)
-            Glass::Round(c, (int)(bxc - r * 0.28f), (int)(byc + r * 0.85f), (int)(0.56f * r), (int)(0.5f * r), 0.28f * r, text); // (its clapper)
-            if (TradesWaiting() > 0) Glass::Round(c, bellX + bh - (int)(14 * u), by + (int)(5 * u), (int)(9 * u), (int)(9 * u), 4.5f * u, 0xFFE03131u);
+            DrawBellIcon(c, bellX + bh * 0.5f, by + bh * 0.5f, 20 * u, text);
+            if (TradesWaiting() > 0)
+            {
+                // (Something waiting: a red dot with a light ring, on the bell's shoulder.)
+                const int d = (int)(9 * u), dx = bellX + bh - d - (int)(7 * u), dy = by + (int)(6 * u);
+                Glass::Round(c, dx - (int)(2 * u), dy - (int)(2 * u), d + (int)(4 * u), d + (int)(4 * u), (d + 4 * u) * 0.5f, 0xFFFFFFFFu);
+                Glass::Round(c, dx, dy, d, d, d * 0.5f, 0xFFE03131u);
+            }
         }
         if (Account().signedIn) Glass::Round(c, sortX + sortW - (int)(13 * u), by + (int)(5 * u), (int)(8 * u), (int)(8 * u), 4 * u, 0xFF6BD18Fu);
 #else
