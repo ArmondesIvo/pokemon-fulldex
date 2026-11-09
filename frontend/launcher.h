@@ -5349,7 +5349,9 @@ struct PcSide
 {
     int game = 0, box = 0, firstChip = 0;
 #ifdef SSR_POKEMON_HUB
-    std::unique_ptr<PokemonHub::Save> save;
+    // (Shared by both panels when they show the same game or the Bank, in two of its boxes: one
+    // save, so what one panel does the other sees, and it is written once.)
+    std::shared_ptr<PokemonHub::Save> save;
 #endif
     std::string path, err;
 };
@@ -5381,15 +5383,34 @@ inline void PcOpenSide(int i, bool again = false)
     if (gs.empty()) { S.save.reset(); S.path.clear(); return; }
     S.game = std::max(0, std::min(S.game, (int)gs.size() - 1));
     // (One that could not be read is not tried again each frame: only when chosen again or reopened.)
+    const PcSide& O = P.s[1 - i];
     if (again || S.path != gs[S.game].path || (!S.save && S.err.empty()))
     {
         S.path = gs[S.game].path;
         S.err.clear();
-        S.save = OpenMoverGame(gs[S.game], S.err);
+        // (The other panel's, when it is the same game: read again, side 0 first, then 1 takes it.)
+        if (O.save && O.path == S.path && !(again && i == 0)) S.save = O.save;
+        else S.save = OpenMoverGame(gs[S.game], S.err);
     }
+    // (Never the same game read twice, two copies that would each write their own.)
+    if (i == 1 && S.save && O.save && S.save != O.save && S.path == O.path) S.save = O.save;
     if (S.save) S.box = S.box == PokemonHub::PARTY && !S.save->IsBank() ? S.box : std::max(0, std::min(S.box, S.save->Boxes() - 1));
 }
 inline void PcReopen() { PcOpenSide(0, true); PcOpenSide(1, true); Pc().pending = 0; Hub().version++; }
+// Both panels on one save (the same game, or the Bank twice).
+inline bool PcSameSave() { const PcState& P = Pc(); return P.s[0].save && P.s[0].save == P.s[1].save; }
+// (Both panels on one save never show the same box: the side just changed moves on to another,
+// by: the way it was going, 1 or -1.)
+inline void PcAvoidSameBox(int side, int by = 1)
+{
+    PcState& P = Pc();
+    if (!PcSameSave() || P.s[side].box != P.s[1 - side].box) return;
+    PcSide& S = P.s[side];
+    const int n = S.save->Boxes();
+    if (S.box == PokemonHub::PARTY) { S.box = 0; return; }
+    if (n > 1) S.box = ((S.box + by) % n + n) % n;
+    else if (!S.save->IsBank()) S.box = PokemonHub::PARTY;
+}
 inline void PcRefresh() { if (Pc().ready && !Pc().pending) PcReopen(); }
 // (Saves replaced by an import since My PC read them: read again, unless changes are waiting.)
 inline void PcCheckImported() { static int seen = 0; if (seen != ImportedSaves()) { seen = ImportedSaves(); PcRefresh(); } }
@@ -5428,8 +5449,8 @@ inline bool PcSave()
     if (!P.pending) return true;
     std::string err;
     std::vector<std::string> backups;
-    bool ok = P.s[0].save && P.s[1].save && PokemonHub::Commit(*P.s[0].save, *P.s[1].save, err, &backups);
-    P.msg = ok ? std::to_string(P.pending) + (P.pending == 1 ? " change" : " changes") + " saved. Both saves were backed up first." : "Could not save: " + err + ". Your changes are still here: Save again, or Undo All.";
+    bool ok = P.s[0].save && P.s[1].save && (PcSameSave() ? PokemonHub::Commit(*P.s[0].save, err, &backups) : PokemonHub::Commit(*P.s[0].save, *P.s[1].save, err, &backups));
+    P.msg = ok ? std::to_string(P.pending) + (P.pending == 1 ? " change" : " changes") + (PcSameSave() ? (P.s[0].save->IsBank() ? std::string(" saved.") : std::string(" saved. The save was backed up first.")) : std::string(" saved. Both saves were backed up first.")) : "Could not save: " + err + ". Your changes are still here: Save again, or Undo All.";
     // (Failed: the changes kept as they are, not read over, so nothing done is lost.)
     if (ok) PcReopen();
     return ok;
@@ -5445,7 +5466,8 @@ inline void PcMove(int fs, int fbox, int fslot, int ts, int tbox, int tslot)
     const std::string name = PcMonName(m);
     std::string err;
     bool ok;
-    if (fs == ts) ok = PokemonHub::Relocate(*F.save, fbox, fslot, tbox, tslot, err);
+    const bool one = F.save == T.save; // (the same game in both panels, or one panel: within it)
+    if (one) ok = PokemonHub::Relocate(*F.save, fbox, fslot, tbox, tslot, err);
     else
     {
         const int toBox = tbox == PokemonHub::PARTY ? PokemonHub::TO_PARTY : tbox, toSlot = tbox == PokemonHub::PARTY ? -1 : tslot;
@@ -5462,7 +5484,7 @@ inline void PcMove(int fs, int fbox, int fslot, int ts, int tbox, int tslot)
     if (!ok) { P.msg = "Could not move " + name + ": " + SettingSentence(err) + "."; return; }
     P.pending++;
 #ifdef SSR_POKEMON_HUB
-    if (fs != ts)
+    if (!one)
     {
         // (Evolved on the way: the evolution shown, as the games show a trade's.)
         PokemonHub::Mon now;
@@ -5474,7 +5496,7 @@ inline void PcMove(int fs, int fbox, int fslot, int ts, int tbox, int tslot)
         }
     }
 #endif
-    P.msg = name + " moved" + (fs == ts ? std::string(".") : " to " + PcShortName(T.save->GameName()) + ".") + (err.empty() ? "" : " On the way: " + SettingSentence(err) + ".");
+    P.msg = name + " moved" + (one ? std::string(".") : " to " + PcShortName(T.save->GameName()) + ".") + (err.empty() ? "" : " On the way: " + SettingSentence(err) + ".");
     P.selSide = ts; P.selBox = tbox; P.selSlot = tbox == PokemonHub::PARTY ? (int)PokemonHub::Party(*T.save).size() - 1 : tslot;
     Hub().version++;
 }
@@ -5613,9 +5635,9 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
             const std::string n = PcShortName(gs[i].name);
             const int cw = GW(n, 12 * u, true) + (int)(18 * u);
             if (cx + cw > right && i > S.firstChip) break;
-            const bool on = i == S.game, other = i == P.s[1 - side].game;
+            const bool on = i == S.game;
             PcButton(c, cx, cy, cw, chH, 8 * u, on, u);
-            GT(c, cx + (int)(9 * u), cy + chH * 0.5f, n, 12 * u, on ? PcPal::OnPrimary : other ? hint : text, true);
+            GT(c, cx + (int)(9 * u), cy + chH * 0.5f, n, 12 * u, on ? PcPal::OnPrimary : text, true);
             PcHitAdd(cx, cy, cw, chH, PC_GAME, side, i);
             cx += cw + (int)(5 * u);
         }
@@ -5725,7 +5747,7 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
     {
         GT(c, x + pad, ty + 12 * u, "My PC", 20 * u, text, true);
         ty += (int)(34 * u);
-        para("Drag a Pok\xC3\xA9mon to a free place to move it: within a game, to the other side's game, or into the Bank.", text, 13 * u);
+        para("Drag a Pok\xC3\xA9mon to a free place to move it: within a box, to the other panel (another game, or another box of the same one), or into the Bank.", text, 13 * u);
         para("Or tap one to see it here, then tap a free place. Nothing is written until Save; Undo All puts everything back.", hint, 12 * u);
         para("Pok\xC3\xA9mon go to games of their generation or newer, as in the real games. The Bank keeps any.", hint, 12 * u);
         return;
@@ -6043,20 +6065,25 @@ inline void PcTap(const PcHit& h)
     case PC_GAME:
         if (h.value == S.game) break;
         if (P.pending && !PcSave()) break; // (another game: what was changed is saved first; not saved, it stays)
-        if (h.value == P.s[1 - h.side].game) std::swap(P.s[0].game, P.s[1].game), std::swap(P.s[0].box, P.s[1].box); // (the same game on both sides: they change places)
-        else { S.game = h.value; S.box = 0; }
+        // (The other panel's game too: both on it, in two boxes, as PKVault allows.)
+        S.game = h.value; S.box = 0;
         P.selSide = -1;
         PcOpenSide(0, true); PcOpenSide(1, true);
+        PcAvoidSameBox(h.side);
         break;
     case PC_PREV_GAMES: S.firstChip = std::max(0, S.firstChip - 1); break;
     case PC_NEXT_GAMES: S.firstChip = std::min(ng - 1, S.firstChip + 1); break;
-    case PC_PARTY: S.box = PokemonHub::PARTY; break;
+    case PC_PARTY:
+        if (PcSameSave() && P.s[1 - h.side].box == PokemonHub::PARTY) { P.msg = "The other panel shows this party already."; break; }
+        S.box = PokemonHub::PARTY;
+        break;
     case PC_BOX_PREV: case PC_BOX_NEXT:
         if (S.save)
         {
             const int n = S.save->Boxes();
             const int b = S.box == PokemonHub::PARTY ? 0 : S.box;
             S.box = S.box == PokemonHub::PARTY ? (h.kind == PC_BOX_NEXT ? 0 : n - 1) : (b + (h.kind == PC_BOX_NEXT ? 1 : n - 1)) % n;
+            PcAvoidSameBox(h.side, h.kind == PC_BOX_NEXT ? 1 : -1);
         }
         break;
     case PC_CELL:

@@ -3,6 +3,9 @@
 
 ## Unreleased
 
+- **My PC: the same game (or the Bank) in both panels**, in two different boxes, as PKVault allows: the
+  Bank's "Bobs" box on the left and "Legendaries" on the right, or Red's party and its Box 1. Never the
+  same box twice: the arrows step over the box the other panel shows.
 - **Safer saves (a review's findings).** A failed Save in My PC keeps your changes instead of dropping
   them; the party can never get a seventh Pokémon; the Bank, put back after a failed save, keeps each
   Pokémon's own format (Gen 5 and 7 ones came back as Gen 4 and 6); Import All copies one save a game
