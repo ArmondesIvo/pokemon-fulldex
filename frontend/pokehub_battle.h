@@ -314,6 +314,16 @@ inline std::vector<Arena::MonSpec> BattleTeamOf(const int* species, int n, int l
     }
     return t;
 }
+// (An everyday trainer's Pokémon, theirs and a gym's: not too strong, as the player asked: base
+// stats 500 at most in all, none above 130, so no walls like Doublade.)
+inline bool EverydayOk(int sp)
+{
+    int base[6], types[2];
+    if (sp <= 0 || sp == 292 || Arena::NoPicture(sp) || Arena::Legendary(sp) || !PokemonHub::SpeciesBase(sp, base, types)) return false;
+    int total = 0;
+    for (int b : base) { if (b > 130) return false; total += b; }
+    return total <= 500;
+}
 inline int TeamSize(const Arena::Trainer& t) { int n = 0; while (n < 6 && t.team[n]) n++; return n; }
 // A famous trainer's team: as the games have it, its moves too, when that is known
 // (battle_trainer_teams.h); else its species with moves chosen by type. All at level 50.
@@ -359,7 +369,7 @@ inline const std::vector<int>& TypePool(int type)
         if (Arena::NoPicture(sp) || !PokemonHub::SpeciesBase(sp, base, types)) continue;
         int total = 0;
         for (int b : base) total += b;
-        if (total < 580 && total >= 300 && (types[0] == type || types[1] == type)) v.push_back(sp);
+        if (total >= 300 && EverydayOk(sp) && (types[0] == type || types[1] == type)) v.push_back(sp);
     }
     return cache[type] = v;
 }
@@ -428,7 +438,7 @@ inline void BattleSetOpp(bool reroll = false)
             for (int tries = 0; n < want && tries < 200; tries++)
             {
                 const int x = 1 + (int)(rng() % PokemonHub::DEX_SPECIES);
-                bool dup = x == 292 || Arena::NoPicture(x) || Arena::Legendary(x);
+                bool dup = !EverydayOk(x);
                 for (int i = 0; i < n; i++) dup |= sp[i] == x;
                 if (!dup) sp[n++] = x;
             }
