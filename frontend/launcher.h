@@ -5883,6 +5883,9 @@ inline void PcDrawEvolution(Canvas& c, float u, int L, int R, int top, int botto
     PcState& P = Pc();
     if (!P.evo.on) return;
     const float t = PcEvoTime();
+    // (The list is drawn again only when its signature changes, HubSig among it: a new frame asked
+    // for each time, while it plays, and once more as it ends.)
+    Hub().version++;
     if (t >= EVO_END) { P.evo.on = false; return; }
     // The page dimmed under it (to three eighths, warm).
     for (int y = std::max(0, top); y < std::min(c.h, bottom); y++)
