@@ -1233,6 +1233,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         if(key && !strcmp(key,"list_sort"))reorderLibrary();
         if(key && !strcmp(key,"!favourite"))toggleFavourite();
         // (This fork: Hub, ROMs and Launcher, out of the sidebar, opened from the settings.)
+        if (key && !strcmp(key, "!open_import")) { guide = false; Launcher::OpenImport(false); return; }
         if (key && (!strcmp(key, "!open_hub") || !strcmp(key, "!open_roms") || !strcmp(key, "!open_launcher")))
         {
             guide = false;

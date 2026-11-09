@@ -345,7 +345,19 @@ std::string Save::GameName() const { return d->bank ? std::string("Bank") : Game
 std::string Save::Trainer() const { return d->bank ? std::string() : d->sav->otName(); }
 bool Save::ReadOnly() const { return d->readOnly; }
 int Save::Boxes() const { return d->bank ? BANK_BOXES : d->sav->maxBoxes(); }
-std::string Save::BoxName(int box) const { return d->bank ? "Bank " + std::to_string(box + 1) : d->sav->boxName((u8)box); }
+std::string Save::BoxName(int box) const
+{
+    if (!d->bank) return d->sav->boxName((u8)box);
+    // (A name of its own, as PKVault's boxes have: box-NN/name.txt, its first line.)
+    std::vector<u8> raw;
+    if (ReadFile(S(P(BankBoxDir(d->path, box)) / "name.txt"), raw) && !raw.empty() && raw.size() < 200)
+    {
+        std::string n(raw.begin(), raw.end());
+        n = n.substr(0, n.find_first_of("\r\n"));
+        if (!n.empty()) return n;
+    }
+    return "Bank " + std::to_string(box + 1);
+}
 bool Save::Changed() const { return d->changed; }
 
 std::vector<Mon> Save::Box(int box) const

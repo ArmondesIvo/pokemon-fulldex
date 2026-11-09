@@ -49,7 +49,7 @@ final class SaveImport {
         if (state() != 2) return "ERROR SHIZUKU IS NOT ALLOWED";
         if (from.indexOf('\'') >= 0 || to.indexOf('\'') >= 0) return "ERROR A FOLDER'S NAME HAS A QUOTE IN IT";
         final String script = "mkdir -p '" + to + "' || exit 2; cd '" + from + "' || exit 3; "
-                + "for f in *.sav *.SAV *.srm *.SRM *.sa1; do [ -f \"$f\" ] && cp \"$f\" '" + to + "/' && echo \"$f\"; done; exit 0";
+                + "for f in *.sav *.SAV *.srm *.SRM *.sa1; do [ -f \"$f\" ] && cp -p \"$f\" '" + to + "/' && echo \"$f\"; done; exit 0";
         try {
             // (newProcess is Shizuku's own, kept from other apps' view since API 13 in favour of
             // a "user service"; for one copy, that is a great deal more than needed.)

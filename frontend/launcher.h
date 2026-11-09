@@ -2490,6 +2490,7 @@ inline void TradeEnterCode(const std::string& code); // (the Hub's Trade page, b
 inline void ThemeSaveStart(const std::string& name); // (My Themes, below)
 inline void PcRenameDone(const std::string& t); // (My PC, below)
 inline bool PcBack(); // (My PC, below)
+inline void PcReopen();
 inline void KeyboardDone(int& tab, std::string& note)
 {
     GlassFocus& F = Focus();
@@ -3294,13 +3295,20 @@ struct ImportHooks
     std::string storage;                 // the phone's own storage (/storage/emulated/0), "" elsewhere
 };
 inline ImportHooks& Importer() { static ImportHooks h; return h; }
-struct ImportFile { std::string path, name, key, game, target; };
+struct ImportFile
+{
+    std::string path, name, key, game, target;
+    std::string srcWhen, dstWhen; // when each was last written ("" none)
+    bool newerHere = false;       // the game's save here was written after this one
+};
 struct ImportState
 {
     int emu = 0;            // 0 My Boy, 1 My OldBoy
     bool searched = false;
     std::string folder, where, msg;
     std::vector<ImportFile> files;
+    std::string confirm;    // a save whose game has a newer one here: asked about, waiting for yes or no
+    bool fromPc = false;    // opened from My PC: back goes there
 };
 inline ImportState& Import() { static ImportState s; return s; }
 inline const char* ImportEmuName(int e) { return e == 1 ? "My OldBoy" : "My Boy"; }
@@ -3358,6 +3366,24 @@ inline const Game* ImportGameFor(const std::string& savePath)
 #endif
     return nullptr;
 }
+// When a file was last written, for the player ("2026-11-09 02:41"; "" when it is not there).
+inline std::string ImportWhen(const std::string& path)
+{
+    struct stat st;
+    if (path.empty() || stat(path.c_str(), &st) != 0) return std::string();
+    char b[32];
+    const time_t t = st.st_mtime;
+    strftime(b, sizeof b, "%Y-%m-%d %H:%M", localtime(&t));
+    return b;
+}
+// The game's save here written later than the one coming in (by more than a minute: copies keep
+// their times to the second or two).
+inline bool ImportNewerHere(const std::string& incoming, const std::string& here)
+{
+    std::error_code ec, ec2;
+    const auto a = std::filesystem::last_write_time(incoming, ec), b = std::filesystem::last_write_time(here, ec2);
+    return !ec && !ec2 && b > a + std::chrono::minutes(1);
+}
 inline void ImportList(const std::string& dir, const std::string& where)
 {
     ImportState& s = Import();
@@ -3374,7 +3400,10 @@ inline void ImportList(const std::string& dir, const std::string& where)
             f.key = g->saveName;
             f.game = ShortName(*g);
             f.target = HubSavePath(*g);
+            f.dstWhen = ImportWhen(f.target);
+            f.newerHere = !f.dstWhen.empty() && ImportNewerHere(f.path, f.target);
         }
+        f.srcWhen = ImportWhen(f.path);
         s.files.push_back(f);
     }
 }
@@ -3442,6 +3471,9 @@ inline bool ImportOne(const ImportFile& f, std::string& err)
     std::filesystem::create_directories(std::filesystem::path(f.target).parent_path(), ec);
     std::filesystem::copy_file(f.path, f.target, std::filesystem::copy_options::overwrite_existing, ec);
     if (ec) { err = "could not copy it"; return false; }
+    // (It keeps its own time: the next look compares the game's save by when it was played.)
+    const auto when = std::filesystem::last_write_time(f.path, ec);
+    if (!ec) std::filesystem::last_write_time(f.target, when, ec);
     return true;
 }
 inline void ImportShow()
@@ -3485,7 +3517,11 @@ inline std::vector<std::string> ImportActions(int row)
     }
     if (row == 2) return ImportReady() ? std::vector<std::string>{ "Import All" } : std::vector<std::string>{};
     const int i = row - IMPORT_FIRST;
-    if (i >= 0 && i < (int)s.files.size() && !s.files[i].target.empty()) return { "Import" };
+    if (i >= 0 && i < (int)s.files.size() && !s.files[i].target.empty())
+    {
+        if (s.files[i].newerHere && s.confirm == s.files[i].path) return { "Yes, Replace It", "No, Keep Mine" };
+        return { "Import" };
+    }
     return {};
 }
 inline std::string ImportDo(int row, int act)
@@ -3500,8 +3536,28 @@ inline std::string ImportDo(int row, int act)
     if (a == "Choose A Folder") { Importer().chooseFolder(); return ""; }
     if (a == "Allow Shizuku") { Importer().shizukuAsk(); s.msg = "Say yes in Shizuku's question, then choose Search Again."; return ""; }
     std::vector<ImportFile> todo;
-    if (a == "Import All") { for (const ImportFile& f : s.files) if (!f.target.empty()) todo.push_back(f); }
-    else if (a == "Import") todo.push_back(s.files[(size_t)(row - IMPORT_FIRST)]);
+    std::string kept;
+    if (a == "Import All")
+    {
+        // (A game whose save here is newer keeps it: replacing that one is asked about, one at a time.)
+        for (const ImportFile& f : s.files)
+            if (f.target.empty()) continue;
+            else if (f.newerHere) kept += (kept.empty() ? "" : ", ") + f.game;
+            else todo.push_back(f);
+    }
+    else
+    {
+        const ImportFile& f = s.files[(size_t)(row - IMPORT_FIRST)];
+        if (a == "No, Keep Mine") { s.confirm.clear(); s.msg = "Kept your " + f.game + " save."; return ""; }
+        if (a == "Import" && f.newerHere)
+        {
+            s.confirm = f.path;
+            s.msg = "Your " + f.game + " save here (" + f.dstWhen + ") is newer than " + ImportEmuName(s.emu) + "'s (" + f.srcWhen + "). Replace it anyway? Yours is backed up first.";
+            return "";
+        }
+        s.confirm.clear();
+        todo.push_back(f);
+    }
     int done = 0;
     std::string fails;
     for (const ImportFile& f : todo)
@@ -3510,7 +3566,10 @@ inline std::string ImportDo(int row, int act)
         if (ImportOne(f, err)) done++;
         else fails += (fails.empty() ? "" : ", ") + f.name + " (" + err + ")";
     }
-    s.msg = std::to_string(done) + (done == 1 ? " save" : " saves") + " imported; any save that was there was backed up first, in the backups folder." + (fails.empty() ? "" : " Not imported: " + fails + ".");
+    s.msg = std::to_string(done) + (done == 1 ? " save" : " saves") + " imported; any save that was there was backed up first, in the backups folder." + (fails.empty() ? "" : " Not imported: " + fails + ".")
+          + (kept.empty() ? "" : " Kept, as yours here are newer: " + kept + " (choose one alone to replace it anyway).");
+    // (The lists of saves read again: the dates and what each game has now.)
+    if (done) { const std::string dir = s.folder, where = s.where; ImportList(dir, where); }
     Hub().version++;
     return "";
 }
@@ -5012,6 +5071,7 @@ inline bool PageBack()
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().fromTab) { MoverShow(false); Mover().fromTab = false; F.page = -1; F.side = -1; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 5 && Import().fromPc) { Import().fromPc = false; HubMode() = 6; F.prow = 0; F.rScroll = 0; PcReopen(); return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && (HubMode() == 4 || HubMode() == 5)) { F.prow = HubMode(); HubMode() = 0; F.rScroll = 0; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() != 0) { HubMode() = 0; F.prow = 0; F.rScroll = 0; Hub().version++; return true; }
     if ((F.page == SIDE_ROMS || F.page == SIDE_HUB) && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
@@ -5039,6 +5099,16 @@ inline void OpenMyPc()
     HubMode() = 6; // (My PC: DrawPcPage)
     F.prow = 0; F.pact = -1; F.rScroll = 0;
     Hub().version++;
+}
+// IMPORT SAVES, from the settings or My PC's foot (back goes to My PC when it came from there).
+inline void OpenImport(bool fromPc)
+{
+    GlassFocus& F = Focus();
+    if (!fromPc) OpenSide(SIDE_HUB);
+    ImportShow();
+    Import().fromPc = fromPc;
+    Import().confirm.clear();
+    F.prow = 0; F.pact = -1; F.rScroll = 0;
 }
 inline int PageRowAt(int x, int y)
 {
@@ -5208,7 +5278,7 @@ bool BoxSprite(int species, bool shiny, const unsigned char*& data, size_t& size
 namespace Launcher {
 #endif
 struct PcHit { int x, y, w, h, kind, side, value; };
-enum { PC_GAME = 1, PC_PREV_GAMES, PC_NEXT_GAMES, PC_BOX_PREV, PC_BOX_NEXT, PC_PARTY, PC_CELL, PC_TAB, PC_EV, PC_EVOLVE, PC_SAVE, PC_UNDO, PC_RENAME, PC_CLOSE };
+enum { PC_GAME = 1, PC_PREV_GAMES, PC_NEXT_GAMES, PC_BOX_PREV, PC_BOX_NEXT, PC_PARTY, PC_CELL, PC_TAB, PC_EV, PC_EVOLVE, PC_SAVE, PC_UNDO, PC_RENAME, PC_CLOSE, PC_IMPORT };
 struct PcSide
 {
     int game = 0, box = 0, firstChip = 0;
@@ -5717,6 +5787,17 @@ inline void DrawPcPage(Canvas& c, bool solid, float u, int L, int R, int top, in
         button("Save", PC_SAVE, true);
         button("Undo All", PC_UNDO, false);
     }
+    else
+    {
+        // (Nothing waiting: other emulators' saves can come in from here.)
+        const std::string label = "Import Saves";
+        const int bw = GW(label, 13 * u, true) + (int)(26 * u), bh = barH - (int)(12 * u);
+        bx -= bw;
+        PcButton(c, bx, fy + (int)(6 * u), bw, bh, 6 * u, false, u);
+        GT(c, bx + (int)(13 * u), fy + barH * 0.5f, label, 13 * u, text, true);
+        PcHitAdd(bx, fy + (int)(6 * u), bw, bh, PC_IMPORT, 0, 0);
+        bx -= (int)(8 * u);
+    }
     const std::string left = P.pending ? std::to_string(P.pending) + (P.pending == 1 ? " change to save" : " changes to save") + (P.msg.empty() ? "" : "   \xC2\xB7   " + P.msg) : P.msg.empty() ? std::string("Drag or tap to move Pok\xC3\xA9mon between your games and the Bank.") : P.msg;
     GTFit(c, L + (int)(14 * u), fy + barH * 0.5f, left, 12 * u, bx - L - (int)(24 * u), P.pending ? text : hint, P.pending != 0);
     // A Pokémon carried by a finger, over everything.
@@ -5830,6 +5911,11 @@ inline void PcTap(const PcHit& h)
     }
     case PC_SAVE: PcSave(); break;
     case PC_UNDO: PcReopen(); P.msg = "Everything put back as it was saved."; P.selSide = -1; break;
+    case PC_IMPORT:
+        if (P.pending) { P.msg = "Save or Undo All first: importing replaces games' saves."; break; }
+        P.selSide = -1;
+        OpenImport(true);
+        return;
     }
     Hub().version++;
 #else
@@ -6925,8 +7011,8 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             {
                 const ImportFile& f = im.files[(size_t)(i - IMPORT_FIRST)];
                 k = "Save"; v = f.name;
-                chip = f.target.empty() ? "No Game For It" : "To " + f.game;
-                chipCol = f.target.empty() ? noCol : okCol;
+                chip = f.target.empty() ? "No Game For It" : f.newerHere ? f.game + ": Yours Is Newer" : "To " + f.game;
+                chipCol = f.target.empty() ? noCol : f.newerHere ? warnCol : okCol;
             }
             Glass::DrawIcon(c, icon, rx + 18 * u, mid, 9 * u, text);
             int chipX = rx + rww;
@@ -6979,7 +7065,10 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             {
                 std::error_code ec;
                 para("Goes to " + f.game + ".", okCol, 14 * u);
-                para(std::filesystem::exists(f.target, ec) ? "That game has a save already: it is backed up first, then replaced by this one." : "That game has no save yet.", hint, 13 * u);
+                para(std::string(ImportEmuName(im.emu)) + "'s save: " + Shown(f.srcWhen, "-"), text, 13 * u);
+                para("Yours here: " + (f.dstWhen.empty() ? std::string("none yet") : f.dstWhen), text, 13 * u);
+                if (f.newerHere) para("Yours here was played more recently. Importing asks first; Import All leaves it as it is.", warnCol, 13 * u);
+                else para(std::filesystem::exists(f.target, ec) ? "That game has a save already: it is backed up first, then replaced by this one." : "That game has no save yet.", hint, 13 * u);
             }
         }
         return;
@@ -9185,6 +9274,7 @@ struct SettingsPage
             items.push_back({ sg.key, sg.name, { { "", ">" } }, "", groupText[g].c_str() });
         }
         // (This fork: the pages that were in the sidebar, opened from here.)
+        items.push_back({ "!open_import", "IMPORT SAVES", { { "", ">" } }, "", "BRING IN SAVES FROM MY BOY AND MY OLDBOY." });
         items.push_back({ "!open_hub", "HUB", { { "", ">" } }, "", "CLOUD SAVES / MOVE POKEMON / TRADE / POKEDEX / IMPORT SAVES." });
         items.push_back({ "!open_roms", "ROMS", { { "", ">" } }, "", "YOUR GAMES' FILES: RENAME, HIDE OR DELETE THEM." });
         items.push_back({ "!open_launcher", "LAUNCHER", { { "", ">" } }, "", "THE LOOK OF THE LIST: THEMES, LAYOUT, FONT, MUSIC PLAYER." });
