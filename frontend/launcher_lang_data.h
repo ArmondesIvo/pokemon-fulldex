@@ -4336,6 +4336,14 @@ Sign Out	Sair Da Conta
 Signed in to PokeHub with Google.	Conectado ao PokeHub com o Google.
 Sign in with your Google account (Gmail) to keep your saves in PokeHub's cloud, the same on every phone.	Entre com sua conta Google (Gmail) para guardar seus saves na nuvem do PokeHub, iguais em todo celular.
 Signing in is not ready yet in this version.	O login ainda não está pronto nesta versão.
+Turn On	Ligar
+Turn Off	Desligar
+PokeHub	PokeHub
+Keep your saves the same on every phone: play on one, carry on on another.	Seus saves iguais em todo celular: jogue num, continue no outro.
+Open it and choose Turn On. Your saves go to PokeHub's cloud, kept for your account only.	Abra e escolha Ligar. Seus saves vão para a nuvem do PokeHub, guardados só para a sua conta.
+Sign in first with the figure at the top of the home screen, then turn them on here.	Entre primeiro pelo bonequinho no topo da tela inicial e depois ligue aqui.
+Cloud saves are off. Your saves stay here, and in PokeHub's cloud.	Saves na nuvem desligados. Seus saves ficam aqui e na nuvem do PokeHub.
+SIGN IN TO POKEHUB AGAIN (THE FIGURE AT THE TOP)	ENTRE DE NOVO NO POKEHUB (O BONEQUINHO NO TOPO)
 )FDXLANG";
 inline const char* LauncherLangData(const char* code)
 {

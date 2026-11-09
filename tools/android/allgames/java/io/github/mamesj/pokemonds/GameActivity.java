@@ -175,6 +175,12 @@ public class GameActivity extends SDLActivity {
     // PokeHub's account (Account.java), for the launcher's figure: "email\tname", or "".
     public static String accountInfo() { return self != null ? Account.info(self) : ""; }
     public static void accountSignIn() { if (self != null) Account.signIn(self); }
+    // For the cloud saves (native): "server\ttoken", or "" when signed out.
+    public static String accountSession() {
+        if (self == null || !Account.ready()) return "";
+        String t = Account.token(self);
+        return t.isEmpty() ? "" : BuildInfo.ACCOUNT_URL + "\t" + t;
+    }
     public static void accountSignOut() { if (self != null) Account.signOut(self); }
     public static String accountReady() { return Account.ready() ? "1" : ""; }
 

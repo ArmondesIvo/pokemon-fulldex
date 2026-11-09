@@ -2646,8 +2646,12 @@ inline std::string HubDevice()
     const std::string p = PlatformLabel();
     return p == "Windows" ? "Windows PC" : p == "Apple" ? "Mac" : p == "Nintendo Switch" ? p : p + " Device";
 }
-inline bool HubOnLocked(const HubState& h) { return h.set.provider != "off" && !(h.set.provider == "google" && h.set.googleRefreshToken.empty()); }
-inline const char* HubProvider(const std::string& p) { return p == "google" ? "Google Drive" : p == "webdav" ? "WebDAV" : p == "folder" ? "A Synced Folder" : "Off"; }
+// (PokeHub's cloud: on when chosen and the account is signed in; the account itself is the figure
+// on the top bar, whose sign-in the platform does: AccountSignInHook.)
+inline bool PokeHubSignedIn();
+inline bool HubOnLocked(const HubState& h) { return h.set.provider != "off" && !(h.set.provider == "google" && h.set.googleRefreshToken.empty()) && !(h.set.provider == "pokehub" && !PokeHubSignedIn()); }
+inline std::function<void()>& AccountSignInHook() { static std::function<void()> f; return f; }
+inline const char* HubProvider(const std::string& p) { return p == "pokehub" ? "PokeHub" : p == "google" ? "Google Drive" : p == "webdav" ? "WebDAV" : p == "folder" ? "A Synced Folder" : "Off"; }
 inline std::string HubSig() { return std::to_string(Hub().version.load()) + "." + std::to_string(HubLink::Version()); }
 inline std::string SettingSentence(const std::string& s); // (below: capitals made a sentence)
 // MOVE POKEMON (the Hub's second row): the Pokémon in a box of one of the player's games, and moving
@@ -4804,8 +4808,15 @@ inline std::vector<std::string> HubActions(int row)
     {
         if (h.busy == 1) return { "Cancel" };
         if (h.busy) return {};
+#ifdef __ANDROID__
+        // (PokeHub: its own cloud, with the account; signing in is the figure's.)
+        if (!PokeHubSignedIn()) return { "Sign In With Google" };
+        if (!HubOnLocked(h)) return { "Turn On" };
+        return { "Sync All Now", "Turn Off" };
+#else
         if (!HubOnLocked(h)) return { "Sign In With Google" };
         return { "Sync All Now", "Sign Out" };
+#endif
     }
     if (!HubOnLocked(h) || h.busy || row - HUB_FIRST >= (int)games.size()) return {};
     const auto it = h.results.find(games[row - HUB_FIRST].path);
@@ -4923,6 +4934,21 @@ inline std::string HubDo(int row, int act)
     if (a == "Cancel") { h.cancel = true; return ""; }
     std::lock_guard<std::mutex> l(h.m);
     if (h.busy) return "";
+#ifdef __ANDROID__
+    if (a == "Sign In With Google") { if (AccountSignInHook()) AccountSignInHook()(); return ""; }
+    if (a == "Turn On" || a == "Turn Off")
+    {
+        h.set.provider = a == "Turn On" ? "pokehub" : "off";
+        if (h.set.deviceName.empty()) h.set.deviceName = HubDevice();
+        const bool ok = CloudSaves::SaveSettings(h.dir + "/cloud.ini", h.set);
+        h.results.clear();
+        if (!ok) { h.msg = "Could not save the cloud settings."; h.version++; return ""; }
+        if (a == "Turn Off") { h.msg = "Cloud saves are off. Your saves stay here, and in PokeHub's cloud."; h.version++; return ""; }
+        h.busy = 2; h.msg = "Syncing..."; h.version++;
+        HubStart([paths] { HubSyncJob(paths, -1); });
+        return "";
+    }
+#endif
     if (a == "Sign In With Google")
     {
         h.busy = 1; h.cancel = false; h.msg = "Asking Google for a code..."; h.version++;
@@ -5035,6 +5061,7 @@ inline void AccountFrom(const std::string& info)
     a.email = info.substr(0, t);
     a.name = t == std::string::npos ? std::string() : info.substr(t + 1);
 }
+inline bool PokeHubSignedIn() { return Account().signedIn; }
 // The figure on the top bar: who is signed in and Sign Out, or Sign In With Google.
 inline void OpenAccountAsk()
 {
@@ -7925,8 +7952,13 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             }
             else
             {
+#ifdef __ANDROID__
+                para("Keep your saves the same on every phone: play on one, carry on on another.", text, 14 * u);
+                para(PokeHubSignedIn() ? "Open it and choose Turn On. Your saves go to PokeHub's cloud, kept for your account only." : "Sign in first with the figure at the top of the home screen, then turn them on here.", hint, 13 * u);
+#else
                 para("Keep your saves the same on every device: play on your PC, then carry on on the Switch.", text, 14 * u);
                 para("Open it to sign in with Google. Your saves go to your own Drive, in a folder called Fulldex Cloud Saves.", hint, 13 * u);
+#endif
             }
             if (!msg.empty()) para(msg, busy ? 0xFF8CC8FFu : hint, 13 * u);
         }

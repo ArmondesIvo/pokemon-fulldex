@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 // Cloud saves: a game's save follows the player between their devices (PC, Switch, Android,
 // Mac, iPhone). Before a game starts its save is brought down from the cloud if another device
 // saved later; when it ends, the save goes up. Nothing is ever lost: a save about to be replaced
@@ -50,6 +51,12 @@ public:
 
 std::unique_ptr<Backend> FolderBackend(const std::string& folder);
 std::unique_ptr<Backend> WebDavBackend(const std::string& url, const std::string& user, const std::string& password);
+// PokeHub's own server (tools/pokehub/server): the signed-in player's saves, by the same GET and
+// PUT as WebDAV, with the account's session for its key.
+std::unique_ptr<Backend> PokeHubBackend(const std::string& server, const std::string& token);
+// The signed-in account, as the platform keeps it: "server\ttoken", or "" when signed out. (Set
+// by the Android launcher, from the app's private storage; the token is never put in cloud.ini.)
+std::function<std::string()>& PokeHubSession();
 
 // Google Drive. The refresh token is the lasting sign-in; it comes from SignIn below.
 struct GoogleClient
@@ -112,7 +119,7 @@ private:
     std::unique_ptr<Impl> d;
 };
 
-// cloud.ini: provider=off|google|webdav|folder, then webdav_url, webdav_user, webdav_password,
+// cloud.ini: provider=off|pokehub|google|webdav|folder, then webdav_url, webdav_user, webdav_password,
 // folder, google_refresh_token, google_client_id, google_client_secret, device_name.
 struct Settings
 {

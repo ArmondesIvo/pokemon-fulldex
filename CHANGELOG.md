@@ -3,6 +3,10 @@
 
 ## Unreleased
 
+- **Cloud saves in PokeHub's own cloud.** Signed in with the figure, Hub > Cloud Saves > Turn On keeps
+  each game's save in PokeHub's server, for that account only: brought down before a game starts when
+  another phone played later, sent up after it saves, asked about when both changed; a save about to be
+  replaced is always backed up first.
 - **An account figure on the home screen,** in place of Search, Sort and the music player: tap it to
   sign in to PokeHub with Google (through PokeHub's own server), or to see who is signed in and sign
   out. The session is kept in the app's private storage.

@@ -265,6 +265,8 @@ void JavaBoolArg(const char* method, bool value)
     CallActivity(method, "(Z)V", [&](JNIEnv* env, jclass c, jmethodID m) { env->CallStaticVoidMethod(c, m, value ? JNI_TRUE : JNI_FALSE); });
 }
 
+std::mutex& PokeHubSessionLock();
+std::string& PokeHubSessionNow();
 // IMPORT SAVES (Launcher::Importer): Shizuku and the folder picker, in GameActivity (SaveImport.java).
 void SetImporter()
 {
@@ -295,7 +297,15 @@ void SetImporter()
     h.chooseFolder = [] { JavaVoid("chooseImportFolder"); };
     h.picking = [] { return JavaBool("importPicking"); };
     h.picked = [] { return JavaString("importPicked"); };
+    // PokeHub's account for the cloud saves: the session as last read on the launcher's thread
+    // (the sync runs on others), and its sign-in, the browser's.
+    CloudSaves::PokeHubSession() = [] { std::lock_guard<std::mutex> l(PokeHubSessionLock()); return PokeHubSessionNow(); };
+    Launcher::AccountSignInHook() = [] { JavaVoid("accountSignIn"); };
 }
+
+// (PokeHub's session, "server\ttoken": read from Java on the launcher's thread, read by any.)
+std::mutex& PokeHubSessionLock() { static std::mutex m; return m; }
+std::string& PokeHubSessionNow() { static std::string s; return s; }
 
 // The ROM folder the player chose (GameActivity.romFolder), with the saves in a folder inside
 // it; until one is chosen, the app's own folder.
@@ -2711,6 +2721,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 lastOffer = SDL_GetTicks();
                 // (Who is signed in, as the Java side has it: after the browser brings a sign-in back.)
                 Launcher::AccountFrom(JavaString("accountInfo"));
+                { const std::string sess = JavaString("accountSession"); std::lock_guard<std::mutex> l(PokeHubSessionLock()); PokeHubSessionNow() = sess; }
                 const std::string offer = JavaString("updateOffer");
                 if (!offer.empty()) { Launcher::OpenUpdateAsk(offer); fprintf(stderr, "[launcher] update offer: %s\n", offer.substr(0, 40).c_str()); }
             }

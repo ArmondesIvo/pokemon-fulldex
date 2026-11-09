@@ -305,7 +305,12 @@ public:
     {
         if (!base.empty() && base.back() != '/') base += '/';
     }
-    const char* Name() const override { return "WEBDAV"; }
+    // (PokeHub's server: the same calls, the account's session as the key.)
+    WebDav(const std::string& url, const std::string& bearer) : base(url), auth("Authorization: Bearer " + bearer), pokehub(true)
+    {
+        if (!base.empty() && base.back() != '/') base += '/';
+    }
+    const char* Name() const override { return pokehub ? "POKEHUB" : "WEBDAV"; }
 
     bool Stat(const std::string& name, bool& exists, Meta& meta, std::string& error) override
     {
@@ -367,14 +372,24 @@ private:
         if (!Achievements::HttpRequest(c, status, body, error)) { error = "NO CONNECTION (" + error + ")"; return false; }
         return true;
     }
-    static std::string Problem(int status, const std::string&)
+    std::string Problem(int status, const std::string&) const
     {
+        if (pokehub) return status == 401 ? "SIGN IN TO POKEHUB AGAIN (THE FIGURE AT THE TOP)" : status == 413 ? "THIS SAVE IS TOO LARGE FOR POKEHUB'S CLOUD" : "POKEHUB'S SERVER ERROR " + std::to_string(status);
         if (status == 401 || status == 403) return "WEBDAV NAME OR PASSWORD NOT ACCEPTED";
         if (status == 409) return "THE WEBDAV FOLDER DOES NOT EXIST - MAKE IT FIRST";
         return "WEBDAV ERROR " + std::to_string(status);
     }
     std::string base, auth;
+    bool pokehub = false;
 };
+
+std::unique_ptr<Backend> PokeHubBackend(const std::string& server, const std::string& token)
+{
+    std::string base = server;
+    while (!base.empty() && base.back() == '/') base.pop_back();
+    return std::unique_ptr<Backend>(new WebDav(base + "/saves/", token));
+}
+std::function<std::string()>& PokeHubSession() { static std::function<std::string()> f; return f; }
 
 std::unique_ptr<Backend> WebDavBackend(const std::string& url, const std::string& user, const std::string& password)
 {
@@ -879,7 +894,14 @@ GoogleClient BuiltInGoogleClient()
 std::unique_ptr<Sync> FromSettings(const Settings& s, const std::string& statePath, const std::string& defaultDevice)
 {
     std::unique_ptr<Backend> b;
-    if (s.provider == "google" && !s.googleRefreshToken.empty())
+    if (s.provider == "pokehub")
+    {
+        // (Signed out: nothing synced, until signed in again.)
+        const std::string session = PokeHubSession() ? PokeHubSession()() : std::string();
+        const size_t t = session.find('\t');
+        if (t != std::string::npos && t > 0 && t + 1 < session.size()) b = PokeHubBackend(session.substr(0, t), session.substr(t + 1));
+    }
+    else if (s.provider == "google" && !s.googleRefreshToken.empty())
         b = GoogleDriveBackend(s.google.id.empty() ? BuiltInGoogleClient() : s.google, s.googleRefreshToken);
     else if (s.provider == "webdav" && !s.webdavUrl.empty())
         b = WebDavBackend(s.webdavUrl, s.webdavUser, s.webdavPassword);
