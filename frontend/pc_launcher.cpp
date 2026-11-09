@@ -2502,7 +2502,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_HUB && Launcher::HubMode() == 9 && !Launcher::Mover().open && Launcher::Focus().dialog == 0
                     && (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONUP) && !(e.type == SDL_MOUSEBUTTONUP && Launcher::BackAt(mx, my)))
                 {
-                    if (e.type == SDL_MOUSEBUTTONUP) Launcher::BattlePagePointer(2, mx, my);
+                    Launcher::BattlePagePointer(e.type == SDL_MOUSEBUTTONDOWN ? 0 : e.type == SDL_MOUSEMOTION ? 1 : 2, mx, my);
                     dragging = pressed = false;
                     break;
                 }

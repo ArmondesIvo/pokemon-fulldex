@@ -34,10 +34,23 @@ struct BattleState
     float u = 1;
     std::vector<uint32_t> bg; int bgW = 0, bgH = 0;
     float fcx = 0, fcy = 0, fk = 1; // (the field on the screen: its middle, arena units to pixels)
+    // (Choosing the team: every Pokémon of each save together, a tab a save, no boxes.)
+    struct PickMon { BattleKey k; int species = 0, level = 0; bool shiny = false; std::string name; };
+    struct PickGame { std::string name; std::vector<PickMon> mons; };
+    bool picking = false;
+    std::vector<PickGame> pg;
+    int pgTab = 0;
+    std::vector<BattleKey> pickSel;
+    float pickScroll = 0, pickMax = 0;
+    bool down = false, dragged = false;
+    int downX = 0, downY = 0;
+    float scroll0 = 0;
 };
 inline BattleState& Bat() { static BattleState s; return s; }
-enum { BT_PICK = 1, BT_REROLL, BT_DIFF, BT_FIGHT, BT_CARD, BT_BOTCARD, BT_PAUSE, BT_RESUME, BT_QUIT, BT_REMATCH, BT_MENU };
+enum { BT_PICK = 1, BT_REROLL, BT_DIFF, BT_FIGHT, BT_CARD, BT_BOTCARD, BT_PAUSE, BT_RESUME, BT_QUIT, BT_REMATCH, BT_MENU,
+    BT_PG_TAB, BT_PG_MON, BT_PG_SLOT, BT_PG_CANCEL, BT_PG_DONE, BT_PG_CLEAR };
 inline std::string BattleTeamFile() { return HubDir() + "/pokehub-battle-team.txt"; }
+inline void PmdWantTeams(); // (both teams' moving pictures fetched: below)
 
 // ---- The Pokémon: read from their saves -------------------------------------------------------
 inline bool BattleSpec(PokemonHub::Save& s, int box, int slot, Arena::MonSpec& out)
@@ -95,6 +108,7 @@ inline void BattleReroll()
     }
     B.botSel = -1;
     if (B.bot.empty()) B.bot = B.mine;
+    PmdWantTeams();
 }
 inline void BattleLoad(bool again = false)
 {
@@ -118,6 +132,7 @@ inline void BattleLoad(bool again = false)
     B.mine = BattleRead(B.keys);
     B.sel = B.mine.empty() ? -1 : 0;
     BattleReroll();
+    PmdWantTeams();
 }
 inline void OpenBattleTab()
 {
@@ -129,7 +144,51 @@ inline void OpenBattleTab()
     BattleLoad(true);
     Hub().version++;
 }
-// Choosing the team: My PC's choosing, the team marked already.
+// Choosing the team, the arena's own way: a tab for each save (the Bank first), all its Pokémon
+// together (boxes and party), up to 6 marked, as few as 1.
+inline void BattleOpenPicker()
+{
+    BattleState& B = Bat();
+    B.pg.clear();
+    for (const MoverGame& g : MoverGames())
+    {
+        std::string err;
+        auto s = OpenMoverGame(g, err);
+        if (!s) continue;
+        BattleState::PickGame G;
+        G.name = g.bank ? std::string("Banco") : PcShortName(g.name);
+        auto add = [&](const PokemonHub::Mon& m, int box) {
+            if (m.egg || !m.species) return;
+            BattleState::PickMon p;
+            p.k = { g.path, box, m.slot }; p.species = m.species; p.level = m.level; p.shiny = m.shiny; p.name = PcMonName(m);
+            G.mons.push_back(p);
+        };
+        if (!s->IsBank()) for (const PokemonHub::Mon& m : PokemonHub::Party(*s)) add(m, PokemonHub::PARTY);
+        for (int b = 0; b < s->Boxes(); b++) for (const PokemonHub::Mon& m : s->Box(b)) add(m, b);
+        if (!G.mons.empty()) B.pg.push_back(std::move(G));
+    }
+    B.pgTab = 0; B.pickScroll = 0;
+    B.pickSel = B.keys;
+    B.picking = true;
+    B.msg.clear();
+    Hub().version++;
+}
+inline bool BattlePicking() { return Bat().picking; }
+inline void BattlePickerDone(bool use)
+{
+    BattleState& B = Bat();
+    B.picking = false;
+    if (use && !B.pickSel.empty())
+    {
+        B.keys = B.pickSel;
+        B.mine = BattleRead(B.keys);
+        B.sel = B.mine.empty() ? -1 : 0;
+        BattleSaveTeam();
+        PmdWantTeams();
+    }
+    Hub().version++;
+}
+// (The old way, through My PC's choosing: kept for a Pick of purpose 1.)
 inline void BattleStartPick()
 {
     if (Pc().pending) { Bat().msg = "Salve ou desfa\xC3\xA7" "a as mudan\xC3\xA7" "as do My PC antes."; return; }
@@ -155,6 +214,7 @@ inline void BattlePicked(bool use)
         B.mine = BattleRead(B.keys);
         B.sel = B.mine.empty() ? -1 : 0;
         BattleSaveTeam();
+        PmdWantTeams();
     }
     const bool fromTab = B.fromTab;
     GlassFocus& F = Focus();
@@ -180,6 +240,133 @@ inline void BattleBegin()
     Hub().version++;
 }
 inline void BattleEnd() { Bat().on = false; Bat().paused = false; Hub().version++; }
+
+// ---- Moving pictures: PMD SpriteCollab's (tools/battle/fetch_pmd.py), fetched when needed ----------
+// One file a species (NNNN.pmd) from PokeHub's bucket, kept in <saves>/pmd; four animations (Idle,
+// Walk, Attack, Hurt), each eight rows (the ways it can face) of frames. Until a species' file is
+// here, its still picture is drawn instead.
+#ifndef SSR_PMD_URL
+#define SSR_PMD_URL "https://pub-9b8023f699314ac588c93abe6032db61.r2.dev/pmd"
+#endif
+enum { PA_IDLE, PA_WALK, PA_ATTACK, PA_HURT, PMD_ANIMS };
+struct PmdAnim { int fw = 0, fh = 0, rows = 1, w = 0, h = 0, total = 0; std::vector<int> durs; std::vector<uint32_t> px; };
+struct PmdMon { int state = 0; PmdAnim a[PMD_ANIMS]; int foot = 0; }; // state: 0 asked, 1 ready, 2 none
+struct PmdStore
+{
+    std::mutex m;
+    std::map<int, PmdMon> mons;
+    std::vector<int> queue;
+    bool busy = false;
+};
+inline PmdStore& Pmd() { static PmdStore s; return s; }
+inline bool PmdParse(const std::string& data, PmdMon& out)
+{
+    if (data.compare(0, 5, "PMD1\n") != 0) return false;
+    const size_t end = data.find("\n\n");
+    if (end == std::string::npos) return false;
+    size_t at = 5, png = end + 2;
+    static const char* names[PMD_ANIMS] = { "Idle", "Walk", "Attack", "Hurt" };
+    for (int i = 0; i < PMD_ANIMS; i++)
+    {
+        const size_t nl = data.find('\n', at);
+        if (nl == std::string::npos || nl > end) return false;
+        char name[16] = {}, durs[512] = {};
+        int fw = 0, fh = 0, rows = 0;
+        long len = 0;
+        if (sscanf(data.substr(at, nl - at).c_str(), "%15s %d %d %d %511s %ld", name, &fw, &fh, &rows, durs, &len) != 6 || strcmp(name, names[i]) || len <= 0 || png + (size_t)len > data.size()) return false;
+        PmdAnim& a = out.a[i];
+        a.fw = fw; a.fh = fh; a.rows = std::max(1, rows);
+        for (const char* p = durs; *p;) { a.durs.push_back(std::max(1, atoi(p))); a.total += a.durs.back(); while (*p && *p != ',') p++; if (*p) p++; }
+        int n = 0;
+        if (unsigned char* px = stbi_load_from_memory((const unsigned char*)data.data() + png, (int)len, &a.w, &a.h, &n, 4))
+        {
+            a.px.resize((size_t)a.w * a.h);
+            for (int k = 0; k < a.w * a.h; k++) a.px[k] = (uint32_t)px[k * 4 + 3] << 24 | (uint32_t)px[k * 4] << 16 | (uint32_t)px[k * 4 + 1] << 8 | px[k * 4 + 2];
+            stbi_image_free(px);
+        }
+        if (a.px.empty() || a.fw <= 0 || a.fh <= 0 || a.durs.empty()) return false;
+        png += (size_t)len;
+        at = nl + 1;
+    }
+    // (Where its feet are: the lowest drawn row of its first Idle frame, facing down, from the middle.)
+    const PmdAnim& id = out.a[PA_IDLE];
+    int low = id.fh / 2;
+    for (int y = 0; y < id.fh && y < id.h; y++)
+        for (int x = 0; x < id.fw && x < id.w; x++)
+            if ((id.px[(size_t)y * id.w + x] >> 24) >= 128) low = y;
+    out.foot = low - id.fh / 2;
+    return true;
+}
+inline void PmdWork()
+{
+    PmdStore& S = Pmd();
+    for (;;)
+    {
+        int sp = 0;
+        {
+            std::lock_guard<std::mutex> l(S.m);
+            if (S.queue.empty()) { S.busy = false; return; }
+            sp = S.queue.back();
+            S.queue.pop_back();
+        }
+        char file[16];
+        snprintf(file, sizeof file, "%04d.pmd", sp);
+        const std::string dir = HubDir() + "/pmd", path = dir + "/" + file;
+        std::string data;
+        if (FILE* f = fopen(path.c_str(), "rb")) { char buf[65536]; size_t n; while ((n = fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, n); fclose(f); }
+        PmdMon mon;
+        bool ok = !data.empty() && PmdParse(data, mon);
+        if (!ok)
+        {
+            Achievements::HttpCall c;
+            c.url = std::string(SSR_PMD_URL) + "/" + file;
+            c.userAgent = "PokeHub";
+            c.timeout = 20;
+            int status = 0;
+            std::string err;
+            data.clear();
+            if (Achievements::HttpRequest(c, status, data, err) && status == 200 && PmdParse(data, mon))
+            {
+                ok = true;
+                std::error_code ec;
+                std::filesystem::create_directories(dir, ec);
+                if (FILE* f = fopen((path + ".tmp").c_str(), "wb")) { fwrite(data.data(), 1, data.size(), f); fclose(f); std::rename((path + ".tmp").c_str(), path.c_str()); }
+            }
+            else fprintf(stderr, "[arena] no moving picture for %d (%d %s)\n", sp, status, err.c_str());
+        }
+        std::lock_guard<std::mutex> l(S.m);
+        mon.state = ok ? 1 : 2;
+        S.mons[sp] = std::move(mon);
+        Hub().version++;
+    }
+}
+// These species' pictures wanted: fetched (or read) one after another, off the screen's thread.
+inline void PmdWant(const std::vector<int>& species)
+{
+    PmdStore& S = Pmd();
+    std::lock_guard<std::mutex> l(S.m);
+    for (int sp : species)
+        if (sp > 0 && !S.mons.count(sp) && std::find(S.queue.begin(), S.queue.end(), sp) == S.queue.end()) { S.queue.insert(S.queue.begin(), sp); S.mons[sp].state = 0; }
+    if (!S.busy && !S.queue.empty())
+    {
+        S.busy = true;
+        std::thread(PmdWork).detach(); // (detached: a static joinable thread would end the app at exit)
+    }
+}
+inline const PmdMon* PmdGet(int sp)
+{
+    PmdStore& S = Pmd();
+    std::lock_guard<std::mutex> l(S.m);
+    auto it = S.mons.find(sp);
+    return it != S.mons.end() && it->second.state == 1 ? &it->second : nullptr; // (never changed once ready)
+}
+inline void PmdWantTeams()
+{
+    std::vector<int> sp;
+    for (const Arena::MonSpec& m : Bat().mine) sp.push_back(m.species);
+    for (const Arena::MonSpec& m : Bat().bot) sp.push_back(m.species);
+    PmdWant(sp);
+}
 
 // ---- Drawing helpers: plain pixels, blended -----------------------------------------------------
 namespace BGfx
@@ -301,6 +488,43 @@ inline void Mon(Canvas& c, int species, bool shiny, float cx, float foot, float 
         }
     }
 }
+}
+
+// A PMD frame: anim, its row (way), the time into it (seconds); feet at (cx, foot), s pixels a pixel.
+inline void PmdDraw(Canvas& c, const PmdMon& m, int anim, int row, float t, bool loop, float cx, float foot, float s, float white, float alpha)
+{
+    const PmdAnim& a = m.a[anim];
+    int tick = (int)(t * 60), frame = 0;
+    if (loop) tick %= std::max(1, a.total);
+    for (int acc = 0; frame < (int)a.durs.size() - 1; frame++) { acc += a.durs[frame]; if (tick < acc) break; }
+    const int r = a.rows > 1 ? row : 0;
+    const int sx0 = frame * a.fw, sy0 = r * a.fh;
+    if (sx0 + a.fw > a.w || sy0 + a.fh > a.h) return;
+    const int dw = (int)(a.fw * s), dh = (int)(a.fh * s);
+    const int ox = (int)(cx - dw / 2.0f), oy = (int)(foot - m.foot * s - dh / 2.0f);
+    for (int j = 0; j < dh; j++)
+    {
+        const int yy = oy + j;
+        if (yy < 0 || yy >= c.h) continue;
+        const int syy = sy0 + std::min(a.fh - 1, (int)(j / s));
+        for (int i = 0; i < dw; i++)
+        {
+            const int xx = ox + i;
+            if (xx < 0 || xx >= c.w) continue;
+            uint32_t p = a.px[(size_t)syy * a.w + sx0 + std::min(a.fw - 1, (int)(i / s))];
+            if ((p >> 24) < 128) continue;
+            p |= 0xFF000000u;
+            if (white > 0) p = BGfx::Mix(p, 0xFFFFFFFFu, std::min(1.0f, white));
+            BGfx::Put(c, xx, yy, alpha >= 1 ? p : BGfx::Alpha(p, alpha));
+        }
+    }
+}
+// (The eight ways, as SpriteCollab's rows: down, down-right, right, up-right, up, up-left, left, down-left.)
+inline int PmdRow(float dx, float dy)
+{
+    if (std::fabs(dx) + std::fabs(dy) < 1e-3f) return 0;
+    const float a = std::atan2(dx, dy);
+    return ((int)std::lround(a / 0.785398f) + 8) % 8;
 }
 
 // ---- The stadium: drawn once a size, then copied each frame ------------------------------------
@@ -541,7 +765,17 @@ inline void DrawBattle(Canvas& c, float u)
         float alpha = F.dashT > 0 ? 0.45f : 1;
         if (F.fainted) { const float t = std::min(1.0f, b.phaseT / 0.8f); alpha = 1 - t; squash = 1 - 0.5f * t; }
         if ((F.status == Arena::SLP || F.status == Arena::FRZ) && !F.fainted) hop = 0;
-        BGfx::Mon(c, F.spec.species, F.spec.shiny, x, y + 4 * k - hop, monH, F.face > 0, F.flash > 0 ? 0.85f : 0, alpha, squash);
+        if (const PmdMon* pm = PmdGet(F.spec.species))
+        {
+            // (Its moving picture: hurt, attacking, walking or standing, facing where it looks.)
+            const int row = PmdRow(F.dirX, F.dirY);
+            const float ps = 3.4f * k * (F.fainted ? squash : 1);
+            if (F.hurtT > 0 || F.fainted) PmdDraw(c, *pm, PA_HURT, row, 0.3f - F.hurtT, false, x, y, ps, F.flash > 0 ? 0.6f : 0, alpha);
+            else if (F.atkT > 0) { const float at = (F.atkDur - F.atkT) / F.atkDur * pm->a[PA_ATTACK].total / 60.0f; PmdDraw(c, *pm, PA_ATTACK, row, at, false, x, y, ps, 0, alpha); }
+            else if (F.moving || F.dashT > 0 || F.lungeT > 0) PmdDraw(c, *pm, PA_WALK, row, F.walk * 0.25f, true, x, y, ps, 0, alpha);
+            else PmdDraw(c, *pm, PA_IDLE, row, b.time + i * 0.37f, true, x, y, ps, 0, alpha);
+        }
+        else BGfx::Mon(c, F.spec.species, F.spec.shiny, x, y + 4 * k - hop, monH, F.face > 0, F.flash > 0 ? 0.85f : 0, alpha, squash);
         if (F.status == Arena::FRZ) BGfx::Ellipse(c, x, y - monH * 0.25f, 40 * k, 50 * k, 0x5098E0F0u);
         if (F.status == Arena::SLP) BGfx::Text(c, x + 30 * k, y - monH * 0.5f - std::fmod(b.time, 1.0f) * 20 * k, "z", 14 * u, 0xFFE0E0FFu);
         if (F.protectT > 0) BGfx::Ring(c, x, y - monH * 0.25f, 60 * k, 70 * k, 4 * k, 0xB090D0FFu);
@@ -801,6 +1035,94 @@ inline void BattleSheet(Canvas& c, float u, int x, int y, int w, int h, const Ar
         ty += (int)(15 * u);
     }
 }
+// (A Pokémon of the choosing's: as chosen it is the green frame and its number in the team.)
+inline const BattleState::PickMon* BattlePickFind(const BattleKey& k)
+{
+    for (const auto& g : Bat().pg) for (const auto& m : g.mons) if (m.k == k) return &m;
+    return nullptr;
+}
+inline void DrawBattlePicker(Canvas& c, float u, int L, int R, int top, int bottom)
+{
+    BattleState& B = Bat();
+    // The saves, a tab each.
+    int x = L, ty = top;
+    const int th = (int)(32 * u);
+    for (int i = 0; i < (int)B.pg.size(); i++)
+    {
+        const std::string l = B.pg[i].name + "  " + std::to_string(B.pg[i].mons.size());
+        const int w = GW(l, 12 * u, true) + (int)(24 * u);
+        if (x + w > R) break;
+        PcButton(c, x, ty, w, th, 8 * u, i == B.pgTab, u);
+        GT(c, x + (int)(12 * u), ty + th / 2.0f, l, 12 * u, i == B.pgTab ? PcPal::OnPrimary : PcPal::Ink, true);
+        B.hits.push_back({ x, ty, w, th, BT_PG_TAB, 0, i });
+        x += w + (int)(6 * u);
+    }
+    // The foot: the team so far, CLEAR, CANCEL, DONE.
+    const int footH = (int)(70 * u), fy = bottom - footH;
+    PcCard(c, L, fy, R - L, footH, 10 * u, u);
+    const int ss = footH - (int)(16 * u);
+    GT(c, L + (int)(12 * u), fy + footH / 2.0f, "Time " + std::to_string(B.pickSel.size()) + "/6", 13 * u, PcPal::Ink, true);
+    int sx = L + (int)(12 * u) + GW("Time 6/6", 13 * u, true) + (int)(12 * u);
+    for (int i = 0; i < 6; i++)
+    {
+        const int x0 = sx + i * (ss + (int)(6 * u));
+        const BattleState::PickMon* m = i < (int)B.pickSel.size() ? BattlePickFind(B.pickSel[i]) : nullptr;
+        Glass::Round(c, x0, fy + (int)(8 * u), ss, ss, 8 * u, m ? PcPal::Body : PcPal::Slot, m ? PcPal::Primary : PcPal::Line, m ? 2.0f * u : 1.0f * u);
+        if (m) { PcDrawMon(c, m->species, m->shiny, false, x0 + (int)(4 * u), fy + (int)(12 * u), ss - (int)(8 * u), ss - (int)(8 * u), 0, true); B.hits.push_back({ x0, fy + (int)(8 * u), ss, ss, BT_PG_SLOT, 0, i }); }
+    }
+    int bx = R - (int)(10 * u);
+    auto button = [&](const std::string& l, int kind, bool strong) {
+        const int bw = GW(l, 13 * u, true) + (int)(28 * u), bh = footH - (int)(22 * u);
+        bx -= bw;
+        PcButton(c, bx, fy + (int)(11 * u), bw, bh, 8 * u, strong, u);
+        GT(c, bx + (int)(14 * u), fy + footH / 2.0f, l, 13 * u, strong ? PcPal::OnPrimary : PcPal::Ink, true);
+        B.hits.push_back({ bx, fy + (int)(11 * u), bw, bh, kind, 0, 0 });
+        bx -= (int)(8 * u);
+    };
+    if (!B.pickSel.empty()) button("Pronto", BT_PG_DONE, true);
+    button("Cancelar", BT_PG_CANCEL, false);
+    if (!B.pickSel.empty()) button("Limpar", BT_PG_CLEAR, false);
+    if (!B.msg.empty()) GTFit(c, sx + 6 * (ss + (int)(6 * u)) + (int)(6 * u), fy + footH / 2.0f, B.msg, 11 * u, bx - sx - 6 * (ss + (int)(6 * u)) - (int)(10 * u), PcPal::Hint, false);
+    // Its Pokémon: a grid, dragged up and down; those cut by the edges are left out.
+    const int gt = ty + th + (int)(10 * u), gb = fy - (int)(10 * u);
+    PcCard(c, L, gt, R - L, gb - gt, 10 * u, u);
+    if (B.pg.empty()) { GT(c, L + (int)(16 * u), gt + 24 * u, "Nenhum Pok\xC3\xA9mon nos seus saves.", 13 * u, PcPal::Hint, false); B.pickMax = 0; return; }
+    B.pgTab = std::max(0, std::min(B.pgTab, (int)B.pg.size() - 1));
+    const auto& mons = B.pg[B.pgTab].mons;
+    const int pad = (int)(10 * u), gw = R - L - 2 * pad;
+    const int cols = std::max(4, gw / (int)(92 * u)), gap = (int)(6 * u);
+    const int cw = (gw - (cols - 1) * gap) / cols, ch = (int)(cw * 1.1f);
+    const int rows = ((int)mons.size() + cols - 1) / cols;
+    B.pickMax = std::max(0.0f, (float)(rows * (ch + gap) - (gb - gt - 2 * pad)));
+    B.pickScroll = std::min(B.pickScroll, B.pickMax);
+    for (int i = 0; i < (int)mons.size(); i++)
+    {
+        const int x0 = L + pad + (i % cols) * (cw + gap), y0 = gt + pad + (i / cols) * (ch + gap) - (int)B.pickScroll;
+        if (y0 < gt + pad - 1 || y0 + ch > gb - pad + 1) continue;
+        const auto& m = mons[i];
+        const auto it = std::find(B.pickSel.begin(), B.pickSel.end(), m.k);
+        const bool on = it != B.pickSel.end();
+        Glass::Round(c, x0, y0, cw, ch, 8 * u, on ? PcPal::Body : PcPal::Btn, on ? PcPal::Primary : PcPal::Line, on ? 3.0f * u : 1.0f * u);
+        PcDrawMon(c, m.species, m.shiny, false, x0 + (int)(6 * u), y0 + (int)(4 * u), cw - (int)(12 * u), ch - (int)(30 * u), 0, true);
+        GTFit(c, x0 + (int)(6 * u), y0 + ch - 19 * u, m.name, 10 * u, cw - (int)(12 * u), PcPal::Ink, true);
+        GT(c, x0 + (int)(6 * u), y0 + ch - 7 * u, "Lv." + std::to_string(m.level), 9 * u, PcPal::Hint, false);
+        if (on)
+        {
+            const std::string n = std::to_string(it - B.pickSel.begin() + 1);
+            BGfx::Disc(c, x0 + cw - 12 * u, y0 + 12 * u, 9 * u, PcPal::Primary);
+            GT(c, x0 + cw - 12 * u - GW(n, 10 * u, true) / 2, y0 + 12 * u, n, 10 * u, PcPal::OnPrimary, true);
+        }
+        if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x0 + 10 * u, y0 + 10 * u, 5 * u, PcPal::Shiny);
+        B.hits.push_back({ x0, y0, cw, ch, BT_PG_MON, 0, i });
+    }
+    if (B.pickMax > 0)
+    {
+        // (How far down: a thin bar at the right.)
+        const float vis = (float)(gb - gt), total = vis + B.pickMax, bh = std::max(20 * u, vis * vis / total);
+        const float by = gt + (vis - bh) * (B.pickScroll / B.pickMax);
+        BGfx::Rect(c, R - (int)(6 * u), (int)by, (int)(3 * u), (int)bh, 0x60000000u);
+    }
+}
 inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom)
 {
     BattleState& B = Bat();
@@ -811,6 +1133,7 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
     F.rVis = 0; F.pdY = c.h; F.prow = 0; F.pact = -1;
     Glass::Round(c, L, top, R - L, bottom - top, 12 * u, PcPal::Body, PcPal::Primary, 4 * u);
     { const int in = (int)(10 * u); L += in; R -= in; top += in; bottom -= in; }
+    if (B.picking) { DrawBattlePicker(c, u, L, R, top, bottom); return; }
     const int gap = (int)(10 * u), footH = (int)(52 * u);
     const int pw = (R - L - gap) / 2, ph = bottom - top - footH - gap;
     auto panel = [&](int side, int x)
@@ -820,7 +1143,7 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
         int& sel = me ? B.sel : B.botSel;
         PcCard(c, x, top, pw, ph, 10 * u, u);
         GT(c, x + (int)(12 * u), top + 18 * u, me ? "Seu time" : "Advers\xC3\xA1rio (bot)", 15 * u, PcPal::Ink, true);
-        const std::string bl = me ? "Escolher no My PC" : "Sortear outro";
+        const std::string bl = me ? "Escolher time" : "Sortear outro";
         const int bw = GW(bl, 11.5f * u, true) + (int)(22 * u), bh = (int)(28 * u), bxx = x + pw - bw - (int)(10 * u);
         PcButton(c, bxx, top + (int)(5 * u), bw, bh, 7 * u, me, u);
         GT(c, bxx + (int)(11 * u), top + 5 * u + bh / 2.0f, bl, 11.5f * u, me ? PcPal::OnPrimary : PcPal::Ink, true);
@@ -841,7 +1164,7 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
         const int sy = gy + ch + (int)(8 * u), sh = top + ph - (int)(10 * u) - sy;
         if (sel >= 0 && sel < (int)team.size()) BattleSheet(c, u, gx, sy, gw, sh, team[sel]);
         else if (team.empty() && me)
-            GTFit(c, gx, sy + 20 * u, "Toque em \"Escolher no My PC\" e marque at\xC3\xA9 6 Pok\xC3\xA9mon (das caixas, da equipe ou do Banco).", 11.5f * u, gw, PcPal::Hint, false);
+            GTFit(c, gx, sy + 20 * u, "Toque em \"Escolher time\" e marque de 1 a 6 Pok\xC3\xA9mon dos seus saves ou do Banco.", 11.5f * u, gw, PcPal::Hint, false);
         else GTFit(c, gx, sy + 20 * u, "Toque num Pok\xC3\xA9mon para ver os golpes de cada bot\xC3\xA3o.", 11.5f * u, gw, PcPal::Hint, false);
     };
     panel(0, L);
@@ -866,13 +1189,23 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
     PcButton(c, gx2, fy + (int)(6 * u), gw2, gh, 9 * u, !B.mine.empty(), u);
     GT(c, gx2 + (int)(24 * u), fy + footH / 2.0f, go, 16 * u, B.mine.empty() ? PcPal::Hint : PcPal::OnPrimary, true);
     B.hits.push_back({ gx2, fy + (int)(6 * u), gw2, gh, BT_FIGHT, 0, 0 });
-    const std::string note = !B.msg.empty() ? B.msg : "Todos lutam no n\xC3\xADvel 50. Nada muda nos seus saves.";
+    const std::string note = !B.msg.empty() ? B.msg : "Todos lutam no n\xC3\xADvel 50. Nada muda nos seus saves.  \xC2\xB7  Sprites animados: PMD SpriteCollab (CC BY-NC 4.0)";
     GTFit(c, x + (int)(10 * u), fy + footH / 2.0f, note, 11 * u, gx2 - x - (int)(20 * u), PcPal::Hint, false);
 }
 inline void BattlePagePointer(int phase, int x, int y)
 {
-    if (phase != 2) return;
     BattleState& B = Bat();
+    if (phase == 0) { B.down = true; B.dragged = false; B.downX = x; B.downY = y; B.scroll0 = B.pickScroll; return; }
+    if (phase == 1)
+    {
+        if (!B.down) return;
+        if (!B.dragged && std::abs(y - B.downY) > 10 * B.u) B.dragged = true;
+        if (B.dragged && B.picking) { B.pickScroll = std::max(0.0f, std::min(B.pickMax, B.scroll0 - (y - B.downY))); Hub().version++; }
+        return;
+    }
+    const bool tap = B.down && !B.dragged;
+    B.down = false;
+    if (!tap) return;
     for (size_t i = B.hits.size(); i-- > 0;)
     {
         const PcHit& h = B.hits[i];
@@ -880,18 +1213,35 @@ inline void BattlePagePointer(int phase, int x, int y)
         B.msg.clear();
         switch (h.kind)
         {
-        case BT_PICK: BattleStartPick(); break;
+        case BT_PICK: BattleOpenPicker(); break;
         case BT_REROLL: BattleReroll(); break;
         case BT_DIFF: B.diff = h.value; break;
         case BT_FIGHT: BattleBegin(); break;
         case BT_CARD: B.sel = h.value; break;
         case BT_BOTCARD: B.botSel = h.value; break;
+        case BT_PG_TAB: B.pgTab = h.value; B.pickScroll = 0; break;
+        case BT_PG_MON:
+        {
+            if (B.pgTab < 0 || B.pgTab >= (int)B.pg.size() || h.value < 0 || h.value >= (int)B.pg[B.pgTab].mons.size()) break;
+            const BattleKey k = B.pg[B.pgTab].mons[h.value].k;
+            auto it = std::find(B.pickSel.begin(), B.pickSel.end(), k);
+            if (it != B.pickSel.end()) B.pickSel.erase(it);
+            else if (B.pickSel.size() >= 6) B.msg = "J\xC3\xA1 s\xC3\xA3o 6: toque num escolhido para tirar.";
+            else B.pickSel.push_back(k);
+            break;
+        }
+        case BT_PG_SLOT: if (h.value >= 0 && h.value < (int)B.pickSel.size()) B.pickSel.erase(B.pickSel.begin() + h.value); break;
+        case BT_PG_CLEAR: B.pickSel.clear(); break;
+        case BT_PG_CANCEL: BattlePickerDone(false); break;
+        case BT_PG_DONE: BattlePickerDone(true); break;
         }
         Hub().version++;
         return;
     }
 }
 #else
+inline bool BattlePicking() { return false; }
+inline void BattlePickerDone(bool) {}
 inline bool BattleOn() { return false; }
 inline void DrawBattle(Canvas&, float) {}
 inline void BattlePicked(bool) {}

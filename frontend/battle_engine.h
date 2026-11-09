@@ -72,7 +72,7 @@ struct Fighter
     bool moving = false;
     Skill sk[4];
     float dashCd = 0, dashT = 0, dashX = 0, dashY = 0;
-    float ult = 0;
+    float ult = 0, ultLock = 0;           // ultLock: after a ULT, seconds it does not charge
     int stage[STAGES] = {};
     int status = NONE;
     float statusT = 0, tick = 0, toxN = 0;
@@ -80,6 +80,8 @@ struct Fighter
     float busy = 0;                          // using a move: cannot start another
     float lungeT = 0, lungeX = 0, lungeY = 0, lungeScale = 0; int lungeMove = 0; bool lungeHit = false, lungeUlt = false;
     float flash = 0, castT = 0;              // hit (white), casting (a glow)
+    float dirX = 1, dirY = 0;                // where it looks (its picture's eight ways)
+    float atkT = 0, atkDur = 0.45f, hurtT = 0; // attacking (time left of it), hurt (time left)
     int castType = 0;
     bool fainted = false;
 };
@@ -328,8 +330,11 @@ private:
         F.busy = std::max(0.0f, F.busy - dt);
         F.flash = std::max(0.0f, F.flash - dt);
         F.castT = std::max(0.0f, F.castT - dt);
+        F.atkT = std::max(0.0f, F.atkT - dt);
+        F.hurtT = std::max(0.0f, F.hurtT - dt);
         F.protectT = std::max(0.0f, F.protectT - dt);
-        F.ult = std::min(100.0f, F.ult + dt * 2.0f);
+        F.ultLock = std::max(0.0f, F.ultLock - dt);
+        if (F.ultLock <= 0) F.ult = std::min(100.0f, F.ult + dt * 1.5f);
         // (A lunge or a dash under way: it goes on by itself.)
         if (F.lungeT > 0)
         {
@@ -367,8 +372,13 @@ private:
             Clamp(F);
             F.walk += dt * (4 + v / 80);
             if (std::fabs(mx) > 0.2f) F.face = mx > 0 ? 1.0f : -1.0f;
+            F.dirX = mx; F.dirY = my;
         }
-        else if (O.x != F.x) F.face = O.x > F.x ? 1.0f : -1.0f;
+        else
+        {
+            if (O.x != F.x) F.face = O.x > F.x ? 1.0f : -1.0f;
+            if (F.atkT <= 0) { F.dirX = O.x - F.x; F.dirY = O.y - F.y; }
+        }
         // Its buttons.
         if (in.press[S_DASH] && F.dashCd <= 0)
         {
@@ -393,12 +403,14 @@ private:
         if (k == S_ULT ? F.ult < 100 : sk.cd > 0) return false;
         const BattleData::MoveInfo& mi = BattleData::Move(sk.move);
         const bool ult = k == S_ULT;
-        if (ult) { F.ult = 0; banner.text = std::string(mi.name) + "!"; banner.type = mi.type; banner.t = 0; banner.life = 1.1f; }
+        if (ult) { F.ult = 0; F.ultLock = 8; banner.text = std::string(mi.name) + "!"; banner.type = mi.type; banner.t = 0; banner.life = 1.1f; }
         else sk.cd = sk.cdMax;
         float dx = O.x - F.x, dy = O.y - F.y;
         const float d = std::max(1.0f, std::sqrt(dx * dx + dy * dy));
         dx /= d; dy /= d;
         if (std::fabs(dx) > 0.1f) F.face = dx > 0 ? 1.0f : -1.0f;
+        F.dirX = dx; F.dirY = dy;
+        F.atkT = F.atkDur = mi.cat == 2 ? 0.35f : ult ? 0.6f : k == S_ATQ ? 0.3f : 0.45f;
         F.castT = 0.3f; F.castType = mi.type;
         const float scale = k == S_ATQ ? 0.24f : ult ? 1.3f : 0.48f;
         if (k != S_ATQ) Say(F.x, F.y - 90, mi.name, 0xFFFFFFFFu, 0.85f, 0.9f);
@@ -546,10 +558,13 @@ private:
         float dmg = (22.0f * Power(move) * atk / std::max(1.0f, def)) / 50.0f + 2;
         dmg *= (Stab(A.spec, mi.type) ? 1.5f : 1.0f) * eff * (0.85f + 0.15f * R01()) * (crit ? 1.5f : 1.0f) * scale;
         if (s == 1) dmg *= difficulty == 0 ? 0.75f : difficulty == 2 ? 1.1f : 1.0f;
+        // (A ULT takes at most 60% of a full bar: never one that wipes a team alone.)
+        if (ult) dmg = std::min(dmg, D.maxHp * 0.6f);
         const int n = std::max(1, (int)std::lround(dmg));
         Hurt(1 - s, n);
         dealt[s] += n; hits[s]++;
         D.flash = 0.15f;
+        D.hurtT = 0.3f;
         // (Knocked back a little.)
         float kx = D.x - hx, ky = D.y - hy;
         const float kl = std::max(1.0f, std::sqrt(kx * kx + ky * ky));
@@ -564,8 +579,9 @@ private:
         if (crit) Say(D.x, D.y - 100, "Cr\xC3\xADtico!", 0xFFFF7050u, 0.85f);
         if (ult) shake = std::max(shake, 0.8f);
         // (Its ULT charges by fighting.)
-        A.ult = std::min(100.0f, A.ult + 90.0f * n / std::max(1, D.maxHp));
-        D.ult = std::min(100.0f, D.ult + 60.0f * n / std::max(1, D.maxHp));
+        // (Its ULT charges by fighting; not by the ULT's own hit, nor while locked after one.)
+        if (!ult && A.ultLock <= 0) A.ult = std::min(100.0f, A.ult + 45.0f * n / std::max(1, D.maxHp));
+        if (D.ultLock <= 0) D.ult = std::min(100.0f, D.ult + 40.0f * n / std::max(1, D.maxHp));
         // (What else it does.)
         if (M::Drain(move)) Heal(s, n / 2);
         if (M::Recoil(move)) Hurt(s, std::max(1, n / 3));

@@ -5294,6 +5294,8 @@ inline bool BackAt(int mx, int my)
     const int m = b.s / 4; // (a little more to hit than to see)
     return b.s > 0 && mx >= b.x - m && mx < b.x + b.s + m && my >= b.y - m && my < b.y + b.s + m;
 }
+inline bool BattlePicking();            // (the arena's team choosing up: pokehub_battle.h)
+inline void BattlePickerDone(bool use);
 inline bool PageBack()
 {
     GlassFocus& F = Focus();
@@ -5307,6 +5309,7 @@ inline bool PageBack()
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
     if (F.page == SIDE_HUB && HubMode() == 6) { if (PcBack()) return true; HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; }
     if (F.page == SIDE_HUB && HubMode() == 8) { HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; } // (Trades: back to the games)
+    if (F.page == SIDE_HUB && HubMode() == 9 && BattlePicking()) { BattlePickerDone(false); return true; } // (Battle's choosing: back to the teams)
     if (F.page == SIDE_HUB && HubMode() == 9) { HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; } // (Battle: back to the games)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().fromTab) { MoverShow(false); Mover().fromTab = false; F.page = -1; F.side = -1; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
