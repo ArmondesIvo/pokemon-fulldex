@@ -41,6 +41,9 @@ struct TradesState
     std::string selId;   // the trade shown
     int card = -1;       // a card tapped (theirs 0..5, mine 100..105): its details
     std::thread worker;
+    // (The jobs, one after another: a send while the list is fetched waits its turn, never dropped.)
+    std::deque<std::function<void()>> jobs;
+    bool running = false, fetchQueued = false;
     long long lastFetch = 0;
     // (Choosing for one: the player to send to, or the trade answered and the one of theirs wanted.)
     std::string toId, toName, counterId;
@@ -249,15 +252,37 @@ inline void TradesFetchJob()
     T.lastFetch = (long long)time(nullptr);
     Hub().version++;
 }
-inline void TradesRun(std::function<void()> job)
+// A job for the server, queued: run after those before it, on the trades' own thread. (Before,
+// a job asked for while another ran was dropped: a trade sent as the list was being fetched never
+// went, the page showing "Sending..." and nothing after.)
+inline void TradesRun(std::function<void()> job, bool fetch = false)
 {
     TradesState& T = Trades();
-    if (T.busy) return;
+    std::lock_guard<std::mutex> l(T.m);
+    if (fetch && T.fetchQueued) return; // (a look already waiting: one is enough)
+    if (fetch) T.fetchQueued = true;
+    T.jobs.push_back([job, fetch] { if (fetch) { std::lock_guard<std::mutex> g(Trades().m); Trades().fetchQueued = false; } job(); });
     T.busy = true;
+    if (T.running) return;
+    T.running = true;
     if (T.worker.joinable()) T.worker.join();
-    T.worker = std::thread(std::move(job));
+    T.worker = std::thread([] {
+        TradesState& S = Trades();
+        for (;;)
+        {
+            std::function<void()> next;
+            {
+                std::lock_guard<std::mutex> g(S.m);
+                if (S.jobs.empty()) { S.running = false; S.busy = false; Hub().version++; return; }
+                next = std::move(S.jobs.front());
+                S.jobs.pop_front();
+                S.busy = true;
+            }
+            next();
+        }
+    });
 }
-inline void TradesFetch() { if (Account().signedIn) TradesRun([] { TradesFetchJob(); }); }
+inline void TradesFetch() { if (Account().signedIn) TradesRun([] { TradesFetchJob(); }, true); }
 // What waits on this player: the bell's dot.
 inline int TradesWaiting()
 {
