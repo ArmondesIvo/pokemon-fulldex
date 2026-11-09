@@ -336,6 +336,52 @@ inline std::string KeyFromFile(const std::string& file)
 
 // What a ROM (as it will be played) is: one of ours, a hack of one (widescreen if the patch
 // fits), or another game (played as it is).
+// Game Boy and Game Boy Color games (.gb, .gbc): played by mGBA's GB core, as they are (no
+// widescreen). Pokémon Red, Blue, Yellow, Gold, Silver and Crystal get their own names and saves.
+inline bool IsGbFile(const std::string& path)
+{
+    const std::string l = Lower(path);
+    return EndsWith(l, ".gb") || EndsWith(l, ".gbc") || EndsWith(l, ".sgb");
+}
+inline bool IsGb(const Game& g) { return IsGbFile(g.rom); }
+inline bool LooksLikeGb(const std::vector<uint8_t>& rom)
+{
+    // (The Nintendo logo's first bytes at 0x104, as every cartridge has.)
+    return rom.size() >= 0x8000 && rom.size() <= (8u << 20) && rom[0x104] == 0xCE && rom[0x105] == 0xED && rom[0x106] == 0x66;
+}
+inline void IdentifyGb(Game& g, const std::vector<uint8_t>& rom)
+{
+    g.sha1 = Sha1(rom);
+    std::string title;
+    for (size_t i = 0x134; i < 0x144 && i < rom.size() && rom[i] >= 0x20 && rom[i] < 0x7F; i++) title += (char)rom[i];
+    while (!title.empty() && title.back() == ' ') title.pop_back();
+    struct GbKnown { const char* title; const char* key; const char* name; uint32_t colour; };
+    static const GbKnown known[] = {
+        { "POKEMON RED", "red", "POKEMON RED", 0xFFB8202E },
+        { "POKEMON BLUE", "blue", "POKEMON BLUE", 0xFF2452B0 },
+        { "POKEMON GREEN", "green", "POKEMON GREEN", 0xFF3E7A34 },
+        { "POKEMON YELLOW", "yellow", "POKEMON YELLOW", 0xFFC9A227 },
+        { "POKEMON_GLDAAU", "gold", "POKEMON GOLD", 0xFFB08A2A },
+        { "POKEMON_SLVAAX", "silver", "POKEMON SILVER", 0xFF8A93A6 },
+        { "PM_CRYSTAL", "crystal", "POKEMON CRYSTAL", 0xFF4A8FC0 },
+    };
+    for (const GbKnown& k : known)
+        if (title.rfind(k.title, 0) == 0)
+        {
+            g.known = true;
+            g.key = k.key;
+            g.name = k.name;
+            g.colour = k.colour;
+            g.why = "GAME BOY";
+            return;
+        }
+    g.key = "gb-" + KeyFromFile(g.fileName);
+    g.name = g.fileName.substr(0, g.fileName.rfind('.'));
+    for (char& c : g.name) c = (char)toupper((unsigned char)c);
+    g.colour = 0xFF5A6A5A;
+    g.why = "GAME BOY";
+}
+
 inline void Identify(Game& g, const std::vector<uint8_t>& rom)
 {
     g.sha1 = Sha1(rom);
@@ -494,7 +540,7 @@ inline std::vector<Game> Scan(const std::string& romsDir, const std::string& sav
         {
             const std::string n = e->d_name;
             if (n.empty() || n[0] == '.') continue;
-            if (EndsWith(n, ".gba") || EndsWith(n, ".agb") || EndsWith(n, ".bin")) gba.push_back(n);
+            if (EndsWith(n, ".gba") || EndsWith(n, ".agb") || EndsWith(n, ".bin") || IsGbFile(n)) gba.push_back(n);
             else if (IsPatchFile(n)) ips.push_back(n);
         }
         closedir(d);
@@ -516,11 +562,20 @@ inline std::vector<Game> Scan(const std::string& romsDir, const std::string& sav
         else
         {
             std::vector<uint8_t> rom;
-            if (!ReadFile(g.rom, rom) || !LooksLikeGba(rom)) continue;
-            Identify(g, rom);
+            if (!ReadFile(g.rom, rom)) continue;
+            if (IsGbFile(n))
+            {
+                if (!LooksLikeGb(rom)) continue;
+                IdentifyGb(g, rom);
+            }
+            else
+            {
+                if (!LooksLikeGba(rom)) continue;
+                Identify(g, rom);
+            }
             cache.Put(stamp, g);
         }
-        if (g.known && g.ips.empty()) bases.push_back(g);
+        if (g.known && g.ips.empty() && !IsGb(g)) bases.push_back(g);
         games.push_back(g);
     }
     // The likeliest first: the game its file name says (Pokemon Ultra Violet (FireRed).ips), then

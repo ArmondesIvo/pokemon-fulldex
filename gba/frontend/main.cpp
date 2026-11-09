@@ -76,6 +76,7 @@ namespace
 {
 
 constexpr int GbaW = 240, GbaH = 160;
+constexpr int GbW = 160, GbH = 144; // (the Game Boy's)
 constexpr int MaxExtra = 112;                 // the most the game patches support a side
 constexpr int MaxW = GbaW + 2 * MaxExtra;     // 464
 constexpr double Fps = 60.0;                  // the GBA's 59.73 is run at the screen's 60
@@ -603,6 +604,7 @@ struct App
     // The game
     struct mCore* core = nullptr;
     Games::Game game;
+    bool gb = false; // (a Game Boy or Game Boy Color game: mGBA's GB core, 160 x 144, no widescreen)
     std::vector<uint32_t> video = std::vector<uint32_t>((size_t)MaxW * GbaH);
     int wideExtra = -1;
     bool paused = false;
@@ -862,7 +864,7 @@ struct App
         std::vector<uint8_t> rom, sold;
         std::string error;
 #ifdef GBAW_EMBEDDED
-        const bool wantRa = ra && ra->begin;
+        const bool wantRa = ra && ra->begin && !Games::IsGb(g); // (RetroAchievements here: the GBA's memory map)
 #else
         const bool wantRa = false;
         (void)sold;
@@ -876,7 +878,8 @@ struct App
             Toast(error, 5000);
             return false;
         }
-        core = mCoreCreate(mPLATFORM_GBA);
+        gb = Games::IsGb(g);
+        core = mCoreCreate(gb ? mPLATFORM_GB : mPLATFORM_GBA);
         if (!core || !core->init(core))
         {
             Toast("CAN'T START THE EMULATOR");
@@ -892,6 +895,13 @@ struct App
         opts.audioBuffers = 4096;
         mCoreConfigLoadDefaults(&core->config, &opts);
         mCoreConfigSetDefaultValue(&core->config, "idleOptimization", "detect");
+        if (gb)
+        {
+            // (As a Game Boy Color, which colours the first games as it did; no Super Game Boy
+            // border, which is 256 x 224 and would not fit the picture's buffer.)
+            mCoreConfigSetDefaultValue(&core->config, "gb.model", "CGB");
+            mCoreConfigSetDefaultIntValue(&core->config, "sgb.borders", 0);
+        }
         wideExtra = WantedExtra();
         mCoreConfigSetIntValue(&core->config, "gba.wideExtra", wideExtra);
         mCoreLoadConfig(core);
@@ -904,6 +914,17 @@ struct App
             core->deinit(core);
             core = nullptr;
             return false;
+        }
+        {
+            unsigned vw = 0, vhh = 0;
+            core->currentVideoSize(core, &vw, &vhh);
+            if (vw > (unsigned)MaxW || vhh > (unsigned)GbaH)
+            {
+                Toast("THIS GAME'S PICTURE IS TOO LARGE");
+                core->deinit(core);
+                core = nullptr;
+                return false;
+            }
         }
         // The save: saves/<game>.sav, or one put beside the ROM, copied in the first time.
         const std::string save = saves + "/" + g.key + ".sav";
@@ -918,7 +939,7 @@ struct App
         cheatBus.core = core;
         cheatsFile = GbaCheats::FolderFor(saves) + "/" + g.key + "-on.txt";
         // (Test scripts play test builds of the games, which no one else has: taken as known.)
-        if (cheats.Start(cheatBus, Games::Header(rom, 0xAC, 4), rom.size() > 0xBC ? rom[0xBC] : 0, g.known || testMode))
+        if (!gb && cheats.Start(cheatBus, Games::Header(rom, 0xAC, 4), rom.size() > 0xBC ? rom[0xBC] : 0, g.known || testMode))
         {
             cheats.Load(cheatsFile);
             fprintf(stderr, "[gba] cheats: %s, %d on\n", cheats.GameName(), cheats.OnCount());
@@ -937,7 +958,7 @@ struct App
             SDL_ClearQueuedAudio(audio);
             SDL_PauseAudioDevice(audio, 0);
         }
-        if (g.patch.empty()) Toast("NO WIDESCREEN FOR THIS ROM: " + g.why, 4000);
+        if (g.patch.empty() && !gb) Toast("NO WIDESCREEN FOR THIS ROM: " + g.why, 4000);
         else if (g.forced && !ownShape) Toast("ROM HACK: GLITCHY SIDES? TRY ASPECT RATIO 3:2", 6000);
 #ifdef GBAW_EMBEDDED
         // The ROM RetroAchievements knows is the one sold (sold), not the widescreen patch.
@@ -1072,6 +1093,7 @@ struct App
     // How many columns the picture gets on each side: the window's shape, or WIDESCREEN.
     int WantedExtra() const
     {
+        if (gb) return 0;
         const std::string w = set.Get("widescreen");
         double aspect;
         if (w == "off" || w == "3:2" || w == "4:3") return 0;
@@ -1724,7 +1746,8 @@ struct App
     // (so its lines fall exactly between them), laid over the picture to darken.
     void DrawLcd(const SDL_Rect& dst, int w)
     {
-        const double sx = (double)dst.w / w, sy = (double)dst.h / GbaH;
+        const int vh = gb ? GbH : GbaH;
+        const double sx = (double)dst.w / w, sy = (double)dst.h / vh;
         if (std::min(sx, sy) < 2) return; // (too small for a grid)
         if (!lcdTex || lcdW != dst.w || lcdH != dst.h || lcdCols != w)
         {
@@ -1761,22 +1784,23 @@ struct App
 #endif
     void DrawGame()
     {
-        const int w = GbaW + 2 * wideExtra;
+        // (A Game Boy game: its 160 x 144 in the corner of the same buffer.)
+        const int w = gb ? GbW : GbaW + 2 * wideExtra, vh = gb ? GbH : GbaH;
         int ow, oh;
         SDL_GetRendererOutputSize(ren, &ow, &oh);
         const std::string scaling = set.Get("scaling");
         const bool hd = set.Get("hd_filter") == "1", colour = set.Get("colour") == "1", lcd = set.Get("lcd") == "1";
-        double scale = std::min((double)ow / w, (double)oh / GbaH);
+        double scale = std::min((double)ow / w, (double)oh / vh);
         if (scaling == "whole") scale = std::max(1.0, std::floor(scale));
-        const int dw = (int)lround(w * scale), dh = (int)lround(GbaH * scale);
+        const int dw = (int)lround(w * scale), dh = (int)lround(vh * scale);
         const SDL_Rect dst = { (ow - dw) / 2, (oh - dh) / 2, dw, dh };
-        const SDL_Rect src = { 0, 0, w, GbaH };
+        const SDL_Rect src = { 0, 0, w, vh };
         if (hd || colour)
         {
             // The picture's w columns, colour corrected; for xBRZ as ARGB (it weighs the channels).
             if (colour && colourLut.empty()) BuildColourLut();
-            fxSrc.resize((size_t)w * GbaH);
-            for (int y = 0; y < GbaH; y++)
+            fxSrc.resize((size_t)w * vh);
+            for (int y = 0; y < vh; y++)
                 for (int x = 0; x < w; x++)
                 {
                     uint32_t p = video[(size_t)y * MaxW + x];
@@ -1797,11 +1821,11 @@ struct App
                 workers.Start((int)std::min(3u, cores > 1 ? cores - 1 : 0u));
 #endif
             }
-            fxOut.resize((size_t)w * HdFactor * GbaH * HdFactor);
+            fxOut.resize((size_t)w * HdFactor * vh * HdFactor);
             const int slices = 8;
             workers.Run(slices, [&](int i) {
-                xbrz::scale(HdFactor, fxSrc.data(), fxOut.data(), w, GbaH, xbrz::ColorFormat::RGB, xbrz::ScalerCfg(),
-                            GbaH * i / slices, GbaH * (i + 1) / slices);
+                xbrz::scale(HdFactor, fxSrc.data(), fxOut.data(), w, vh, xbrz::ColorFormat::RGB, xbrz::ScalerCfg(),
+                            vh * i / slices, vh * (i + 1) / slices);
             });
             if (!hdTex)
             {
@@ -1810,7 +1834,7 @@ struct App
             }
             if (hdTex)
             {
-                const SDL_Rect r = { 0, 0, w * HdFactor, GbaH * HdFactor };
+                const SDL_Rect r = { 0, 0, w * HdFactor, vh * HdFactor };
                 SDL_UpdateTexture(hdTex, &r, fxOut.data(), w * HdFactor * 4);
                 SDL_RenderCopy(ren, hdTex, &r, &dst);
                 if (lcd) DrawLcd(dst, w);
@@ -1836,7 +1860,7 @@ struct App
             if (bigTex)
             {
                 SDL_SetRenderTarget(ren, bigTex);
-                const SDL_Rect bd = { 0, 0, w * n, GbaH * n };
+                const SDL_Rect bd = { 0, 0, w * n, vh * n };
                 SDL_RenderCopy(ren, gameTex, &src, &bd);
                 SDL_SetRenderTarget(ren, nullptr);
                 SDL_RenderCopy(ren, bigTex, &bd, &dst);

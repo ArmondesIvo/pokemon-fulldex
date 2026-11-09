@@ -352,7 +352,7 @@ bool EndsWithCi(const std::string& name, const char* ext)
 bool IsGbaRomName(const std::string& name)
 {
     const std::string base = name.substr(name.find_last_of("/\\") + 1);
-    return EndsWithCi(base, ".gba") || EndsWithCi(base, ".agb") || EndsWithCi(base, ".ips");
+    return EndsWithCi(base, ".gba") || EndsWithCi(base, ".agb") || EndsWithCi(base, ".ips") || EndsWithCi(base, ".gb") || EndsWithCi(base, ".gbc");
 }
 
 bool SameContents(const std::filesystem::path& a, const std::filesystem::path& b)

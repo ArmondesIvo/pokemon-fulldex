@@ -4,6 +4,8 @@
 // generation). Saves are read and written with PKSM-Core (FlagBrew, GPL-3.0, much of it from
 // PKHeX), in third_party/PKSM-Core.
 //
+//   Gen 1  Red, Blue, Yellow           (Fulldex's own: these two trade both ways, by the Time
+//   Gen 2  Gold, Silver, Crystal        Capsule, and only ever went on to Gen 7)
 //   Gen 3  Ruby, Sapphire, Emerald, FireRed, LeafGreen
 //   Gen 4  Diamond, Pearl, Platinum, HeartGold, SoulSilver
 //   Gen 5  Black, White, Black 2, White 2
@@ -33,7 +35,7 @@ struct Mon
     std::string speciesName;             // in English capitals: "SWAMPERT"
     bool shiny = false, egg = false;
     int heldItem = 0;
-    int generation = 0;                  // the format it is kept in (3 to 7)
+    int generation = 0;                  // the format it is kept in (1 to 7)
 };
 
 class Save
@@ -50,7 +52,7 @@ public:
     static std::unique_ptr<Save> OpenBank(const std::string& folder, std::string& error);
     bool IsBank() const;
     const std::string& Path() const;
-    int Generation() const;              // 3 to 7
+    int Generation() const;              // 1 to 7 (the Bank: 0)
     std::string GameName() const;        // "HeartGold / SoulSilver", "Black 2", "Omega Ruby"
     std::string Trainer() const;
     bool ReadOnly() const;

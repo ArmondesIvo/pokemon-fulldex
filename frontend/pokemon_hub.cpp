@@ -36,12 +36,14 @@ std::string S(const fs::path& p)
 
 int GenNumber(Generation g)
 {
+    if (g == Generation::ONE) return 1;
+    if (g == Generation::TWO) return 2;
     if (g == Generation::THREE) return 3;
     if (g == Generation::FOUR) return 4;
     if (g == Generation::FIVE) return 5;
     if (g == Generation::SIX) return 6;
     if (g == Generation::SEVEN) return 7;
-    return 0; // (the first two generations, Let's Go, and the Switch games: not Fulldex's)
+    return 0; // (Let's Go and the Switch games: not Fulldex's)
 }
 
 std::string Upper(std::string s)
@@ -232,13 +234,14 @@ namespace
 {
 pksm::Generation GenOf(int n)
 {
-    return n == 3 ? Generation::THREE : n == 4 ? Generation::FOUR : n == 5 ? Generation::FIVE : n == 6 ? Generation::SIX : Generation::SEVEN;
+    return n == 1 ? Generation::ONE : n == 2 ? Generation::TWO : n == 3 ? Generation::THREE : n == 4 ? Generation::FOUR : n == 5 ? Generation::FIVE : n == 6 ? Generation::SIX : Generation::SEVEN;
 }
 // A party Pokémon as a box one (the first part of the party form is the box form).
 std::unique_ptr<pksm::PKX> BoxForm(const pksm::PKX& pk)
 {
-    if (!pk.isParty()) return pk.clone();
     const int g = GenNumber(pk.generation());
+    // (The first two generations' are kept with their names, party or not, as PKHeX's .pk1 and .pk2.)
+    if (!pk.isParty() || g <= 2) return pk.clone();
     const size_t len = g == 3 ? 80 : g <= 5 ? 136 : 232;
     std::vector<u8> raw(pk.rawData().begin(), pk.rawData().begin() + std::min<size_t>(len, pk.rawData().size()));
     return pksm::PKX::getPKM(pk.generation(), raw.data(), raw.size());
@@ -272,6 +275,8 @@ std::unique_ptr<Save> Save::Open(const std::string& path, std::string& error, bo
     // (A GBA save with something after its 128 KB, as mGBA's clock: read without it, written back with it.)
     size_t size = s->d->original.size();
     if (size > 0x20000 && size <= 0x20000 + 0x100) size = 0x20000;
+    // (A Game Boy save with its clock after it, as mGBA writes Gold, Silver and Crystal's: the same.)
+    if (size > 0x8000 && size <= 0x8000 + 0x100) size = 0x8000;
     s->d->tail.assign(s->d->original.begin() + size, s->d->original.end());
     auto data = std::shared_ptr<u8[]>(new u8[size]);
     std::copy(s->d->original.begin(), s->d->original.begin() + size, data.get());
@@ -300,7 +305,7 @@ std::string BankFile(const std::string& folder, int box, int slot, int gen)
 // The place's file now, whichever generation it is (empty path: none).
 std::string BankFileFound(const std::string& folder, int box, int slot)
 {
-    for (int g = 3; g <= 7; g++)
+    for (int g = 1; g <= 7; g++)
     {
         const std::string f = BankFile(folder, box, slot, g);
         std::error_code ec;
@@ -404,7 +409,15 @@ std::unique_ptr<pksm::PKX> ArrivingPk(const pksm::PKX& source, int a, bool readO
         return pk;
     }
     const int b = to.Generation();
-    if (b < a)
+    // (Red, Blue, Yellow and Gold, Silver, Crystal traded both ways, by the Time Capsule; from them,
+    // Pokémon only ever went on to Sun and Moon, by Poké Transporter.)
+    if (a <= 2 && b >= 3 && b < 7)
+    {
+        c.verdict = Verdict::NotInGame;
+        c.reason = "GEN 1 AND 2 POKEMON ONLY WENT ON TO SUN AND MOON, AS IN THE ORIGINAL GAMES";
+        return nullptr;
+    }
+    if (b < a && !(a <= 2 && b <= 2))
     {
         c.verdict = Verdict::Backwards;
         c.reason = "POKEMON ONLY MOVE TO NEWER GAMES, AS IN THE ORIGINAL GAMES";
@@ -621,7 +634,7 @@ void BankUndoAdding(Save& s)
         {
             // (Its old file's generation, from its length: as PKHeX's box forms are.)
             const size_t n = t.second.size();
-            const int g = n == 80 ? 3 : n == 232 ? 6 : 4;
+            const int g = n == 69 || n == 59 ? 1 : n == 73 || n == 63 ? 2 : n == 80 ? 3 : n == 232 ? 6 : 4;
             WriteAtomic(BankFile(s.d->path, box, slot, g), t.second.data(), n);
         }
     }
@@ -832,7 +845,7 @@ namespace
 {
 std::unique_ptr<pksm::PKX> Unpack(const Packed& p)
 {
-    if (p.generation < 3 || p.generation > 7 || p.data.empty() || p.data.size() > 512) return nullptr;
+    if (p.generation < 1 || p.generation > 7 || p.data.empty() || p.data.size() > 512) return nullptr;
     std::vector<u8> raw = p.data;
     auto pk = pksm::PKX::getPKM(GenOf(p.generation), raw.data(), raw.size());
     return pk && (int)pk->species() != 0 ? std::move(pk) : nullptr;
