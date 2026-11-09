@@ -3,6 +3,11 @@
 
 ## Unreleased
 
+- **My PC: trade evolutions between Red, Blue, Yellow, Gold, Silver and Crystal**, as the Time Capsule
+  did (a Kadabra moved from Red to Crystal arrives an Alakazam), and **an evolution scene** when a
+  Pokémon evolves on its way: its shape and the new one's in white, swapping faster, a flash, sparkles.
+- **My PC: no Pokémon lost moving into a Gen 1 or 2 game with a full first box.** Their boxes hold 20,
+  not 30: one moved there could be written past the box and lost. Their boxes now show 20 places.
 - **Bigger, finer pictures for a chosen Pokémon.** My PC's details and the Pokédex's card show the larger
   pictures PKVault uses (96 x 96) instead of the small box sprites, which stay on the grids.
 - **A Pokédex tab, laid out as PKVault's.** Beside My PC, a tab opens the Pokédex straight from the

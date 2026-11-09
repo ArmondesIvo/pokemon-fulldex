@@ -92,7 +92,7 @@ const TradeEvo* EvolutionFor(const pksm::PKX& pk, const pksm::Sav& to, int trade
         for (const TradeEvo& e : kPairEvos)
             if (e.from == species && e.to <= (int)to.maxSpecies() && GenNumber(to.generation()) >= 5) return &e;
     for (const TradeEvo& e : kTradeEvos)
-        if (e.from == species && (e.item == 0 || e.item == item) && e.to <= (int)to.maxSpecies() && GenNumber(to.generation()) >= std::max(e.gen, 3))
+        if (e.from == species && (e.item == 0 || e.item == item) && e.to <= (int)to.maxSpecies() && GenNumber(to.generation()) >= e.gen)
             return &e;
     return nullptr;
 }
@@ -221,6 +221,10 @@ struct Save::Impl
     std::vector<std::unique_ptr<pksm::PKX>> slots;
     std::vector<std::pair<int, std::vector<u8>>> touched; // (place, its file before; empty: none)
 
+    // The places in a box: 30, but 20 in Red, Blue, Yellow, Gold, Silver and Crystal. (A place past
+    // them is another box's, or not a box's at all: never read or written as one.)
+    int Slots() const { return bank ? 30 : std::max(1, std::min(30, sav->maxSlot() / std::max(1, (int)sav->maxBoxes()))); }
+
     std::unique_ptr<pksm::PKX> At(int box, int slot) const
     {
         if (bank)
@@ -235,7 +239,7 @@ struct Save::Impl
             auto pk = sav->pkm((u8)slot);
             return pk && (int)pk->species() != 0 ? std::move(pk) : nullptr;
         }
-        if (box < 0 || box >= sav->maxBoxes() || slot < 0 || slot >= 30) return nullptr;
+        if (box < 0 || box >= sav->maxBoxes() || slot < 0 || slot >= Slots()) return nullptr;
         auto pk = sav->pkm((u8)box, (u8)slot);
         return pk && (int)pk->species() != 0 ? std::move(pk) : nullptr;
     }
@@ -375,6 +379,7 @@ int Save::Generation() const { return d->bank ? 0 : GenNumber(d->sav->generation
 std::string Save::GameName() const { return d->bank ? std::string("Bank") : GameNameOf(*d->sav); }
 std::string Save::Trainer() const { return d->bank ? std::string() : d->sav->otName(); }
 bool Save::ReadOnly() const { return d->readOnly; }
+int Save::BoxSlots() const { return d->Slots(); }
 int Save::Boxes() const { return d->bank ? BANK_BOXES : d->sav->maxBoxes(); }
 std::string Save::BoxName(int box) const
 {
@@ -394,7 +399,7 @@ bool Save::Changed() const { return d->changed; }
 std::vector<Mon> Save::Box(int box) const
 {
     std::vector<Mon> out;
-    for (int slot = 0; slot < 30; slot++)
+    for (int slot = 0; slot < d->Slots(); slot++)
         if (auto pk = d->At(box, slot)) out.push_back(MonOf(*pk, box, slot));
     return out;
 }
@@ -402,7 +407,7 @@ std::vector<Mon> Save::Box(int box) const
 bool Save::FirstEmpty(int& box, int& slot) const
 {
     for (box = 0; box < Boxes(); box++)
-        for (slot = 0; slot < 30; slot++)
+        for (slot = 0; slot < d->Slots(); slot++)
             if (!d->At(box, slot)) return true;
     return false;
 }
@@ -633,11 +638,11 @@ bool Place(const Save& to, int& box, int& slot)
     if (slot < 0)
     {
         // (A box chosen, not a slot: its first free one.)
-        for (slot = 0; slot < 30; slot++)
+        for (slot = 0; slot < to.d->Slots(); slot++)
             if (!to.d->At(box, slot)) return true;
         return false;
     }
-    return !to.d->At(box, slot) && box >= 0 && box < to.Boxes() && slot >= 0 && slot < 30;
+    return !to.d->At(box, slot) && box >= 0 && box < to.Boxes() && slot >= 0 && slot < to.d->Slots();
 }
 }
 
@@ -967,7 +972,7 @@ bool Relocate(Save& save, int box, int slot, int toBox, int toSlot, std::string&
     if (box == toBox && slot == toSlot) return true;
     if (toBox == PARTY && (save.IsBank() || toSlot != (int)save.d->sav->partyCount())) { error = "A PARTY FILLS FROM THE FIRST PLACE"; return false; }
     if (toBox != PARTY && save.d->At(toBox, toSlot)) { error = "THAT PLACE IS TAKEN"; return false; }
-    if (toBox != PARTY && (toBox < 0 || toBox >= save.Boxes() || toSlot < 0 || toSlot >= 30)) { error = "NO SUCH PLACE"; return false; }
+    if (toBox != PARTY && (toBox < 0 || toBox >= save.Boxes() || toSlot < 0 || toSlot >= save.d->Slots())) { error = "NO SUCH PLACE"; return false; }
     if (box == PARTY && toBox != PARTY && LastInParty(save, box, slot)) { error = "IT IS THE LAST POKEMON IN YOUR PARTY: A GAME NEEDS ONE"; return false; }
     auto kept = box == PARTY ? BoxForm(*pk) : pk->clone();
     if (!kept) { error = "IT CANNOT BE MOVED"; return false; }

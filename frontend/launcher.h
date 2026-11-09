@@ -5342,6 +5342,8 @@ struct PcState
     // (A finger: pressed on a Pokémon, dragged far enough to carry it.)
     bool down = false, drag = false;
     int downX = 0, downY = 0, dragX = 0, dragY = 0, dSide = -1, dBox = 0, dSlot = -1;
+    // (A Pokémon evolving on its way, as the games show it: from, to, its name, when it began.)
+    struct Evo { bool on = false; int from = 0, to = 0; bool shiny = false; std::string name; std::chrono::steady_clock::time_point at; } evo;
 };
 inline PcState& Pc() { static PcState p; return p; }
 inline std::string PcShortName(const std::string& n) { const size_t d = n.find("  \xC2\xB7"); return d == std::string::npos ? n : n.substr(0, d); }
@@ -5431,6 +5433,19 @@ inline void PcMove(int fs, int fbox, int fslot, int ts, int tbox, int tslot)
     }
     if (!ok) { P.msg = "Could not move " + name + ": " + SettingSentence(err) + "."; return; }
     P.pending++;
+#ifdef SSR_POKEMON_HUB
+    if (fs != ts)
+    {
+        // (Evolved on the way: the evolution shown, as the games show a trade's.)
+        PokemonHub::Mon now;
+        const int at = tbox == PokemonHub::PARTY ? (int)PokemonHub::Party(*T.save).size() - 1 : tslot;
+        if (T.box == tbox && PcMonAt(ts, at, now) && now.species != m.species)
+        {
+            P.evo.on = true; P.evo.from = m.species; P.evo.to = now.species; P.evo.shiny = m.shiny; P.evo.name = name;
+            P.evo.at = std::chrono::steady_clock::now();
+        }
+    }
+#endif
     P.msg = name + " moved" + (fs == ts ? std::string(".") : " to " + PcShortName(T.save->GameName()) + ".") + (err.empty() ? "" : " On the way: " + SettingSentence(err) + ".");
     P.selSide = ts; P.selBox = tbox; P.selSlot = tbox == PokemonHub::PARTY ? (int)PokemonHub::Party(*T.save).size() - 1 : tslot;
     Hub().version++;
@@ -5610,31 +5625,33 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
         PcButton(c, bx + aw + lw, by, aw, bh, 8 * u, false, u);
         GT(c, bx + aw + lw + (int)(9 * u), by + bh * 0.5f, ">", 14 * u, text, true);
         PcHitAdd(bx + aw + lw, by, aw, bh, PC_BOX_NEXT, side, 0);
-        const std::string cnt = std::to_string(mons.size()) + "/" + (S.box == PokemonHub::PARTY ? "6" : "30");
+        const std::string cnt = std::to_string(mons.size()) + "/" + (S.box == PokemonHub::PARTY ? std::string("6") : std::to_string(S.save->BoxSlots()));
         GT(c, x + w - pad - GW(cnt, 12 * u, true), by + bh * 0.5f, cnt, 12 * u, hint, true);
     }
     // The grid: 6 x 5 (the party: its 6 in the first row).
     const int gy = by + bh + (int)(8 * u), gap = (int)(4 * u);
     const int cs = std::max(8, std::min((w - 2 * pad - 5 * gap) / 6, (y + h - pad - gy - 4 * gap) / 5));
-    const int gx = x + (w - (6 * cs + 5 * gap)) / 2;
     if (!S.save)
     {
         GTFit(c, x + pad, gy + 20 * u, "This save could not be read. " + S.err, 13 * u, w - 2 * pad, hint, false);
         return;
     }
-    const int cells = S.box == PokemonHub::PARTY ? 6 : 30;
+    // (Gen 1 and 2 boxes hold 20: 5 x 4, the places the same size.)
+    const int cells = S.box == PokemonHub::PARTY ? 6 : S.save->BoxSlots();
+    const int cols = cells == 20 ? 5 : 6;
+    const int gx = x + (w - (cols * cs + (cols - 1) * gap)) / 2;
     std::vector<const PokemonHub::Mon*> at((size_t)cells, nullptr);
     for (const PokemonHub::Mon& m : mons) if (m.slot >= 0 && m.slot < cells) at[(size_t)m.slot] = &m;
     // (Where a carried Pokémon would go: the cell under the finger.)
     int hover = -1;
     for (int k = 0; k < cells; k++)
     {
-        const int cx = gx + (k % 6) * (cs + gap), cy = gy + (k / 6) * (cs + gap);
+        const int cx = gx + (k % cols) * (cs + gap), cy = gy + (k / cols) * (cs + gap);
         if (P.drag && P.dragX >= cx && P.dragX < cx + cs && P.dragY >= cy && P.dragY < cy + cs) hover = k;
     }
     for (int k = 0; k < cells; k++)
     {
-        const int cx = gx + (k % 6) * (cs + gap), cy = gy + (k / 6) * (cs + gap);
+        const int cx = gx + (k % cols) * (cs + gap), cy = gy + (k / cols) * (cs + gap);
         const PokemonHub::Mon* m = at[(size_t)k];
         const bool sel = P.selSide == side && P.selBox == S.box && P.selSlot == k;
         const bool carried = P.drag && P.dSide == side && P.dBox == S.box && P.dSlot == k;
@@ -5790,8 +5807,128 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
     (void)ty; (void)line; (void)para; (void)text; (void)hint;
 #endif
 }
+inline bool PcAnimating() { return Pc().evo.on; }
+#ifdef SSR_POKEMON_HUB
+// THE EVOLUTION (a Pokémon that evolved on its way to another game): over My PC, as the games show
+// it. Its picture, then the two shapes in white, one and the other ever faster, a flash, and the
+// new one with sparkles. A tap: to the end, then closed. Its times, in seconds:
+const float EVO_SWAP = 0.9f, EVO_FLASH = 3.6f, EVO_SHOWN = 4.1f, EVO_END = 7.5f;
+inline float PcEvoTime() { return std::chrono::duration<float>(std::chrono::steady_clock::now() - Pc().evo.at).count(); }
+inline void PcEvoTap()
+{
+    PcState& P = Pc();
+    if (PcEvoTime() < EVO_SHOWN) P.evo.at = std::chrono::steady_clock::now() - std::chrono::milliseconds((int)(EVO_SHOWN * 1000));
+    else P.evo.on = false;
+    Hub().version++;
+}
+// (a to b by t, 0 to 1: in whole numbers, as it is done for many pixels a frame.)
+inline uint32_t PcMix(uint32_t a, uint32_t b, float t)
+{
+    const uint32_t k = (uint32_t)(std::max(0.0f, std::min(1.0f, t)) * 256), j = 256 - k;
+    const uint32_t rb = (((a & 0xFF00FFu) * j + (b & 0xFF00FFu) * k) >> 8) & 0xFF00FFu, g = (((a & 0x00FF00u) * j + (b & 0x00FF00u) * k) >> 8) & 0x00FF00u;
+    return 0xFF000000u | rb | g;
+}
+inline void PcDrawEvolution(Canvas& c, float u, int L, int R, int top, int bottom)
+{
+    PcState& P = Pc();
+    if (!P.evo.on) return;
+    const float t = PcEvoTime();
+    if (t >= EVO_END) { P.evo.on = false; return; }
+    // The page dimmed under it (to three eighths, warm).
+    for (int y = std::max(0, top); y < std::min(c.h, bottom); y++)
+    {
+        uint32_t* row = &c.px[(size_t)y * c.w];
+        for (int x = std::max(0, L); x < std::min(c.w, R); x++) { const uint32_t p = row[x]; row[x] = 0xFF000000u + (((p >> 2) & 0x3F3F3Fu) + ((p >> 3) & 0x1F1F1Fu)) + 0x080402u; }
+    }
+    const int w = std::min((int)(620 * u), R - L - (int)(40 * u)), h = std::min((int)(470 * u), bottom - top - (int)(40 * u));
+    const int x0 = (L + R - w) / 2, y0 = (top + bottom - h) / 2;
+    Glass::Round(c, x0, y0, w, h, 16 * u, PcPal::Body, PcPal::Primary, 4 * u);
+    const int stageY = y0 + (int)(20 * u), stageH = h - (int)(120 * u), stageX = x0 + (int)(20 * u), stageW = w - (int)(40 * u);
+    const int cx = stageX + stageW / 2, cy = stageY + stageH / 2;
+    // A warm glow behind, growing as it changes, brightest at the flash.
+    const float glow = t < EVO_SWAP ? t / EVO_SWAP * 0.35f : t < EVO_FLASH ? 0.35f + 0.45f * (t - EVO_SWAP) / (EVO_FLASH - EVO_SWAP) : std::max(0.3f, 1.0f - (t - EVO_FLASH));
+    const float rad = std::min(stageW, stageH) * (0.42f + 0.12f * glow);
+    // (The stage dark while it changes, as the games' is, so the white shapes stand out.)
+    const float dark = t < EVO_SWAP ? t / EVO_SWAP : t < EVO_SHOWN ? 1.0f : std::max(0.0f, 1.0f - (t - EVO_SHOWN) * 2.5f);
+    Glass::Round(c, stageX, stageY, stageW, stageH, 12 * u, PcMix(PcPal::Slot, 0xFF2B1A12u, dark * 0.9f), PcPal::Line, 1.0f * u);
+    const float r2 = rad * rad;
+    for (int y = std::max(stageY + (int)(2 * u), (int)(cy - rad)); y < std::min(stageY + stageH - (int)(2 * u), (int)(cy + rad)); y++)
+    {
+        uint32_t* row = &c.px[(size_t)y * c.w];
+        const float dy2 = (float)((y - cy) * (y - cy));
+        for (int x = std::max(stageX + (int)(2 * u), (int)(cx - rad)); x < std::min(stageX + stageW - (int)(2 * u), (int)(cx + rad)); x++)
+        {
+            const float d2 = ((x - cx) * (x - cx) + dy2) / r2;
+            if (d2 >= 1) continue;
+            row[x] = PcMix(row[x], 0xFFFFE7B0u, glow * (1 - d2) * (1 - d2) * 1.3f);
+        }
+    }
+    // The Pokémon: its picture, then the shapes swapping faster and faster, then the new one.
+    const int box = (int)(std::min(stageW, stageH) * 0.78f);
+    auto draw = [&](int sp, float scale, uint32_t shade) {
+        const int b = std::max(8, (int)(box * scale));
+        PcDrawMon(c, sp, P.evo.shiny, false, cx - b / 2, cy - b / 2, b, b, shade, true);
+    };
+    if (t < EVO_SWAP) draw(P.evo.from, 1.0f, t > EVO_SWAP - 0.35f ? 0xFFFFFFFFu : 0);
+    else if (t < EVO_FLASH)
+    {
+        // (A swap every period, the period from half a second down to a twentieth: the swaps so far
+        // are the period's inverse summed, 2 D (10^(t/D) - 1) / ln 10; its fraction, the pulse.)
+        const float D = EVO_FLASH - EVO_SWAP, at = t - EVO_SWAP;
+        const float swaps = 2 * D * (std::pow(10.0f, at / D) - 1) / 2.302585f;
+        const bool second = ((int)swaps) % 2 == 1;
+        const float pulse = 1.0f - 0.16f * std::sin((swaps - std::floor(swaps)) * 3.14159f);
+        draw(second ? P.evo.to : P.evo.from, pulse, 0xFFFFFFFFu);
+    }
+    else if (t < EVO_SHOWN) draw(P.evo.to, 1.0f, 0xFFFFFFFFu);
+    else draw(P.evo.to, 1.0f + 0.06f * std::max(0.0f, 1.0f - (t - EVO_SHOWN) * 3), 0);
+    // Sparkles: rising round it while it changes, bursting out once it has.
+    for (int i = 0; i < 16; i++)
+    {
+        const float a0 = i * 2.39996f; // (the golden angle: spread evenly, never in lines)
+        float px, py, sz, alpha;
+        if (t < EVO_FLASH)
+        {
+            if (t < EVO_SWAP * 0.6f) continue;
+            const float life = std::fmod(t * 0.7f + i * 0.137f, 1.0f);
+            px = cx + std::cos(a0) * rad * (0.55f + 0.35f * std::sin(i * 1.7f));
+            py = cy + rad * 0.6f - life * rad * 1.3f;
+            sz = (5 + 4 * std::sin(i * 2.1f + t * 5)) * u;
+            alpha = std::sin(life * 3.14159f);
+        }
+        else
+        {
+            const float k = std::min(1.0f, (t - EVO_FLASH) / 1.6f);
+            px = cx + std::cos(a0) * rad * (0.2f + 1.0f * k);
+            py = cy + std::sin(a0) * rad * (0.2f + 1.0f * k);
+            sz = (9 - 5 * k) * u;
+            alpha = 1 - k;
+        }
+        if (alpha <= 0.02f || px < stageX || px >= stageX + stageW || py < stageY || py >= stageY + stageH) continue;
+        Glass::DrawIcon(c, Glass::I_SPARKLE, px, py, sz, PcMix(0xFFFFFFFFu, PcPal::Shiny, 0.3f + 0.7f * alpha));
+    }
+    // The flash: the whole stage white, fading.
+    if (t >= EVO_FLASH - 0.15f && t < EVO_SHOWN + 0.4f)
+    {
+        const float f = t < EVO_FLASH ? (t - (EVO_FLASH - 0.15f)) / 0.15f : 1.0f - (t - EVO_FLASH) / (EVO_SHOWN + 0.4f - EVO_FLASH);
+        for (int y = stageY; y < stageY + stageH; y++)
+            for (int x = stageX; x < stageX + stageW; x++) { uint32_t& p = c.px[(size_t)y * c.w + x]; p = PcMix(p, 0xFFFFFFFFu, f * 0.95f); }
+    }
+    // What the games say.
+    const std::string from = MonName(PokemonHub::SpeciesNameOf(P.evo.from)), to = MonName(PokemonHub::SpeciesNameOf(P.evo.to));
+    const std::string line1 = t < EVO_SHOWN ? "What? " + P.evo.name + " is evolving!" : "Congratulations!";
+    const std::string line2 = t < EVO_SHOWN ? std::string() : P.evo.name + " evolved into " + to + "!";
+    const int ty = stageY + stageH + (int)(30 * u);
+    GT(c, x0 + (w - GW(line1, 17 * u, true)) / 2, (float)ty, line1, 17 * u, PcPal::Ink, true);
+    if (!line2.empty()) GTFit(c, x0 + std::max((int)(20 * u), (w - GW(line2, 15 * u, false)) / 2), ty + 28 * u, line2, 15 * u, w - (int)(40 * u), PcPal::Ink, false);
+    const std::string hint = t < EVO_SHOWN ? "Tap to skip" : "Tap to close";
+    GT(c, x0 + (w - GW(hint, 11.5f * u, false)) / 2, (float)(y0 + h - (int)(18 * u)), hint, 11.5f * u, PcPal::Hint, false);
+    (void)from;
+}
+#endif
 inline void DrawPcPage(Canvas& c, bool solid, float u, int L, int R, int top, int bottom)
 {
+    const int L0 = L, R0 = R, top0 = top, bottom0 = bottom;
     PcState& P = Pc();
     P.u = u;
     P.hits.clear();
@@ -5841,6 +5978,7 @@ inline void DrawPcPage(Canvas& c, bool solid, float u, int L, int R, int top, in
             PcDrawMon(c, m.species, m.shiny, m.egg, P.dragX - s / 2, P.dragY - s / 2, s, s);
         }
     }
+    PcDrawEvolution(c, u, L0, R0, top0, bottom0);
 #endif
 }
 inline const PcHit* PcHitAt(int x, int y)
@@ -5957,6 +6095,9 @@ inline void PcTap(const PcHit& h)
 inline void PcPointer(int phase, int x, int y)
 {
     PcState& P = Pc();
+#ifdef SSR_POKEMON_HUB
+    if (P.evo.on) { if (phase == 2) PcEvoTap(); return; }
+#endif
     if (phase == 0)
     {
         P.down = true; P.drag = false; P.downX = x; P.downY = y; P.dSide = -1;
@@ -5999,6 +6140,7 @@ inline void PcPointer(int phase, int x, int y)
 inline bool PcBack()
 {
     PcState& P = Pc();
+    if (P.evo.on) { P.evo.on = false; Hub().version++; return true; }
     if (P.selSide >= 0) { P.selSide = -1; Hub().version++; return true; }
     if (P.pending)
     {

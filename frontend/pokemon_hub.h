@@ -57,6 +57,7 @@ public:
     std::string Trainer() const;
     bool ReadOnly() const;
     int Boxes() const;
+    int BoxSlots() const;                // places in a box: 30 (20 in Gen 1 and 2)
     std::string BoxName(int box) const;
     std::vector<Mon> Box(int box) const; // the Pokémon in it (empty slots left out)
     bool FirstEmpty(int& box, int& slot) const;

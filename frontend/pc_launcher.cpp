@@ -1917,7 +1917,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     while (!quit)
     {
         SDL_Event e;
-        bool any = SDL_WaitEventTimeout(&e, 50);
+        bool any = SDL_WaitEventTimeout(&e, Launcher::PcAnimating() ? 16 : 50); // (an evolution shown: smoothly)
         while (any)
         {
             if (e.type == SDL_APP_WILLENTERBACKGROUND) appBackgrounded = true;
