@@ -281,7 +281,14 @@ std::unique_ptr<Save> Save::Open(const std::string& path, std::string& error, bo
     auto data = std::shared_ptr<u8[]>(new u8[size]);
     std::copy(s->d->original.begin(), s->d->original.begin() + size, data.get());
     s->d->sav = pksm::Sav::getSave(data, (u32)size);
-    if (!s->d->sav || GenNumber(s->d->sav->generation()) == 0) { error = "THIS SAVE IS NOT ONE THE HUB KNOWS"; return nullptr; }
+    if (!s->d->sav || GenNumber(s->d->sav->generation()) == 0)
+    {
+        // (A game started but never saved in: the emulator's file is all one byte, FF or 00.)
+        bool blank = true;
+        for (size_t i = 1; i < size && blank; i++) blank = data[i] == data[0];
+        error = blank && (data[0] == 0xFF || data[0] == 0x00) ? "NO GAME SAVED IN IT YET: SAVE IN THE GAME FIRST" : "THIS SAVE IS NOT ONE THE HUB KNOWS";
+        return nullptr;
+    }
     s->d->path = path;
     s->d->readOnly = romHack;
     return s;
@@ -324,17 +331,30 @@ std::unique_ptr<Save> Save::OpenBank(const std::string& folder, std::string& err
     std::error_code ec;
     fs::create_directories(P(folder), ec);
     if (ec) { error = "CANNOT MAKE THE BANK'S FOLDER"; return nullptr; }
-    for (int box = 0; box < BANK_BOXES; box++)
-        for (int slot = 0; slot < 30; slot++)
+    // (The folders and files there, listed: not each of the 1,500 places' 7 names looked for, which
+    // on Android's shared storage took a second and more.)
+    for (const auto& de : fs::directory_iterator(P(folder), ec))
+    {
+        const std::string dn = S(de.path().filename());
+        int box = -1;
+        if (dn.size() != 6 || dn.compare(0, 4, "box-") != 0 || sscanf(dn.c_str() + 4, "%d", &box) != 1) continue;
+        box--;
+        if (box < 0 || box >= BANK_BOXES || !de.is_directory(ec)) continue;
+        for (const auto& fe : fs::directory_iterator(de.path(), ec))
         {
-            const std::string f = BankFileFound(folder, box, slot);
-            if (f.empty()) continue;
+            const std::string fn = S(fe.path().filename());
+            int slot = -1;
+            if (fn.size() != 6 || fn.compare(2, 3, ".pk") != 0 || fn[5] < '1' || fn[5] > '7' || sscanf(fn.c_str(), "%d", &slot) != 1) continue;
+            slot--;
+            if (slot < 0 || slot >= 30) continue;
+            const std::string f = S(fe.path());
             std::vector<u8> raw;
             if (!ReadFile(f, raw) || raw.empty() || raw.size() > 512) continue;
             const int gen = f.back() - '0';
             auto pk = pksm::PKX::getPKM(GenOf(gen), raw.data(), raw.size());
             if (pk && (int)pk->species() != 0) s->d->slots[(size_t)box * 30 + slot] = std::move(pk);
         }
+    }
     return s;
 }
 

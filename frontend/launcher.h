@@ -2491,6 +2491,7 @@ inline void ThemeSaveStart(const std::string& name); // (My Themes, below)
 inline void PcRenameDone(const std::string& t); // (My PC, below)
 inline bool PcBack(); // (My PC, below)
 inline void PcReopen();
+inline void PcRefresh();
 inline void KeyboardDone(int& tab, std::string& note)
 {
     GlassFocus& F = Focus();
@@ -5098,6 +5099,8 @@ inline void OpenMyPc()
     OpenSide(SIDE_HUB);
     HubMode() = 6; // (My PC: DrawPcPage)
     F.prow = 0; F.pact = -1; F.rScroll = 0;
+    // (The saves read again: a game played since may have changed them.)
+    PcRefresh();
     Hub().version++;
 }
 // IMPORT SAVES, from the settings or My PC's foot (back goes to My PC when it came from there).
@@ -5312,7 +5315,8 @@ inline void PcOpenSide(int i, bool again = false)
     const std::vector<MoverGame> gs = MoverGames();
     if (gs.empty()) { S.save.reset(); S.path.clear(); return; }
     S.game = std::max(0, std::min(S.game, (int)gs.size() - 1));
-    if (again || !S.save || S.path != gs[S.game].path)
+    // (One that could not be read is not tried again each frame: only when chosen again or reopened.)
+    if (again || S.path != gs[S.game].path || (!S.save && S.err.empty()))
     {
         S.path = gs[S.game].path;
         S.err.clear();
@@ -5321,6 +5325,7 @@ inline void PcOpenSide(int i, bool again = false)
     if (S.save) S.box = S.box == PokemonHub::PARTY && !S.save->IsBank() ? S.box : std::max(0, std::min(S.box, S.save->Boxes() - 1));
 }
 inline void PcReopen() { PcOpenSide(0, true); PcOpenSide(1, true); Pc().pending = 0; Hub().version++; }
+inline void PcRefresh() { if (Pc().ready && !Pc().pending) PcReopen(); }
 // (The first time: the Bank on the left, the first game on the right.)
 inline void PcEnsure()
 {
@@ -5639,7 +5644,10 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
     }
     const PokemonHub::Mon& m = d.mon;
     // Its picture, name and level; its number, species and kinds.
-    const int ps = std::min(iw, (int)(h * (P.tab == 1 ? 0.15f : 0.28f))); // (Stats: a smaller picture, room for its table)
+    // (The picture as large as the room left by the rest allows: name, number, kinds, tabs, the
+    // tab's rows and the buttons at the foot.)
+    const int below = (int)((24 + 18 + 26 + 30 + 6) * u) + (P.tab == 0 ? 6 * (int)(19 * u) : P.tab == 1 ? (int)(34 * u) + 6 * (int)(19 * u) : 4 * (int)(29 * u)) + (int)(26 * u) + 2 * pad + (int)(6 * u);
+    const int ps = std::max((int)(28 * u), std::min({ iw, (int)(h * 0.28f), (int)((h - below) / 0.82f) }));
     PcDrawMon(c, m.species, m.shiny, m.egg, x + (w - ps) / 2, ty, ps, (int)(ps * 0.82f));
     if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - pad - 8 * u, ty + 10 * u, 7 * u, PcPal::Shiny);
     ty += (int)(ps * 0.82f) + (int)(6 * u);
@@ -5699,27 +5707,16 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
         ty += (int)(16 * u);
         int total = 0;
         for (int k = 0; k < 6; k++) total += d.evs[k];
-        const bool canEdit = m.generation >= 3 && S->save && !S->save->ReadOnly();
         for (int r = 0; r < 6; r++)
         {
-            const int k = order[r], ry = ty + r * (int)(17 * u), mid = ry + (int)(9 * u);
+            const int k = order[r], ry = ty + r * (int)(19 * u), mid = ry + (int)(9 * u);
             GT(c, x + pad, mid, sn[k], 11 * u, PcPal::Stat[k], true);
             GT(c, x + pad + (int)(44 * u), mid, std::to_string(d.stats[k]), 12 * u, text, true);
             GT(c, x + pad + (int)(88 * u), mid, std::to_string(d.ivs[k]), 12 * u, text, true);
             GT(c, x + pad + (int)(118 * u), mid, std::to_string(d.evs[k]), 12 * u, text, true);
-            if (canEdit)
-            {
-                const int bw = (int)(22 * u), bx2 = x + w - pad - bw, bx1 = bx2 - bw - (int)(4 * u);
-                PcButton(c, bx1, ry, bw, (int)(16 * u), 6 * u, false, u);
-                GT(c, bx1 + (int)(8 * u), mid, "-", 13 * u, text, true);
-                PcHitAdd(bx1, ry, bw, (int)(16 * u), PC_EV, P.selSide, k * 2);
-                PcButton(c, bx2, ry, bw, (int)(16 * u), 6 * u, false, u);
-                GT(c, bx2 + (int)(7 * u), mid, "+", 13 * u, text, true);
-                PcHitAdd(bx2, ry, bw, (int)(16 * u), PC_EV, P.selSide, k * 2 + 1);
-            }
         }
-        ty += 6 * (int)(17 * u) + (int)(2 * u);
-        GT(c, x + pad, ty + 6 * u, "EVs " + std::to_string(total) + " / 510" + (canEdit ? "   (- and + change them by 4)" : ""), 10 * u, hint, false);
+        ty += 6 * (int)(19 * u) + (int)(2 * u);
+        GT(c, x + pad, ty + 6 * u, "EVs " + std::to_string(total) + " / 510", 10 * u, hint, false);
         ty += (int)(16 * u);
     }
     else
@@ -5787,17 +5784,7 @@ inline void DrawPcPage(Canvas& c, bool solid, float u, int L, int R, int top, in
         button("Save", PC_SAVE, true);
         button("Undo All", PC_UNDO, false);
     }
-    else
-    {
-        // (Nothing waiting: other emulators' saves can come in from here.)
-        const std::string label = "Import Saves";
-        const int bw = GW(label, 13 * u, true) + (int)(26 * u), bh = barH - (int)(12 * u);
-        bx -= bw;
-        PcButton(c, bx, fy + (int)(6 * u), bw, bh, 6 * u, false, u);
-        GT(c, bx + (int)(13 * u), fy + barH * 0.5f, label, 13 * u, text, true);
-        PcHitAdd(bx, fy + (int)(6 * u), bw, bh, PC_IMPORT, 0, 0);
-        bx -= (int)(8 * u);
-    }
+
     const std::string left = P.pending ? std::to_string(P.pending) + (P.pending == 1 ? " change to save" : " changes to save") + (P.msg.empty() ? "" : "   \xC2\xB7   " + P.msg) : P.msg.empty() ? std::string("Drag or tap to move Pok\xC3\xA9mon between your games and the Bank.") : P.msg;
     GTFit(c, L + (int)(14 * u), fy + barH * 0.5f, left, 12 * u, bx - L - (int)(24 * u), P.pending ? text : hint, P.pending != 0);
     // A Pokémon carried by a finger, over everything.
