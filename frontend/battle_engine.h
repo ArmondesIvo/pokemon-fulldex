@@ -103,6 +103,37 @@ inline bool Priority(int id) { return In(id, { 98, 245, 183, 453, 418, 420, 425,
 inline bool Heal(int id) { return In(id, { 105, 135, 208, 303, 355, 235, 236, 234, 456, 273, 461, 666 }); }
 }
 
+// A Pokémon the bot fights with, of any species: its stats at 50 (IVs 31, 85 EVs each, a neutral
+// nature) from its base stats, and four moves chosen for it (the real moves it could learn are not
+// built in): a weak, a middling and a strong one of its own types, physical or special as its
+// Attack or Special Attack is higher, and a boost or a status move.
+inline MonSpec BotMon(int species, const int base[6], const int types[2], const std::string& name, std::mt19937& rng)
+{
+    MonSpec m;
+    m.species = species; m.name = name;
+    m.shiny = rng() % 64 == 0;
+    m.types[0] = types[0]; m.types[1] = types[1];
+    for (int i = 0; i < 6; i++) m.stats[i] = (2 * base[i] + 31 + 21) / 2 + (i == 0 ? 60 : 5);
+    // (Per type: physical weak, middling, strong; then special the same.)
+    static const int moves[18][6] = {
+        { 98, 34, 38, 129, 304, 63 },     { 183, 280, 370, 410, 396, 411 }, { 17, 332, 413, 16, 403, 542 },
+        { 40, 398, 441, 51, 188, 482 },   { 523, 91, 89, 189, 426, 414 },   { 88, 157, 444, 246, 408, 800 },
+        { 210, 404, 224, 522, 324, 405 }, { 425, 421, 566, 466, 506, 247 }, { 418, 442, 231, 429, 430, 796 },
+        { 424, 7, 394, 52, 53, 126 },     { 453, 127, 401, 55, 57, 56 },    { 331, 402, 452, 345, 412, 76 },
+        { 209, 9, 528, 84, 85, 87 },      { 427, 428, 706, 93, 60, 94 },    { 420, 8, 556, 181, 58, 59 },
+        { 525, 337, 200, 239, 406, 434 }, { 44, 400, 242, 555, 399, 539 },  { 98, 583, 583, 574, 605, 585 } };
+    const bool phys = m.stats[1] >= m.stats[4];
+    const int o = phys ? 0 : 3;
+    const int t1 = types[0] >= 0 && types[0] < 18 ? types[0] : 0, t2 = types[1] >= 0 && types[1] < 18 ? types[1] : t1;
+    m.moves[0] = moves[t1][o];
+    m.moves[1] = moves[t2][o + 1];
+    m.moves[2] = moves[t1][o + 2];
+    if (m.moves[1] == m.moves[2]) m.moves[1] = moves[t1][o + 1] != m.moves[2] ? moves[t1][o + 1] : moves[t2][o];
+    static const int physBoost[] = { 14, 339, 349, 86, 92, 261 }, specBoost[] = { 347, 417, 105, 86, 92, 261 };
+    m.moves[3] = (phys ? physBoost : specBoost)[rng() % 6];
+    return m;
+}
+
 class Battle
 {
 public:

@@ -1070,6 +1070,19 @@ void SpeciesTypes(int species, std::string& type1, std::string& type2)
     if (b != a) type2 = Upper(i18n::type(pksm::Language::ENG, b));
 }
 
+bool SpeciesBase(int species, int base[6], int types[2])
+{
+    if (species <= 0 || species > DEX_SPECIES) return false;
+    namespace P = pksm::PersonalSMUSUM;
+    const u16 sp = (u16)species;
+    base[0] = P::baseHP(sp); base[1] = P::baseAtk(sp); base[2] = P::baseDef(sp);
+    base[3] = P::baseSpe(sp); base[4] = P::baseSpa(sp); base[5] = P::baseSpd(sp);
+    const pksm::Type a = P::type1(sp), b = P::type2(sp);
+    types[0] = (int)(u8)a;
+    types[1] = b == a ? -1 : (int)(u8)b;
+    return base[0] > 0;
+}
+
 void AddToDex(const Save& save, std::vector<DexMark>& dex)
 {
     if (dex.size() < (size_t)DEX_SPECIES + 1) dex.resize((size_t)DEX_SPECIES + 1);

@@ -113,6 +113,9 @@ void AddToDex(const Save& save, std::vector<DexMark>& dex);
 std::string SpeciesNameOf(int species);  // "BULBASAUR"
 int GenerationOfSpecies(int species);    // 1 to 7
 void SpeciesTypes(int species, std::string& type1, std::string& type2); // "GRASS", "POISON" (type2 "" when one)
+// A species' base stats (HP, Atk, Def, Spe, SpA, SpD) and types (0 Normal .. 17 Fairy; -1 none), as Sun
+// and Moon have them: the arena's bot builds any species from them.
+bool SpeciesBase(int species, int base[6], int types[2]);
 
 // One Pokémon as the MY PC tab's details show it (PKVault's): its kinds, nature, ability, moves,
 // stats and where it comes from, in English. Gen 1 and 2 have no nature or ability ("").

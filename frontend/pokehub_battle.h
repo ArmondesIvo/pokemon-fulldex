@@ -1,8 +1,8 @@
 #pragma once
 // THE ARENA's pages (PokeHub's battles against the bot; battle_engine.h is the fight itself).
 //  - The BATTLE tab (HubMode 9): your team (up to 6, chosen in My PC as for a trade, Pc().pick
-//    with purpose 1), the bot's (6 of your own Pokémon, drawn at random from your games and the
-//    Bank), the difficulty, and FIGHT.
+//    with purpose 1), the bot's (6 of any species, at random, moves chosen for them: Arena::BotMon),
+//    the difficulty, and FIGHT.
 //  - The fight, over everything (BattleOn): the stadium, the two Pokémon, a stick on the left,
 //    the five buttons on the right, the bars at the top; at the end the score, REMATCH and MENU.
 // Nothing is written to any save: the Pokémon are read, never moved or changed.
@@ -76,29 +76,24 @@ inline void BattleSaveTeam()
         fclose(f);
     }
 }
-// The bot's six: any of the player's own (not in their team), from all their games and the Bank.
+// The bot's six: any species of the Pokédex, each with moves chosen for it (Arena::BotMon).
 inline void BattleReroll()
 {
     BattleState& B = Bat();
-    std::vector<BattleKey> pool;
-    for (const MoverGame& g : MoverGames())
-    {
-        std::string err;
-        auto s = OpenMoverGame(g, err);
-        if (!s) continue;
-        for (int b = 0; b < s->Boxes(); b++)
-            for (const PokemonHub::Mon& m : s->Box(b)) if (!m.egg && m.species) pool.push_back({ g.path, b, m.slot });
-        if (!s->IsBank())
-            for (const PokemonHub::Mon& m : PokemonHub::Party(*s)) if (!m.egg && m.species) pool.push_back({ g.path, PokemonHub::PARTY, m.slot });
-    }
-    pool.erase(std::remove_if(pool.begin(), pool.end(), [&](const BattleKey& k) { return std::find(B.keys.begin(), B.keys.end(), k) != B.keys.end(); }), pool.end());
     std::mt19937 rng((unsigned)std::chrono::steady_clock::now().time_since_epoch().count());
-    std::shuffle(pool.begin(), pool.end(), rng);
-    if (pool.size() > 6) pool.resize(6);
-    B.botKeys = pool;
-    B.bot = BattleRead(B.botKeys);
+    B.bot.clear();
+    B.botKeys.clear();
+    for (int tries = 0; (int)B.bot.size() < 6 && tries < 200; tries++)
+    {
+        const int sp = 1 + (int)(rng() % PokemonHub::DEX_SPECIES);
+        if (sp == 292) continue; // (Shedinja: 1 HP, gone at the first touch)
+        bool dup = false;
+        for (const Arena::MonSpec& m : B.bot) dup |= m.species == sp;
+        int base[6], types[2];
+        if (dup || !PokemonHub::SpeciesBase(sp, base, types)) continue;
+        B.bot.push_back(Arena::BotMon(sp, base, types, MonName(PokemonHub::SpeciesNameOf(sp)), rng));
+    }
     B.botSel = -1;
-    // (Too few of their own: the bot fights with copies of the player's.)
     if (B.bot.empty()) B.bot = B.mine;
 }
 inline void BattleLoad(bool again = false)

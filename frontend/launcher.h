@@ -121,7 +121,7 @@ inline void LoadTabOrder()
 {
     TabOrderAll().clear();
     TabHidden().clear();
-    bool found = false, fork = false, beforeDex = false, beforeBattle = false;
+    bool found = false, fork = false, beforeDex = false, beforeBattle = false, battleAfterDex = false;
     if (FILE* f = fopen(TabOrderPath().c_str(), "rb"))
     {
         char line[4096];
@@ -132,7 +132,7 @@ inline void LoadTabOrder()
             const size_t tb = l.find('\t');
             if (tb == std::string::npos) continue;
             const std::string key = l.substr(0, tb);
-            if (key == "layout") { fork = true; beforeDex = l.substr(tb + 1) == "myboy1"; beforeBattle = beforeDex || l.substr(tb + 1) == "myboy2"; }
+            if (key == "layout") { fork = true; beforeDex = l.substr(tb + 1) == "myboy1"; beforeBattle = beforeDex || l.substr(tb + 1) == "myboy2"; battleAfterDex = beforeBattle || l.substr(tb + 1) == "myboy3"; }
             if (key != "order" && key != "hidden") continue;
             if (key == "order") found = true;
             std::vector<int>& dst = key == "hidden" ? TabHidden() : TabOrderAll();
@@ -165,6 +165,14 @@ inline void LoadTabOrder()
         std::vector<int>& o = TabOrderAll();
         const auto dx = std::find(o.begin(), o.end(), (int)TAB_DEX);
         o.insert(dx == o.end() ? o.end() : dx + 1, (int)TAB_BATTLE);
+    }
+    if (battleAfterDex)
+    {
+        // (The BATTLE tab moved before MY PC, as the player wanted, myboy4.)
+        std::vector<int>& o = TabOrderAll();
+        o.erase(std::remove(o.begin(), o.end(), (int)TAB_BATTLE), o.end());
+        const auto pc = std::find(o.begin(), o.end(), (int)TAB_MYPC);
+        o.insert(pc == o.end() ? o.end() : pc, (int)TAB_BATTLE);
         TabOrderFix();
         SaveTabOrder();
         return;
@@ -185,7 +193,7 @@ inline void LoadTabOrder()
     {
         // (This fork's tabs, once: GB, GBA, DS, 3DS and My PC first, Home and All hidden; the
         // player's own tabs and what they hid kept. "layout" in the file says it was done.)
-        std::vector<int> o = { TAB_GB, TAB_GBA, TAB_DS, TAB_3DS, TAB_MYPC, TAB_DEX, TAB_BATTLE };
+        std::vector<int> o = { TAB_GB, TAB_GBA, TAB_DS, TAB_3DS, TAB_BATTLE, TAB_MYPC, TAB_DEX };
         for (const int t : TabOrderAll()) if (std::find(o.begin(), o.end(), t) == o.end()) o.push_back(t);
         TabOrderAll() = o;
         for (const int t : { (int)TAB_HOME, (int)TAB_ALL }) if (!TabIsHidden(t)) TabHidden().push_back(t);
@@ -204,7 +212,7 @@ inline bool SaveTabOrder()
     std::string o, h;
     for (const int t : TabOrderAll()) o += (o.empty() ? "" : ",") + std::to_string(t);
     for (const int t : TabHidden()) h += (h.empty() ? "" : ",") + std::to_string(t);
-    fprintf(f, "layout\tmyboy3\norder\t%s\nhidden\t%s\n", o.c_str(), h.c_str());
+    fprintf(f, "layout\tmyboy4\norder\t%s\nhidden\t%s\n", o.c_str(), h.c_str());
     return fclose(f) == 0;
 }
 inline std::string TabsSig()
