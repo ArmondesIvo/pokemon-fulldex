@@ -128,12 +128,9 @@ public class GameActivity extends SDLActivity {
     private void applyScreenOrientation() {
         applyCutoutMode();
         runOnUiThread(() -> {
-            boolean autoRotate = Settings.System.getInt(getContentResolver(),
-                Settings.System.ACCELEROMETER_ROTATION, 0) != 0;
-            setRequestedOrientation(playingGame || landscapeOnly
-                ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                : autoRotate ? ActivityInfo.SCREEN_ORIENTATION_FULL_USER
-                             : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+            // PokeHub: always sideways, the game list as the games (the player's choice, 10/11/2026);
+            // either side up, as the phone is turned.
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         });
     }
 
