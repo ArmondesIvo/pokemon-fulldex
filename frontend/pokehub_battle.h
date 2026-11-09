@@ -422,11 +422,13 @@ inline void BattleSetOpp(bool reroll = false)
             const auto& ev = Arena::EverydayTrainers();
             const Arena::Everyday& e = ev[rng() % ev.size()];
             B.opp = { std::string(e.title) + " " + Arena::RandomFirstName(rng()), e.sprite, 0, 0, 50 };
+            // (Two to six, never a legendary.)
+            const int want = 2 + (int)(rng() % 5);
             int sp[6], n = 0;
-            for (int tries = 0; n < 6 && tries < 200; tries++)
+            for (int tries = 0; n < want && tries < 200; tries++)
             {
                 const int x = 1 + (int)(rng() % PokemonHub::DEX_SPECIES);
-                bool dup = x == 292 || Arena::NoPicture(x);
+                bool dup = x == 292 || Arena::NoPicture(x) || Arena::Legendary(x);
                 for (int i = 0; i < n; i++) dup |= sp[i] == x;
                 if (!dup) sp[n++] = x;
             }
@@ -1233,7 +1235,7 @@ inline void Wave(Canvas& c, int type, float x, float y, float r, float dx, float
 // Where a move landed: a flash and the type's own bits flying out; a physical one a slash too.
 inline void Hit(Canvas& c, const Impact& m, float x, float y, float k, float px)
 {
-    const float t = m.t / 0.35f, sz = (m.big ? 90 : 55) * k;
+    const float t = std::min(1.0f, m.t / 0.35f), sz = (m.big ? 90 : 55) * k;
     const uint32_t tc = Arena::TypeColour(m.type);
     BGfx::Disc(c, x, y, sz * (0.3f + 0.7f * t), BGfx::Alpha(0xFFFFFFFFu, 0.55f * (1 - t)));
     BGfx::Ring(c, x, y, sz * (0.4f + t), sz * (0.4f + t) * 0.8f, std::max(2.0f, 6 * k * (1 - t)), BGfx::Alpha(tc, 1 - t));
@@ -1257,6 +1259,80 @@ inline void Hit(Canvas& c, const Impact& m, float x, float y, float k, float px)
         else Blob(c, bx, by, 8 * k * (1 - t * 0.6f), BGfx::Alpha(tc, 1 - t * 0.5f), px);
     }
 }
+}
+
+// ---- PMD Origins' effect sheets (fx/, battle_trainers.h's FxOf): frames side by side, square ---------
+inline const ArtImg* FxImg(const char* name)
+{
+    if (!name) return nullptr;
+    std::string n = name;
+    const size_t h = n.find('#');
+    if (h != std::string::npos) n.resize(h);
+    return ArenaArt("fx/" + n);
+}
+// (A shot's frames to loop: "Name#a-b" those, else all.)
+inline void FxRange(const char* name, int nf, int& a, int& b)
+{
+    a = 0; b = nf - 1;
+    if (const char* h = name ? strchr(name, '#') : nullptr) { a = std::max(0, atoi(h + 1)); const char* d = strchr(h, '-'); b = d ? std::min(nf - 1, atoi(d + 1)) : a; }
+    if (a > b) a = b;
+}
+// One frame of a sheet, centred on (cx, cy), s screen pixels a pixel.
+inline void FxFrame(Canvas& c, const ArtImg& a, int frame, float cx, float cy, float s, float alpha = 1)
+{
+    const int fw = a.h, nf = std::max(1, a.w / std::max(1, fw));
+    frame = std::max(0, std::min(nf - 1, frame));
+    const int dw = std::max(1, (int)(fw * s)), ox = (int)(cx - dw / 2.0f), oy = (int)(cy - dw / 2.0f);
+    for (int j = 0; j < dw; j++)
+    {
+        const int yy = oy + j;
+        if (yy < 0 || yy >= c.h) continue;
+        const int sy = std::min(a.h - 1, (int)(j / s));
+        for (int i = 0; i < dw; i++)
+        {
+            const int xx = ox + i;
+            if (xx < 0 || xx >= c.w) continue;
+            const uint32_t p = a.px[(size_t)sy * a.w + frame * fw + std::min(fw - 1, (int)(i / s))];
+            const uint32_t al = p >> 24;
+            if (al < 16) continue;
+            BGfx::Put(c, xx, yy, alpha >= 1 && al == 255 ? p : BGfx::Alpha(p, alpha));
+        }
+    }
+}
+// A beam of a Beam folder's: its body (a frame: the beam across, one pixel along, stretched) from
+// (x0, y0) along (ux, uy), len pixels, and its head at the end; frame f; s pixels a pixel.
+inline void FxBeam(Canvas& c, const ArtImg& body, const ArtImg& head, int f, float x0, float y0, float ux, float uy, float len, float s)
+{
+    const int fw = head.h, nf = std::max(1, head.w / std::max(1, fw));
+    f = std::max(0, std::min(nf - 1, f));
+    const float half = fw * s * 0.5f, headLen = head.h * s;
+    const float nx = -uy, ny = ux;
+    const float x1 = x0 + ux * len, y1 = y0 + uy * len;
+    const int by0 = std::max(0, (int)(std::min(y0, y1) - half)), by1 = std::min(c.h - 1, (int)(std::max(y0, y1) + half));
+    const float minX = std::min(x0, x1) - half, maxX = std::max(x0, x1) + half;
+    for (int y = by0; y <= by1; y++)
+    {
+        const float py = y + 0.5f - y0;
+        float a = minX, b = maxX;
+        if (std::fabs(uy) > 1e-3f)
+        {
+            // (Within half of the line: |px * ny ... |; the row's span, not the whole box.)
+            const float e0 = (py * ux - half) / uy + x0, e1 = (py * ux + half) / uy + x0;
+            a = std::max(a, std::min(e0, e1)); b = std::min(b, std::max(e0, e1));
+        }
+        for (int x = std::max(0, (int)a); x <= std::min(c.w - 1, (int)b + 1); x++)
+        {
+            const float px = x + 0.5f - x0;
+            const float along = px * ux + py * uy, across = px * nx + py * ny;
+            if (along < 0 || along > len || std::fabs(across) > half) continue;
+            const int col = std::min(fw - 1, (int)((across + half) / s));
+            uint32_t p;
+            if (along > len - headLen) { const int row = std::min(head.h - 1, (int)((along - (len - headLen)) / s)); p = head.px[(size_t)row * head.w + f * fw + col]; }
+            else p = body.px[f * fw + col];
+            if ((p >> 24) < 16) continue;
+            BGfx::Put(c, x, y, p);
+        }
+    }
 }
 
 // ---- The stadium: drawn once a size, then copied each frame ------------------------------------
@@ -1540,6 +1616,8 @@ inline void DrawBattle(Canvas& c, float u)
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, bm.width * k, BGfx::Alpha(tc, a * 0.35f));
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, 3 * k, BGfx::Alpha(0xFFFFFFFFu, a));
             BGfx::Disc(c, x0, y0 - 30 * k, (20 + 30 * bm.t / bm.windup) * k, BGfx::Alpha(tc, 0.7f));
+            if (const ArtImg* ch = FxImg(Arena::MoveCharge(bm.move)))
+                FxFrame(c, *ch, (int)(bm.t / bm.windup * std::max(1, ch->w / std::max(1, ch->h))), x0, y0 - 30 * k, 3.4f * k);
             // (Charging: sparks drawn in to it.)
             for (int i = 0; i < 10; i++)
             {
@@ -1550,6 +1628,21 @@ inline void DrawBattle(Canvas& c, float u)
         else
         {
             const float t = (bm.t - bm.windup) / bm.dur, w = bm.width * k * (1 - t * 0.6f);
+            if (bm.ult)
+            {
+                // (A ULT's beam: its type's Beam, growing and dying away along its frames.)
+                const std::string base = std::string("fx/") + Arena::FxOf(bm.type).beam;
+                const ArtImg* bd = ArenaArt(base + "_Body");
+                const ArtImg* hd = ArenaArt(base + "_Head");
+                if (bd && hd)
+                {
+                    const float ux = x1 - x0, uy = y1 - y0, ul = std::max(1.0f, std::sqrt(ux * ux + uy * uy));
+                    const int nf = std::max(1, hd->w / std::max(1, hd->h));
+                    const float sc = std::max(2.0f, bm.width * k * 1.5f / std::max(1, hd->h));
+                    FxBeam(c, *bd, *hd, (int)(t * nf), x0, y0 - 30 * k, ux / ul, uy / ul, ul, sc);
+                    continue;
+                }
+            }
             if (!bm.ult)
             {
                 // (A jet is its particles; Electric's lightning too, three bolts that flicker.)
@@ -1574,10 +1667,32 @@ inline void DrawBattle(Canvas& c, float u)
     {
         const float x = SX(p.x), y = SY(p.y) - 40 * k;
         if (!p.wave) BGfx::Disc(c, x, y, p.r * k * 2.3f, BGfx::Alpha(Arena::TypeColour(p.type), 0.22f));
+        const char* sn = Arena::MoveShot(p.move) ? Arena::MoveShot(p.move) : Arena::FxOf(p.type).shot;
+        const ArtImg* si = p.wave ? nullptr : FxImg(sn);
         if (p.wave) BFx::Wave(c, p.type, x, y, p.r * k * 2.4f, p.vx, p.vy, b.time, fxPx);
+        else if (si)
+        {
+            // (Its sheet, looped; as large as the shot.)
+            int a0, a1;
+            FxRange(sn, std::max(1, si->w / std::max(1, si->h)), a0, a1);
+            const int fr = a0 + (int)(b.time * 14 + p.x * 0.01f) % (a1 - a0 + 1);
+            // (At the sprites' own scale, as PMD draws them: a bigger shot a little bigger.)
+            FxFrame(c, *si, fr, x, y, k * (p.r >= 20 ? 3.2f : 2.6f) * (si->h <= 12 ? 1.6f : 1.0f));
+        }
         else BFx::Shot(c, p.type, x, y, p.r * k * 1.6f, b.time + p.x * 0.001f, p.vx, p.vy, fxPx);
     }
-    for (const Arena::Impact& m : b.impacts) BFx::Hit(c, m, SX(m.x), SY(m.y) - 40 * k, k, fxPx);
+    for (const Arena::Impact& m : b.impacts)
+    {
+        // (A hit: its type's sheet played once; a ULT's blast bigger; a touch of the type's
+        // slash or fist; drawn by hand while the sheet is fetched.)
+        const Arena::TypeFx& fx = Arena::FxOf(m.type);
+        const char* hn = m.blast ? fx.blast : m.phys && (m.type == Arena::T_NORMAL || m.type == Arena::T_DARK || m.type == Arena::T_STEEL || m.type == Arena::T_DRAGON) ? "Slash.None" : fx.hit;
+        const ArtImg* hi = FxImg(hn);
+        if (!hi) { if (!m.blast) BFx::Hit(c, m, SX(m.x), SY(m.y) - 40 * k, k, fxPx); continue; }
+        const float life = m.blast ? 0.9f : 0.6f;
+        const int nf = std::max(1, hi->w / std::max(1, hi->h));
+        FxFrame(c, *hi, (int)(m.t / life * nf), SX(m.x), SY(m.y) - (m.blast ? 30 : 40) * k, 3.4f * k * (m.blast ? 1.6f : m.big ? 1.15f : 0.85f));
+    }
     // Words floating up.
     for (const Arena::FloatText& t : b.texts)
     {

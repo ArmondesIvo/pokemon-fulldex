@@ -103,11 +103,11 @@ struct Fighter
     float boomT = 0;                         // Self-Destruct, Explosion: when it faints
 };
 struct Proj { int owner = 0, move = 0, type = 0; float x = 0, y = 0, vx = 0, vy = 0, life = 0, r = 16, scale = 1; bool ult = false, wave = false; };
-struct Beam { int owner = 0, move = 0, type = 0; float x0 = 0, y0 = 0, dx = 1, dy = 0, len = 1500, width = 90, t = 0, windup = 0.5f, dur = 0.3f, scale = 1, tick = 0; bool hit = false, ult = true; };
+struct Beam { int owner = 0, move = 0, type = 0; float x0 = 0, y0 = 0, dx = 1, dy = 0, len = 1500, width = 90, t = 0, windup = 0.55f, dur = 0.6f, scale = 1, tick = 0; bool hit = false, ult = true; };
 struct Ring { int owner = 0, move = 0, type = 0; float x = 0, y = 0, rmax = 240, t = 0, dur = 0.35f, scale = 1; bool hit = false; };
 struct FloatText { std::string s; float x = 0, y = 0, t = 0, life = 1.1f; uint32_t col = 0xFFFFFFFFu; float size = 1; };
 // (A hit's flash where it landed, drawn in its type's way.)
-struct Impact { float x = 0, y = 0, t = 0; int type = 0; bool big = false, phys = false; };
+struct Impact { float x = 0, y = 0, t = 0; int type = 0, move = 0; bool big = false, phys = false, blast = false; };
 // (Particles: kind 0 a square, 1 a flame (white, yellow, orange, red, smoke as it ages), 2 a leaf,
 // 3 a spark, 4 smoke, 5 a drop, 6 a rock, 7 a glowing orb. grow: how much bigger by its end; g: a
 // pull downwards (negative: it rises).)
@@ -238,7 +238,7 @@ public:
         for (auto& p : parts) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; const float drag = p.kind == PK_SMOKE ? 0.95f : p.kind == PK_FLAME ? 0.985f : 0.92f; p.vx *= drag; p.vy = p.vy * drag + p.g * dt; p.rot += dt * 6; }
         parts.erase(std::remove_if(parts.begin(), parts.end(), [](const Particle& p) { return p.t >= p.life; }), parts.end());
         for (auto& m : impacts) m.t += dt;
-        impacts.erase(std::remove_if(impacts.begin(), impacts.end(), [](const Impact& m) { return m.t >= 0.35f; }), impacts.end());
+        impacts.erase(std::remove_if(impacts.begin(), impacts.end(), [](const Impact& m) { return m.t >= (m.blast ? 0.9f : 0.6f); }), impacts.end());
         if (phase == INTRO) { if (phaseT > 1.4f) SetPhase(FIGHT); return; }
         if (phase == END) return;
         if (phase == KO)
@@ -313,6 +313,7 @@ private:
     void Blast(float x, float y, int type, float scale = 1)
     {
         const int k = TypeParticle(type);
+        { Impact im; im.x = x; im.y = y; im.type = type; im.big = true; im.blast = true; impacts.push_back(im); }
         Burst(x, y, TypeColour(type), (int)(60 * scale), 360 * scale, 18, 0.9f, k, k == PK_FLAME ? 1.8f : 0.4f, k == PK_FLAME ? -340.0f : -60.0f);
         // (A column: the same bits going straight up from it.)
         for (int i = 0; i < (int)(24 * scale) && parts.size() < 600; i++)
@@ -703,7 +704,7 @@ private:
         D.x += kx / kl * kb; D.y += ky / kl * kb;
         Clamp(D);
         const uint32_t tc = TypeColour(mi.type);
-        { Impact im; im.x = D.x; im.y = D.y; im.type = mi.type; im.big = ult || scale > 0.5f; im.phys = phys; impacts.push_back(im); }
+        { Impact im; im.x = D.x; im.y = D.y; im.type = mi.type; im.move = move; im.big = ult || scale > 0.5f; im.phys = mi.shape == BattleData::SH_LUNGE; impacts.push_back(im); }
         Burst(D.x, D.y, tc, ult ? 30 : scale > 0.5f ? 14 : 6, ult ? 380.0f : 220.0f, ult ? 12.0f : 8.0f, 0.45f, TypeParticle(mi.type), TypeParticle(mi.type) == PK_FLAME ? 1.0f : 0.0f, TypeParticle(mi.type) == PK_FLAME ? -200.0f : 0.0f);
         Say(D.x, D.y - 50, std::to_string(n), eff > 1 ? 0xFFFFD040u : eff < 1 ? 0xFFC8C8C8u : 0xFFFFFFFFu, ult ? 1.5f : scale > 0.5f ? 1.15f : 0.9f, 0.9f);
         if (eff > 1) Say(D.x, D.y - 80, "Super eficaz!", 0xFFFFD040u, 0.85f);

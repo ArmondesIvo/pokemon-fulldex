@@ -172,4 +172,56 @@ inline const std::vector<MegaInfo>& Megas()
 }
 constexpr int MEGA_PRICE = 8000;
 inline int MegaFor(int species) { const auto& m = Megas(); for (int i = 0; i < (int)m.size(); i++) if (m[i].species == species) return i; return -1; }
+// THE MOVES' LOOKS: PMD Origins' effects (github.com/PMDCollab/RawAsset, Particle and Beam), kept in
+// PokeHub's bucket under fx/ (tools/battle/upload_art.sh); each sheet its frames side by side,
+// square (a shot's "#a-b": only those frames, looped). Per type: the shot flying, its hit, a ULT's blast, and the beam a ULT fires (a Beam
+// folder: <beam>_Body.png, the beam across, a frame a column of pixels; <beam>_Head.png, its end).
+struct TypeFx { const char* shot; const char* hit; const char* blast; const char* beam; };
+inline const TypeFx& FxOf(int type)
+{
+    static const TypeFx t[18] = {
+        { "Swift_Star.None", "Hit_Neutral.None", "Explosion.None", "beam_Column_White" },                 // Normal
+        { "Aura_Sphere.None", "Force_Palm_Hit.None", "Focus_Blast_Hit.None", "beam_Column_Tan" },          // Fighting
+        { "Razor_Wind.None", "Air_Slash_Slash.None", "Gust.None", "beam_Column_White" },                   // Flying
+        { "Poison_Ball_Ranger.None", "Gunk_Shot_Hit.None", "Gunk_Shot_Hit.None", "beam_Column_Purple" },   // Poison
+        { "Mud_Shot_Ball.None#0-0", "Mud_Bomb_Hit.None", "Earthquake_Ranger.None", "beam_Column_Brown" },      // Ground
+        { "Stone_Edge_Rock.None#0-3", "Rock_Wrecker_Hit.None", "Rock_Wrecker_Hit.None", "beam_Column_Tan" },   // Rock
+        { "Bubbles_Green.None#3-5", "Bug_Bite.None", "Bug_Buzz.None", "beam_Column_Green" },                   // Bug
+        { "Shadow_Ball.None", "Shadow_Claw_Hit.None", "Shadow_Force_Hit.None", "beam_Column_Purple" },     // Ghost
+        { "Mirror_Shot.None#9-11", "Gyro_Ball_Hit.None", "Gyro_Ball_Hit.None", "beam_Column_White" },           // Steel
+        { "Ember.None", "Fire_Fang_Hit.None", "Explosion.None", "beam_Column_Red" },                       // Fire
+        { "Bubble_Pop_Blue.None#6-10", "Hydro_Cannon.None", "Hydro_Cannon.None", "beam_Column_Blue" },          // Water
+        { "Energy_Ball.None", "Energy_Ball_Hit.None", "Leaf_Storm_Hit.None", "beam_Column_Green" },         // Grass
+        { "Charge_Beam_Particle.None#4-7", "Charge_Beam_Hit.None", "Discharge_Hit.None", "beam_Column_Yellow" }, // Electric
+        { "Mist_Ball.None", "Psycho_Shift_Hit.None", "Psycho_Shift_Hit.None", "beam_Column_Pink" },        // Psychic
+        { "Ice_Ball.None", "Ice_Shard_Hit.None", "Ice_Shard_Hit.None", "beam_Beam_2" },                    // Ice
+        { "Dragon_Pulse_Charge.None", "Draco_Meteor_Explosion.None", "Draco_Meteor_Explosion.None", "beam_Column_Purple" }, // Dragon
+        { "Dark_Pulse_Particle.None#0-0", "Night_Slash_Hit.None", "Dark_Pulse_Front.None", "beam_Column_Black" }, // Dark
+        { "Lucky_Chant_Star_Violet.None#0-3", "Moonlight_Sparkles.None", "Psycho_Shift_Hit.None", "beam_Column_Pink" } }; // Fairy
+    return t[type >= 0 && type < 18 ? type : 0];
+}
+// A move's own shot, when it has one; and what a charging ULT shows (Solar Beam's sunlight).
+inline const char* MoveShot(int move)
+{
+    switch (move)
+    {
+    case 75: return "Razor_Leaf.None";            // Razor Leaf
+    case 345: return "Magical_Leaf.None";         // Magical Leaf
+    case 52: case 172: return "Ember.None";       // Ember, Flame Wheel
+    case 188: case 482: return "Poison_Ball_Ranger.None";
+    case 129: return "Swift_Star.None";
+    default: return nullptr;
+    }
+}
+inline const char* MoveCharge(int move) { return move == 76 || move == 669 ? "Solar_Beam_Charge.None" : nullptr; }
+// LEGENDARIES and MYTHICALS: never in an everyday trainer's team.
+inline bool Legendary(int sp)
+{
+    static const int l[] = { 144, 145, 146, 150, 151, 243, 244, 245, 249, 250, 251, 377, 378, 379, 380, 381, 382, 383, 384, 385, 386,
+        480, 481, 482, 483, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 638, 639, 640, 641, 642, 643, 644, 645, 646, 647,
+        648, 649, 716, 717, 718, 719, 720, 721, 772, 773, 785, 786, 787, 788, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799,
+        800, 801, 802, 803, 804, 805, 806, 807, 808, 809 };
+    for (int x : l) if (x == sp) return true;
+    return false;
+}
 }
