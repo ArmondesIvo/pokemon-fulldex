@@ -13,7 +13,7 @@
 //   GET  /users                          the other players: "id<TAB>name<TAB>email" lines
 //   GET  /trades                         the player's open trades (and finished ones not yet put away)
 //   POST /trades                         a new one: "to<TAB>id", then N "M<TAB>gen<TAB>data<TAB>place"
-//   POST /trades/<id>/counter            B: "pick<TAB>i", then N "M..." lines of theirs
+//   POST /trades/<id>/counter            B: "pick<TAB>i" (one of A's), then 1 to 6 "M..." lines of theirs
 //   POST /trades/<id>/finish             A: "pick<TAB>i": done
 //   POST /trades/<id>/cancel             either, while open
 //   POST /trades/<id>/settled            this side's app has put its Pokémon where they go
@@ -296,13 +296,15 @@ async function trades(request, url, env) {
   if (m[2] === "counter") {
     if (isA || t.state !== "offered") return text("not now", 409);
     if (!(pick >= 0 && pick < t.count)) return text("bad pick", 400);
-    const mons = parseMons(rows, t.count);
-    if (!mons) return text(`put ${t.count} on the table`, 400);
+    // (B offers 1 to 6, as many as they like: not as many as A did.)
+    const mons = parseMons(rows, 0);
+    if (!mons) return text("put 1 to 6 on the table", 400);
     await env.DB.prepare("UPDATE trades SET state = 'countered', b_mons = ?1, b_pick = ?2, updated = ?3 WHERE id = ?4 AND state = 'offered'")
       .bind(mons.join("\n"), pick, now, t.id).run();
   } else if (m[2] === "finish") {
     if (!isA || t.state !== "countered") return text("not now", 409);
-    if (!(pick >= 0 && pick < t.count)) return text("bad pick", 400);
+    const bCount = (t.b_mons || "").split("\n").filter((x) => x).length;
+    if (!(pick >= 0 && pick < bCount)) return text("bad pick", 400);
     await env.DB.prepare("UPDATE trades SET state = 'done', a_pick = ?1, updated = ?2 WHERE id = ?3 AND state = 'countered'").bind(pick, now, t.id).run();
   } else if (m[2] === "cancel") {
     if (t.state !== "offered" && t.state !== "countered") return text("not now", 409);

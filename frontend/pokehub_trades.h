@@ -1,7 +1,7 @@
 #pragma once
 // ONLINE TRADES (PokeHub's, through its server: tools/pokehub/server/worker.js, /trades).
 //  1. A chooses 1 to 6 of theirs (My PC's choosing, Pc().pick) and a player: they go on the table.
-//  2. B sees them (the bell on the top bar), wants one, and puts as many of theirs on the table.
+//  2. B sees them (the bell on the top bar), wants one, and puts 1 to 6 of theirs on the table.
 //  3. A takes one of B's: done. Either may call it off before.
 // What is on the table is out of its owner's saves meanwhile (kept on the server), so nothing is
 // ever in two places. At the end, each side's app (on its next look) puts the one it got in the
@@ -404,8 +404,9 @@ inline void TradesStartCounter(const OnlineTrade& t, int want)
     OpenMyPc();
     PcState& P = Pc();
     P.pick = PcState::Pick();
-    P.pick.on = true; P.pick.need = t.count;
-    P.pick.title = LauncherText::Tr("Choose") + " " + std::to_string(t.count) + " " + LauncherText::Tr("for") + " " + (t.partner.empty() ? t.partnerEmail : t.partner);
+    // (As many as they like, 1 to 6, whatever the other offered: the other then takes one of them.)
+    P.pick.on = true; P.pick.need = 0;
+    P.pick.title = LauncherText::Tr("Choose up to 6 to offer") + " \xC2\xB7 " + (t.partner.empty() ? t.partnerEmail : t.partner);
     P.msg.clear();
 }
 inline void TradesPicked(bool send)
