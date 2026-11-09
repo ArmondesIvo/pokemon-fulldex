@@ -59,7 +59,7 @@ inline Table& For(int lang)
     if (!made[lang])
     {
         made[lang] = true;
-        const char* code = UiLang::Codes[lang < 7 ? lang : 0];
+        const char* code = UiLang::Codes[lang < 8 ? lang : 0];
         if (const char* builtIn = LauncherLangData(code)) Add(t, builtIn);
         if (!OverrideDir().empty())
             if (FILE* f = fopen((OverrideDir() + "/launcher-" + code + ".txt").c_str(), "rb"))

@@ -3643,6 +3643,679 @@ Saved {}	저장됨 {}
 SAVES FOLDER	저장 폴더
 BESIDE THE ROMS	ROM 옆
 )FDXLANG";
+static const char* const kLauncherLang_pt = u8R"FDXLANG(# PokeHub launcher: Português (Brasil). One line each: the English, a tab, the Português. {} stands for a name or number.
+Game Options	Opções do Jogo
+A theme of your own.	Um tema seu.
+Apply	Aplicar
+Delete	Apagar
+Close	Fechar
+Show In Folder	Mostrar Na Pasta
+Favourites First	Favoritos Primeiro
+Recently Played	Jogados Recentemente
+Original	Original
+Your Theme's Name	Nome Do Seu Tema
+The Other Player's Code	O Código Do Outro Jogador
+Tab Name	Nome Da Aba
+Part Of A Game's Name	Parte Do Nome De Um Jogo
+The Game's Own Name	O Nome Do Próprio Jogo
+Join	Entrar
+Make Tab	Criar Aba
+Search	Buscar
+Save	Salvar
+Add To Tab	Adicionar À Aba
+You have no tabs of your own yet. Make one and this game goes in it.	Você ainda não tem abas suas. Crie uma e este jogo vai para ela.
+Choose a tab to put this game in, or to take it out.	Escolha uma aba para pôr este jogo, ou para tirá-lo.
+New Tab	Nova Aba
+A tab of your own. Deleting it keeps its games.	Uma aba sua. Apagá-la mantém os jogos.
+Rename Tab	Renomear Aba
+Move Left	Mover Para A Esquerda
+Move Right	Mover Para A Direita
+Hide Tab	Esconder Aba
+Delete Tab	Apagar Aba
+A built-in tab: it can be moved or hidden, never deleted. + shows a hidden one again.	Uma aba do app: pode ser movida ou escondida, nunca apagada. + mostra de novo uma escondida.
+Tabs	Abas
+Make a new tab, or show one you hid.	Crie uma aba nova, ou mostre uma que você escondeu.
+Show A Hidden Tab	Mostrar Uma Aba Escondida
+Cancel	Cancelar
+It goes back where it was.	Volta para onde estava.
+Off	Desligado
+On	Ligado
+Party	Equipe
+Box {}	Caixa {}
+First Free Place	Primeiro Lugar Livre
+Next Box	Próxima Caixa
+Previous Box	Caixa Anterior
+Cancel Swap	Cancelar Troca
+Swap	Trocar
+Swap And Evolve	Trocar E Evoluir
+Move To {}	Mover Para {}
+Move And Evolve	Mover E Evoluir
+Swap With One In {}	Trocar Com Um Em {}
+Swap With	Trocar Com
+Now choose the Pokémon in {}	Agora escolha o Pokémon em {}
+Could not swap them. {}	Não deu para trocá-los. {}
+Could not move it. {}	Não deu para movê-lo. {}
+It could not be written: {}	Não deu para gravar: {}
+Traded! {}	Trocado! {}
+Sent. The save was backed up first.	Enviado. O save foi copiado antes.
+Done: {}	Pronto: {}
+Done.	Pronto.
+A Trainer	Um Treinador
+Open A Room	Abrir Uma Sala
+Join A Room	Entrar Numa Sala
+Make An Online Code	Criar Um Código Online
+Enter An Online Code	Digitar Um Código Online
+Stop	Parar
+Close The Room	Fechar A Sala
+Join {}	Entrar Em {}
+Stop Looking	Parar De Procurar
+Accept The Gift	Aceitar O Presente
+Accept The Trade	Aceitar A Troca
+Not Yet	Ainda Não
+Take Back My Offer	Retirar Minha Oferta
+Leave	Sair
+Offer For A Trade	Oferecer Para Troca
+Send As A Gift	Enviar Como Presente
+Online trades are not set up in this build of Fulldex.	As trocas online não estão configuradas nesta versão do PokeHub.
+It cannot be sent. {}	Não dá para enviar. {}
+Game Art	Arte Do Jogo
+Your Picture	Sua Imagem
+Custom	Personalizado
+Theme	Tema
+Delete {}	Apagar {}
+Sign In With Google	Entrar Com O Google
+Sync All Now	Sincronizar Tudo Agora
+Sign Out	Sair
+Keep This Device's	Manter O Deste Aparelho
+Keep The Cloud's	Manter O Da Nuvem
+Sync Now	Sincronizar Agora
+Cloud saves are not set up.	Os saves na nuvem não estão configurados.
+Could not reach {}	Não deu para alcançar {}
+Synced.	Sincronizado.
+This build of Fulldex has no Google sign-in built in.	Esta versão do PokeHub não tem login do Google.
+Could not reach Google. Check the internet connection and try again.	Não deu para alcançar o Google. Confira a internet e tente de novo.
+Signed in. Syncing your saves...	Conectado. Sincronizando seus saves...
+Sign-in was turned down on the phone.	O login foi recusado no celular.
+The code ran out. Choose Sign In again for a new one.	O código expirou. Escolha Entrar de novo para um novo.
+Sign-in did not work. Try again.	O login não funcionou. Tente de novo.
+Sign-in cancelled.	Login cancelado.
+Asking Google for a code...	Pedindo um código ao Google...
+Signed out. Your saves stay here, and in your Drive.	Desconectado. Seus saves ficam aqui e no seu Drive.
+Could not save the cloud settings.	Não deu para salvar as configurações da nuvem.
+Syncing...	Sincronizando...
+Not Synced Yet	Ainda Não Sincronizado
+Only Here	Só Aqui
+Up To Date	Atualizado
+Sent Up	Enviado
+Brought Down	Baixado
+No Save Yet	Sem Save Ainda
+Changed On Both	Mudou Nos Dois
+Could Not Reach	Não Alcançado
+Enjoying Fulldex?	Curtindo o PokeHub?
+You've played for over 20 hours. Fulldex is free, made by one dude in his spare time: if it's given you some good hours, consider buying me a beer. Scan the code with your phone. Cheers, James	Você jogou mais de 20 horas. O Fulldex, de onde o PokeHub veio, é grátis, feito por um cara no tempo livre: se ele te deu boas horas, pense em pagar uma cerveja para ele. Leia o código com o celular. Valeu, James
+Done	Pronto
+Buy Me A Beer	Pagar Uma Cerveja
+Maybe Later	Talvez Depois
+Quit Fulldex?	Sair Do PokeHub?
+Are you sure you want to quit?	Tem certeza de que quer sair?
+Quit	Sair
+Support Fulldex	Apoiar O Fulldex
+Thank you! Which would you like to open in your browser?	Obrigado! Qual você quer abrir no navegador?
+What's new in this update	O que há de novo nesta versão
+Updates	Atualizações
+Move Pokémon	Mover Pokémon
+Cloud Saves	Saves Na Nuvem
+Trade	Troca
+Settings	Configurações
+Theme Editor	Editor De Tema
+My Themes	Meus Temas
+Theme Library	Biblioteca De Temas
+Launcher	Launcher
+About	Sobre
+Hidden	Escondido
+Not Playable	Não Jogável
+Ready	Pronto
+No ROMs found yet. Put your ROMs in the roms folder beside Fulldex.	Nenhuma ROM encontrada ainda. Ponha suas ROMs na pasta roms ao lado do PokeHub.
+Size	Tamanho
+Found	Encontrado
+None Yet	Nenhum Ainda
+Game Code	Código Do Jogo
+Save File	Arquivo De Save
+File	Arquivo
+Folder	Pasta
+Show In List Again	Mostrar Na Lista De Novo
+Hide From List	Esconder Da Lista
+Open Folder	Abrir Pasta
+Not Linked	Sem Conexão
+Same Wi-Fi	Mesmo Wi-Fi
+Room {}	Sala {}
+Waiting	Esperando
+Looking For Rooms	Procurando Salas
+Linked With {}	Conectado Com {}
+Code {}	Código {}
+Waiting Online	Esperando Online
+Game	Jogo
+Link	Conexão
+Egg	Ovo
+Lv {}	Nv {}
+Sending	Enviando
+Offered	Oferecido
+Nothing yet	Nada ainda
+Trade with a friend, or send Pokémon to another of your own devices, on the same Wi-Fi.	Troque com um amigo, ou envie Pokémon para outro aparelho seu, no mesmo Wi-Fi.
+Same Wi-Fi: one device chooses Open A Room, the other Join A Room. Online: one makes a code, the other enters it. Then each offers a Pokémon, or sends one as a gift.	Mesmo Wi-Fi: um aparelho escolhe Abrir Uma Sala, o outro Entrar Numa Sala. Online: um cria um código, o outro digita. Depois cada um oferece um Pokémon, ou envia um de presente.
+Your code:	Seu código:
+The other player chooses Hub, Trade, Enter An Online Code, and types it. Share it on Discord or in a message. It works for a few minutes.	O outro jogador escolhe Troca, Digitar Um Código Online, e digita. Mande pelo Discord ou por mensagem. Ele vale por alguns minutos.
+This device: {}	Este aparelho: {}
+Looking for rooms on this network. Open one on the other device.	Procurando salas nesta rede. Abra uma no outro aparelho.
+Rooms on this network are listed below: choose one to join.	As salas desta rede aparecem abaixo: escolha uma para entrar.
+Waiting for {}	Esperando {}
+Their game can't take it: {}	O jogo dele não aceita: {}
+Your game can't take it: {}	O seu jogo não aceita: {}
+You Send	Você Envia
+You Offer	Você Oferece
+You said yes. {}	Você disse sim. {}
+Leave the link to change the game.	Saia da conexão para mudar o jogo.
+The game to trade from and into.	O jogo de onde e para onde trocar.
+Next Box and Previous Box go through its boxes; Party shows the Pokémon with you.	Próxima Caixa e Caixa Anterior passam pelas caixas; Equipe mostra os Pokémon com você.
+Link with the other device first: the Link row above.	Conecte-se com o outro aparelho primeiro: a linha Conexão acima.
+Offer it for a trade (one each way, both say yes), or send it as a gift.	Ofereça para troca (um de cada lado, os dois dizem sim), ou envie de presente.
+No Picture	Sem Imagem
+Page {} Of {}	Página {} De {}
+No Themes Yet	Nenhum Tema Ainda
+Save This Look on My Themes makes one.	Salvar Este Visual em Meus Temas cria um.
+Press A to apply it or delete it.	Aperte A para aplicar ou apagar.
+Choose it to apply it, show its file, or delete it.	Escolha para aplicar, mostrar o arquivo ou apagar.
+Colours, pictures, blur and the rest of the launcher's look	Cores, imagens, desfoque e o resto do visual do launcher
+Save this look, switch between your looks, share them as files	Salve este visual, troque entre seus visuais, compartilhe como arquivos
+Theme Gallery	Galeria De Temas
+Themes other players have shared, ready to try	Temas que outros jogadores compartilharam, prontos para testar
+Soon	Em Breve
+Change the launcher's look: the accent, the panels, the sidebar and the top bar, the buttons, the background, its blur and dim, and the glass's grain. Each can be a colour or a picture.	Mude o visual do launcher: o destaque, os painéis, a barra lateral e a de cima, os botões, o fundo, seu desfoque e escurecimento, e a textura do vidro. Cada um pode ser uma cor ou uma imagem.
+Keep the look you have now as a theme, with its pictures, and switch between your themes. Each is one .zip file you can send to a friend.	Guarde o visual de agora como um tema, com as imagens, e troque entre seus temas. Cada um é um arquivo .zip que você pode mandar para um amigo.
+Save This Look	Salvar Este Visual
+Keep the look you have now as a theme	Guardar o visual de agora como um tema
+Import A Theme	Importar Um Tema
+From the themes folder on the SD card	Da pasta de temas no cartão SD
+A .zip theme someone sent you	Um tema .zip que alguém te mandou
+All your saved themes, as pictures	Todos os seus temas salvos, como imagens
+Keeps your accent, panels, bars, buttons, background, blur, dim and grain, with their pictures (up to 4K), as one .zip in the themes folder, with a picture of your Home screen wearing it.	Guarda seu destaque, painéis, barras, botões, fundo, desfoque, escurecimento e textura, com as imagens (até 4K), como um .zip na pasta de temas, com uma imagem da sua tela inicial com ele.
+You name it next. A theme can be up to 20 MB.	Você dá o nome depois. Um tema pode ter até 20 MB.
+Put .zip themes in /switch/pokemon-ds-wide/themes/ on the SD card and they show in this list.	Ponha temas .zip em /switch/pokemon-ds-wide/themes/ no cartão SD e eles aparecem nesta lista.
+Choose a .zip theme someone sent you. It is copied into your themes folder and shows in this list.	Escolha um tema .zip que alguém te mandou. Ele é copiado para a sua pasta de temas e aparece nesta lista.
+All your saved themes as pictures of Home wearing them, a page at a time. Choose one to apply it.	Todos os seus temas salvos como imagens da tela inicial com eles, uma página por vez. Escolha um para aplicar.
+No themes yet: Save This Look makes one.	Nenhum tema ainda: Salvar Este Visual cria um.
+Accent	Destaque
+Panels	Painéis
+Sidebar	Barra Lateral
+Top Bar	Barra De Cima
+Buttons	Botões
+Background	Fundo
+Grain	Textura
+Cloud Badges	Ícones Da Nuvem
+The frame round what is chosen, and its glow	A moldura do que está escolhido, e o brilho dela
+The glass panels: a colour or a picture, see-through to solid	Os painéis de vidro: uma cor ou uma imagem, de transparente a sólido
+The bar down the left: a colour or a picture	A barra da esquerda: uma cor ou uma imagem
+The bar along the top: a colour or a picture	A barra de cima: uma cor ou uma imagem
+Play, Continue, the chosen tab and the button marks at the bottom	Jogar, Continuar, a aba escolhida e as marcas de botão embaixo
+Game art, your own picture or a colour; its blur and dim	Arte do jogo, sua imagem ou uma cor; seu desfoque e escurecimento
+The fine speckle in the glass panels	O granulado fino nos painéis de vidro
+A cloud on the cards of games whose saves sync	Uma nuvem nos cartões dos jogos cujos saves sincronizam
+Picture	Imagem
+The fine speckle in the frosted glass panels: 0% makes them smooth, 25% is as they were, 100% is four times as strong.	O granulado fino nos painéis de vidro fosco: 0% deixa liso, 25% é como era, 100% é quatro vezes mais forte.
+Show	Mostrar
+Preset	Predefinido
+Hue	Matiz
+Saturation	Saturação
+Brightness	Brilho
+Opacity {}	Opacidade {}
+Blur {}	Desfoque {}
+Dim {}	Escurecer {}
+Grain {}	Textura {}
+None	Nenhum
+Up and down choose a row, left and right change it.	Cima e baixo escolhem uma linha, esquerda e direita mudam.
+Arrows choose and change, or click.	As setas escolhem e mudam, ou clique.
+The colour of the frame round what is chosen, and its glow, on every page of the launcher.	A cor da moldura do que está escolhido, e o brilho dela, em todas as páginas do launcher.
+A colour or a picture over every glass panel. Opacity sets how much: low lets the background through, 100% makes them solid.	Uma cor ou imagem sobre cada painel de vidro. A opacidade define quanto: baixa deixa o fundo passar, 100% deixa sólido.
+A colour or a picture for the sidebar, see-through to solid.	Uma cor ou imagem para a barra lateral, de transparente a sólido.
+A colour or a picture for the bar along the top, see-through to solid.	Uma cor ou imagem para a barra de cima, de transparente a sólido.
+Used for Play and Continue, the chosen tab, and the button marks along the bottom (Choose, Back and the rest). Their words and marks turn dark or light to stay readable.	Usado em Jogar e Continuar, na aba escolhida e nas marcas de botão embaixo (Escolher, Voltar e o resto). As palavras e marcas ficam escuras ou claras para continuar legíveis.
+Game Art: the chosen game's picture. Your Picture: one of your own. Colour: one colour. Plain: a calm blue. Its page also sets how blurred and how dim it is.	Arte do jogo: a imagem do jogo escolhido. Sua imagem: uma sua. Cor: uma cor. Simples: um azul calmo. A página dele também define quanto desfoca e escurece.
+The fine speckle in the frosted glass panels: 0% makes them smooth, 25% is as they were.	O granulado fino nos painéis de vidro fosco: 0% deixa liso, 25% é como era.
+With Cloud Saves on, a cloud shows in the corner of each game whose save syncs. Amber: it changed on two devices and needs a choice.	Com os saves na nuvem ligados, aparece uma nuvem no canto de cada jogo cujo save sincroniza. Âmbar: mudou em dois aparelhos e precisa de uma escolha.
+Press A to change it.	Aperte A para mudar.
+Press A to open its page.	Aperte A para abrir a página.
+Choose it to change it.	Escolha para mudar.
+Choose it to open its page.	Escolha para abrir a página.
+Keep your saves the same on every device	Seus saves iguais em todo aparelho
+Signing In	Entrando
+Syncing	Sincronizando
+With a friend online or on the same Wi-Fi, or to another of your devices	Com um amigo online ou no mesmo Wi-Fi, ou para outro aparelho seu
+Linked	Conectado
+Room Open	Sala Aberta
+Looking	Procurando
+Fulldex Discord	Discord Do Fulldex
+Find people to trade with, get help and hear what's coming	Ache pessoas para trocar, tenha ajuda e saiba o que vem por aí
+Between your own games, as a trade would	Entre seus próprios jogos, como uma troca faria
+Saved To	Salvo Em
+This Device	Este Aparelho
+Saves sync when a game starts and when it closes, and the DS games after each save too. Open it to sync now, see each game, or choose which save to keep.	Os saves sincronizam quando um jogo começa e quando fecha, e os jogos de DS também depois de cada save. Abra para sincronizar agora, ver cada jogo, ou escolher qual save manter.
+Keep your saves the same on every device: play on your PC, then carry on on the Switch.	Seus saves iguais em todo aparelho: jogue no PC e continue no Switch.
+Open it to sign in with Google. Your saves go to your own Drive, in a folder called Fulldex Cloud Saves.	Abra para entrar com o Google. Seus saves vão para o seu próprio Drive, numa pasta chamada Fulldex Cloud Saves.
+Trade with a friend, online or on the same Wi-Fi, or send Pokémon to another of your own devices: a PC and a Switch, say.	Troque com um amigo, online ou no mesmo Wi-Fi, ou envie Pokémon para outro aparelho seu: um PC e um Switch, por exemplo.
+Trades follow the real games' rules: one each way, both say yes, and those that evolve by trading evolve, Karrablast and Shelmet too. Each save is backed up before it is written.	As trocas seguem as regras dos jogos de verdade: um de cada lado, os dois dizem sim, e os que evoluem por troca evoluem, Karrablast e Shelmet também. Cada save é copiado antes de ser gravado.
+Join the Fulldex Discord: find someone to trade with, get help with a game, report a bug and see what's coming next.	Entre no Discord do Fulldex: ache alguém para trocar, tenha ajuda com um jogo, relate um erro e veja o que vem por aí.
+Scan the code with your phone's camera.	Leia o código com a câmera do celular.
+Choose it to open Discord in your browser, or scan the code with your phone.	Escolha para abrir o Discord no navegador, ou leia o código com o celular.
+Move a Pokémon from one of your games to another, as a trade between them would.	Mova um Pokémon de um jogo seu para outro, como uma troca entre eles faria.
+They can go to a newer game, never an older one. Fulldex says first what one would lose on the way, and backs up both saves before it writes them.	Eles podem ir para um jogo mais novo, nunca um mais antigo. O PokeHub diz antes o que se perderia no caminho, e copia os dois saves antes de gravar.
+Games With A Save	Jogos Com Save
+That game's save could not be read.	Não deu para ler o save desse jogo.
+Choose two different games.	Escolha dois jogos diferentes.
+From	De
+To	Para
+Swap In	Trocar Em
+Put In	Pôr Em
+Swapping {}	Trocando {}
+Can Swap, Evolves	Pode Trocar, Evolui
+Can Swap	Pode Trocar
+Can Move, Evolves	Pode Mover, Evolui
+Can Move	Pode Mover
+Can't Swap	Não Pode Trocar
+Can't Move	Não Pode Mover
+Take From	Tirar De
+Send To	Enviar Para
+This save could not be read. {}	Não deu para ler este save. {}
+Trainer	Treinador
+Generation	Geração
+Pokémon can be looked at in this game but not moved in or out yet.	Os Pokémon deste jogo podem ser vistos, mas ainda não movidos para dentro ou para fora.
+Choose the game to take Pokémon from.	Escolha o jogo de onde tirar os Pokémon.
+Choose the game to send them to. They can go to a newer game, never an older one, as in the real games.	Escolha o jogo para onde enviá-los. Eles podem ir para um jogo mais novo, nunca um mais antigo, como nos jogos de verdade.
+Choose the box in {}	Escolha a caixa em {}
+Where it goes in {}	Onde ele fica em {}
+Level	Nível
+Swap For {}	Trocar Por {}
+To {}	Para {}
+They can swap, and keep everything.	Eles podem trocar e manter tudo.
+It can move, and keeps everything.	Ele pode mover e mantém tudo.
+They can swap, but on the way:	Eles podem trocar, mas no caminho:
+It can move, but on the way:	Ele pode mover, mas no caminho:
+It can't go to that game.	Ele não pode ir para esse jogo.
+Moving Pokémon is not in this build of Fulldex.	Mover Pokémon não existe nesta versão do PokeHub.
+Chosen	Escolhido
+Account	Conta
+On your phone or computer, go to	No celular ou no computador, vá em
+Fulldex is waiting for you to say yes. It only sees the saves it puts in your Drive.	O PokeHub está esperando você dizer sim. Ele só vê os saves que põe no seu Drive.
+Saves go to your own Google Drive, in a folder called Fulldex Cloud Saves. Fulldex sees only the files it made there.	Os saves vão para o seu próprio Google Drive, numa pasta chamada Fulldex Cloud Saves. O PokeHub só vê os arquivos que criou lá.
+If a save changed on two devices, Fulldex asks which one to keep, and puts the other in the backups.	Se um save mudou em dois aparelhos, o PokeHub pergunta qual manter e põe o outro nos backups.
+Synced Folder	Pasta Sincronizada
+Choose a game in the list to sync it on its own, or to choose which save to keep.	Escolha um jogo da lista para sincronizá-lo sozinho, ou para escolher qual save manter.
+Cloud saves are off. Sign in on the Cloud Saves row first.	Os saves na nuvem estão desligados. Entre na linha Saves Na Nuvem primeiro.
+Not synced yet. Choose Sync Now to send it up, or bring down a newer one.	Ainda não sincronizado. Escolha Sincronizar Agora para enviar, ou baixar um mais novo.
+This save is the same here and in the cloud.	Este save é igual aqui e na nuvem.
+This save was sent up to the cloud.	Este save foi enviado para a nuvem.
+There is no save for this game yet, here or in the cloud.	Ainda não há save deste jogo, aqui nem na nuvem.
+Could not reach the cloud. The save here is kept, and syncs next time.	Não deu para alcançar a nuvem. O save daqui fica, e sincroniza na próxima vez.
+Unknown	Desconhecido
+Not Checked Yet	Ainda Não Verificado
+This Version: {}	Esta Versão: {}
+Checking...	Verificando...
+Fulldex Is Up To Date	O PokeHub Está Atualizado
+Version {}	Versão {}
+A New Version Is Ready	Uma Versão Nova Está Pronta
+You Have {}	Você Tem {}
+Downloading...	Baixando...
+New: {}	Nova: {}
+Installed	Instalada
+The new version starts when you close the list	A versão nova começa quando você fechar a lista
+Could Not Check	Não Deu Para Verificar
+Check For Updates	Procurar Atualizações
+Fulldex looks for a new version on GitHub	O PokeHub procura uma versão nova
+What's New	Novidades
+The changes in each version are listed on its release page on GitHub.	As mudanças de cada versão estão na página dela.
+Your ROMs, saves and settings stay when Fulldex updates.	Suas ROMs, saves e configurações ficam quando o PokeHub atualiza.
+The version before is kept, in case you need to go back.	A versão anterior é guardada, caso você precise voltar.
+On this device, Open Download takes you to the release page to get it.	Neste aparelho, Abrir Download leva à página da versão para baixar.
+The rest, and the downloads, are on the release page.	O resto, e os downloads, estão na página da versão.
+Working...	Trabalhando...
+Install Now	Instalar Agora
+Open Download	Abrir Download
+Check Now	Verificar Agora
+Release Page	Página Da Versão
+Fulldex checks once each time it starts. Your ROMs, saves and settings stay when it updates, and the version before is kept.	O PokeHub verifica uma vez a cada início. Suas ROMs, saves e configurações ficam quando ele atualiza, e a versão anterior é guardada.
+Fulldex checks once each time it starts.	O PokeHub verifica uma vez a cada início.
+Support	Apoiar
+Credits	Créditos
+Report A Bug	Relatar Um Erro
+Licences	Licenças
+Website	Site
+Fulldex doesn't include any games. Play with ROMs from games you own.	O PokeHub não inclui nenhum jogo. Jogue com ROMs de jogos que você tem.
+Open it on your phone or PC	Abra no celular ou no PC
+Choose it to open it in your browser	Escolha para abrir no navegador
+Hi, I'm James, AKA Mamesj, the mind behind Fulldex. I'm just a dude who wanted to play some Pokémon and got a bit carried away.	Oi, eu sou o James, o Mamesj, a cabeça por trás do Fulldex, de onde o PokeHub veio. Sou só um cara que queria jogar Pokémon e se empolgou um pouco.
+Fulldex is free and always will be. If it's given you some good hours, a coffee or a beer is always appreciated, never expected.	O Fulldex é grátis e sempre vai ser. Se ele te deu boas horas, um café ou uma cerveja é sempre bem-vindo, nunca esperado.
+Scan a code with your phone's camera.	Leia um código com a câmera do celular.
+Choose Support to open Buy Me A Coffee, or scan a code with your phone.	Escolha Apoiar para abrir o Buy Me A Coffee, ou leia um código com o celular.
+Credits And Acknowledgements	Créditos E Agradecimentos
+The single-screen and widescreen view Fulldex grew from	A visão de tela única e em tela larga de onde o Fulldex nasceu
+The DS emulation	A emulação do DS
+Companion readers and text decoders	Leitores do companheiro e decodificadores de texto
+Function names from their decompilations	Nomes de funções das decompilações
+The built-in DS cheats, via libretro-database	As trapaças de DS embutidas, via libretro-database
+How the HOME Menu icons are made	Como os ícones do menu HOME são feitos
+Cheats menu ideas (PR #16)	Ideias do menu de trapaças (PR #16)
+Everyone who reported bugs and helped test	Todos que relataram erros e ajudaram a testar
+Thank you	Obrigado
+Found something wrong? Open an issue on the GitHub page: say which game, which device, and what happened just before.	Achou algo errado? Abra uma issue na página do GitHub: diga qual jogo, qual aparelho e o que aconteceu logo antes.
+A screenshot helps, and so does game.log from the folder Fulldex runs from.	Uma captura de tela ajuda, e o game.log da pasta de onde o PokeHub roda também.
+Not affiliated with or endorsed by Nintendo, Game Freak, The Pokémon Company or the melonDS project. Pokémon is a trademark of its owners. The full licence texts are on the GitHub page.	Sem ligação nem apoio da Nintendo, Game Freak, The Pokémon Company ou do projeto melonDS. Pokémon é marca registrada dos seus donos. Os textos completos das licenças estão na página do GitHub.
+Downloads, the latest changes and the full instructions are on the GitHub page.	Downloads, as últimas mudanças e as instruções completas estão na página do GitHub.
+Tips are welcome but never expected: see Support, at the top of this page.	Gorjetas são bem-vindas, mas nunca esperadas: veja Apoiar, no topo desta página.
+Coming Soon	Em Breve
+Continue	Continuar
+Play	Jogar
+Continue Playing	Continuar Jogando
+Ready To Play	Pronto Para Jogar
+Cloud Save: Changed On Both	Save Na Nuvem: Mudou Nos Dois
+Cloud Save	Save Na Nuvem
+Save Found	Save Encontrado
+New Game	Novo Jogo
+Your Games	Seus Jogos
+Results For "{}"	Resultados Para "{}"
+No Games Match "{}"	Nenhum Jogo Com "{}"
+Add Games To This Tab From A Game's Menu (A On A Game)	Adicione Jogos A Esta Aba Pelo Menu De Um Jogo (A Num Jogo)
+Add Games To Home From A Game's Menu (A On A Game)	Adicione Jogos Ao Início Pelo Menu De Um Jogo (A Num Jogo)
+No Romhacks Yet	Nenhum Romhack Ainda
+Sort: {}	Ordem: {}
+Remove {}	Remover {}
+Remove From List hides it here and keeps the ROM in your folder. Your saves are never deleted.	Remover Da Lista esconde aqui e mantém a ROM na sua pasta. Seus saves nunca são apagados.
+Remove From List	Remover Da Lista
+Delete ROM File	Apagar Arquivo Da ROM
+Delete The ROM File?	Apagar O Arquivo Da ROM?
+This deletes {}	Isto apaga {}
+Change Picture	Mudar Imagem
+Pictures stay on this device. Only use pictures you have permission to use.	As imagens ficam neste aparelho. Só use imagens que você tem permissão de usar.
+Import A Picture	Importar Uma Imagem
+Find Artwork Online	Buscar Arte Online
+Plain Card	Cartão Simples
+Restore Original	Restaurar Original
+Rename {}	Renomear {}
+Type a new name. Leave it empty to go back to the game's own name.	Digite um nome novo. Deixe vazio para voltar ao nome do próprio jogo.
+Home	Início
+All	Todos
+Romhacks	Romhacks
+Plain	Simples
+Colour	Cor
+Choose	Escolher
+Back	Voltar
+Quit	Sair
+Tabs	Abas
+Play	Jogar
+Sort	Ordenar
+Favourite	Favorito
+Rename	Renomear
+Manage Saves	Gerenciar Saves
+Add To Home	Adicionar Ao Início
+Remove Game	Remover Jogo
+Choose a theme	Escolha um tema
+# The notes along the bottom.
+COULD NOT SAVE THE TABS	NÃO DEU PARA SALVAR AS ABAS
+TAKEN OUT OF {}	TIRADO DE {}
+ADDED TO {}	ADICIONADO A {}
+TAB SHOWN AGAIN	ABA MOSTRADA DE NOVO
+AS FAR LEFT AS IT GOES	JÁ ESTÁ O MAIS À ESQUERDA POSSÍVEL
+AS FAR RIGHT AS IT GOES	JÁ ESTÁ O MAIS À DIREITA POSSÍVEL
+ONE TAB MUST STAY SHOWN	UMA ABA PRECISA FICAR À MOSTRA
+TAB HIDDEN. + SHOWS IT AGAIN	ABA ESCONDIDA. + MOSTRA DE NOVO
+TAB DELETED. ITS GAMES ARE KEPT	ABA APAGADA. OS JOGOS DELA FICAM
+TAB MADE	ABA CRIADA
+SEARCH CLEARED	BUSCA LIMPA
+TAB RENAMED	ABA RENOMEADA
+THE THEME GALLERY IS COMING SOON	A GALERIA DE TEMAS ESTÁ CHEGANDO
+TYPE A NAME FOR THE THEME (LETTERS AND NUMBERS)	DIGITE UM NOME PARA O TEMA (LETRAS E NÚMEROS)
+SAVING...	SALVANDO...
+OVER 20 MB: USE SMALLER PICTURES	MAIS DE 20 MB: USE IMAGENS MENORES
+COULD NOT SAVE THE THEME	NÃO DEU PARA SALVAR O TEMA
+SAVED: {}	SALVO: {}
+COULD NOT READ THAT THEME	NÃO DEU PARA LER ESSE TEMA
+THAT IS NOT A FULLDEX THEME	ESSE NÃO É UM TEMA DO FULLDEX
+THEME ON: {}	TEMA LIGADO: {}
+COULD NOT COPY THE THEME	NÃO DEU PARA COPIAR O TEMA
+IMPORTED: {}	IMPORTADO: {}
+COULD NOT DELETE IT	NÃO DEU PARA APAGAR
+DELETED: {}	APAGADO: {}
+ADDED TO HOME	ADICIONADO AO INÍCIO
+REMOVED FROM HOME	TIRADO DO INÍCIO
+COULD NOT SAVE HOME	NÃO DEU PARA SALVAR O INÍCIO
+COULD NOT SAVE THE LIST	NÃO DEU PARA SALVAR A LISTA
+BACK IN THE LIST	DE VOLTA NA LISTA
+HIDDEN FROM THE LIST	ESCONDIDO DA LISTA
+COULD NOT USE THAT PICTURE	NÃO DEU PARA USAR ESSA IMAGEM
+{}: COMING SOON	{}: EM BREVE
+THIS GAME'S SAVES CANNOT BE MANAGED HERE YET	OS SAVES DESTE JOGO AINDA NÃO PODEM SER GERENCIADOS AQUI
+THIS DOWNLOAD DOES NOT HAVE THIS GAME	ESTE DOWNLOAD NÃO TEM ESTE JOGO
+THIS GAME IS NOT ONE THAT THIS PLAYS	ESTE JOGO NÃO É UM DOS QUE ESTE APP RODA
+REMOVED FROM THE LIST. THE ROM IS STILL IN YOUR FOLDER	TIRADO DA LISTA. A ROM CONTINUA NA SUA PASTA
+COULD NOT DELETE THE ROM FILE	NÃO DEU PARA APAGAR O ARQUIVO DA ROM
+ROM FILE DELETED. ITS SAVES ARE KEPT	ARQUIVO DA ROM APAGADO. OS SAVES FICAM
+SAVES FOLDER OPENED	PASTA DE SAVES ABERTA
+SAVE RESTORED. THE ONE BEFORE IS KEPT AS A .BEFORE-RESTORE COPY	SAVE RESTAURADO. O ANTERIOR FICA COMO CÓPIA .BEFORE-RESTORE
+THAT PICTURE COULD NOT BE READ: PNG OR JPG ONLY	NÃO DEU PARA LER ESSA IMAGEM: SÓ PNG OU JPG
+PICTURE CHANGED	IMAGEM TROCADA
+COULD NOT KEEP THE PICTURE	NÃO DEU PARA GUARDAR A IMAGEM
+OPENED IN YOUR BROWSER: SAVE A PICTURE, THEN IMPORT IT HERE	ABERTO NO NAVEGADOR: SALVE UMA IMAGEM E DEPOIS IMPORTE AQUI
+COULD NOT SAVE THE PICTURE	NÃO DEU PARA SALVAR A IMAGEM
+PLAIN CARD	CARTÃO SIMPLES
+ORIGINAL PICTURE BACK	IMAGEM ORIGINAL DE VOLTA
+COULD NOT SAVE THE NAME	NÃO DEU PARA SALVAR O NOME
+NAME RESET	NOME REDEFINIDO
+RENAMED	RENOMEADO
+OPEN THE DOWNLOAD IN YOUR BROWSER	ABRA O DOWNLOAD NO NAVEGADOR
+REMOVED FROM THE LIST. THE ROM IS STILL ON THE SD CARD	TIRADO DA LISTA. A ROM CONTINUA NO CARTÃO SD
+FIND ARTWORK ON YOUR PHONE OR PC	BUSQUE ARTE NO CELULAR OU NO PC
+SCAN THE CODE WITH YOUR PHONE	LEIA O CÓDIGO COM O CELULAR
+OPEN IT ON YOUR PHONE OR PC	ABRA NO CELULAR OU NO PC
+COULD NOT SAVE THE SETTINGS	NÃO DEU PARA SALVAR AS CONFIGURAÇÕES
+# Counts, and the colours' names.
+{#} Games	{#} Jogos
+{#} Game	{#} Jogo
+{#} Saves	{#} Saves
+{#} Save	{#} Save
+{#} Themes	{#} Temas
+{#} Theme	{#} Tema
+{#} of {#} up to date	{#} de {#} atualizados
+{#} of {#}	{#} de {#}
+Clear	Transparente
+Dark	Escuro
+White	Branco
+Red	Vermelho
+Blue	Azul
+Green	Verde
+Purple	Roxo
+Gold	Dourado
+Pink	Rosa
+Teal	Verde-Água
+Your Picture	Sua Imagem
+Default Look	Visual Padrão
+Frosted glass over the game's art, as Fulldex starts	Vidro fosco sobre a arte do jogo, como o app começa
+Go back to frosted glass over the game's art, as Fulldex starts? Your themes stay in the library: save this look first to keep it.	Voltar ao vidro fosco sobre a arte do jogo, como o app começa? Seus temas ficam na biblioteca: salve este visual antes para guardá-lo.
+Use The Default Look	Usar O Visual Padrão
+Puts back the look Fulldex starts with: frosted glass over the chosen game's art, white highlights, the usual blur and dim.	Põe de volta o visual com que o app começa: vidro fosco sobre a arte do jogo escolhido, destaques brancos, o desfoque e escurecimento de sempre.
+Your saved themes and pictures stay. Save This Look first if you want to come back to the look you have now.	Seus temas e imagens salvos ficam. Salve Este Visual antes se quiser voltar ao visual de agora.
+THE DEFAULT LOOK IS BACK	O VISUAL PADRÃO VOLTOU
+Font	Fonte
+Text Size	Tamanho Do Texto
+The letters everywhere in the launcher	As letras de todo o launcher
+How big the writing is	O tamanho da escrita
+How big the writing is in the launcher, from 85% to 120%. Each font is already sized to fill a line as the others do.	O tamanho da escrita no launcher, de 85% a 120%. Cada fonte já vem ajustada para encher uma linha como as outras.
+The letters everywhere in the launcher: 30 to choose from, clean, rounded, bold, retro, fun, handwritten and easy to read. The pause menu keeps its own.	As letras de todo o launcher: 30 para escolher, limpas, arredondadas, fortes, retrô, divertidas, à mão e fáceis de ler. O menu de pausa mantém a sua.
+How big the writing is in the launcher, from 85% to 120%.	O tamanho da escrita no launcher, de 85% a 120%.
+Size {}	Tamanho {}
+In Use	Em Uso
+Clean	Limpa
+Rounded	Arredondada
+Bold	Forte
+Retro	Retrô
+Fun	Divertida
+Handwritten	À Mão
+Easy To Read	Fácil De Ler
+Serif	Serifada
+Press A to use a font. B goes back to the Theme Editor.	Aperte A para usar uma fonte. B volta ao Editor De Tema.
+Choose a font to use it. Back goes to the Theme Editor.	Escolha uma fonte para usar. Voltar vai ao Editor De Tema.
+FONT: {}	FONTE: {}
+Enter A Theme Code	Digitar Um Código De Tema
+Share A Theme	Compartilhar Um Tema
+Share	Compartilhar
+Try It	Testar
+Keep	Manter
+Go Back	Voltar
+Keep This Theme?	Manter Este Tema?
+Choose a theme to try it on. You keep it or go back.	Escolha um tema para testar. Você mantém ou volta.
+LOADING...	CARREGANDO...
+NO GALLERY ADDRESS IS SET UP IN THIS BUILD	NENHUM ENDEREÇO DE GALERIA CONFIGURADO NESTA VERSÃO
+COULD NOT REACH THE GALLERY	NÃO DEU PARA ALCANÇAR A GALERIA
+NOTHING SHARED YET. BE THE FIRST: SHARE A THEME	NADA COMPARTILHADO AINDA. SEJA O PRIMEIRO: COMPARTILHE UM TEMA
+A CODE IS 8 LETTERS AND NUMBERS, LIKE K7QM-X2RD	UM CÓDIGO TEM 8 LETRAS E NÚMEROS, COMO K7QM-X2RD
+DOWNLOADING...	BAIXANDO...
+THAT CODE DOES NOT WORK	ESSE CÓDIGO NÃO FUNCIONA
+THAT THEME IS WAITING TO BE APPROVED. TRY AGAIN LATER.	ESSE TEMA ESTÁ ESPERANDO APROVAÇÃO. TENTE DE NOVO MAIS TARDE.
+THAT THEME WAS NOT APPROVED	ESSE TEMA NÃO FOI APROVADO
+THAT THEME WAS TAKEN DOWN	ESSE TEMA FOI RETIRADO
+THE GALLERY GAVE AN ANSWER IT SHOULD NOT	A GALERIA DEU UMA RESPOSTA QUE NÃO DEVIA
+COULD NOT SAVE IT	NÃO DEU PARA SALVAR
+TRYING: {}	TESTANDO: {}
+BACK TO YOUR OWN LOOK	DE VOLTA AO SEU VISUAL
+KEPT IN MY THEMES: {}	GUARDADO EM MEUS TEMAS: {}
+SHARING...	COMPARTILHANDO...
+SHARED. YOUR CODE: {}. IT SHOWS FOR EVERYONE ONCE APPROVED.	COMPARTILHADO. SEU CÓDIGO: {}. ELE APARECE PARA TODOS QUANDO FOR APROVADO.
+TOO MANY SHARES FOR NOW. TRY AGAIN LATER.	COMPARTILHAMENTOS DEMAIS POR ENQUANTO. TENTE MAIS TARDE.
+NOT ACCEPTED: {}	NÃO ACEITO: {}
+THE GALLERY DID NOT TAKE IT ({})	A GALERIA NÃO ACEITOU ({})
+SAVE A THEME FIRST: LAUNCHER, MY THEMES, SAVE THIS LOOK	SALVE UM TEMA ANTES: LAUNCHER, MEUS TEMAS, SALVAR ESTE VISUAL
+Pick one of your themes. It is looked at before it shows for others. Share only pictures that are yours.	Escolha um dos seus temas. Ele é revisado antes de aparecer para os outros. Só compartilhe imagens que são suas.
+By {}. Try It puts it on your launcher; then you keep it or go back.	Por {}. Testar põe no seu launcher; depois você mantém ou volta.
+{} is on. Keep it in My Themes, or go back to your own look.	{} está ligado. Guarde em Meus Temas, ou volte ao seu visual.
+THEME CODE	CÓDIGO DO TEMA
+A Theme Code	Um Código De Tema
+Get It	Pegar
+Online	Online
+Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.	Veja temas que outros jogadores compartilharam, teste um antes de manter, digite o código de tema de um amigo, ou compartilhe um seu.
+The launcher's fonts	As fontes do launcher
+Each font's copyright notice and the full licence text are in FONT-LICENSES.txt, in the fonts folder of the download and on the GitHub page.	O aviso de direitos autorais de cada fonte e o texto completo da licença estão em FONT-LICENSES.txt, na pasta fonts do download e na página do GitHub.
+Display	Tela
+Sound	Som
+Graphics	Gráficos
+Controls	Controles
+Optional Features	Recursos Opcionais
+Release Notes	Notas Da Versão
+Game Save	Save Do Jogo
+Restore A Backup	Restaurar Um Backup
+Export Save	Exportar Save
+Import Save	Importar Save
+Play From Quick Save	Jogar Do Save Rápido
+Undo Delete	Desfazer Exclusão
+Open Saves Folder	Abrir Pasta De Saves
+Delete Save	Apagar Save
+Delete Slot	Apagar Espaço
+Save States	Estados Salvos
+They stay on this device	Eles ficam neste aparelho
+Healthy	Saudável
+Problem	Problema
+Synced	Sincronizado
+Different	Diferente
+Not Synced	Não Sincronizado
+Not Reached	Não Alcançado
+Cloud Off	Nuvem Desligada
+A copy in the exports folder	Uma cópia na pasta exports
+A file you choose, or from the import folder	Um arquivo que você escolher, ou da pasta import
+From the import folder beside your saves	Da pasta import ao lado dos seus saves
+The slot deleted last comes back	O último espaço apagado volta
+None yet: the game makes it	Nenhum ainda: o jogo cria
+None yet: one is made each time the game starts	Nenhum ainda: um é criado cada vez que o jogo começa
+Empty	Vazio
+A: play from it or delete it	A: jogar dele ou apagar
+Save to it from the game's menu	Salve nele pelo menu do jogo
+Choose a slot to play from it, or delete it. Save to the slots from the game's menu.	Escolha um espaço para jogar dele, ou apagar. Salve nos espaços pelo menu do jogo.
+Fulldex backs up this save every time the game starts and before anything here changes it. Your ROM is never changed.	O PokeHub copia este save toda vez que o jogo começa e antes de qualquer mudança aqui. Sua ROM nunca é alterada.
+The GBA games keep one save state each, made and loaded from the game's menu. Save state slots are for the DS games.	Os jogos de GBA têm um estado salvo cada, criado e carregado pelo menu do jogo. Os espaços de estado são para os jogos de DS.
+Keep This One	Manter Este
+Choose A File...	Escolher Um Arquivo...
+Restore Backup	Restaurar Backup
+Play Anyway	Jogar Mesmo Assim
+This Save Has A Problem	Este Save Tem Um Problema
+Fulldex backs up this save every time the game starts, and before anything here changes it. Choose one to go back to it.	O PokeHub copia este save toda vez que o jogo começa, e antes de qualquer mudança aqui. Escolha um para voltar a ele.
+Asks first. A backup is kept	Pergunta antes. Fica um backup
+Slot {}	Espaço {}
+Play From Slot {}	Jogar Do Espaço {}
+Saved {}	Salvo {}
+SAVES FOLDER	PASTA DE SAVES
+BESIDE THE ROMS	AO LADO DAS ROMS
+# PokeHub's own pages: My PC, the Pokédex, the evolution, Import Saves, the settings it added.
+All Games	Todos Os Jogos
+Caught	Capturado
+Missing	Faltando
+Have Now	Tenho Agora
+Shiny	Shiny
+Bank	Banco
+Generation {}	Geração {}
+Seen {#}	Vistos {}
+of {#}	de {}
+You have {#} now	Você tem {} agora
+You have a shiny one	Você tem um shiny
+Seen, not caught yet	Visto, ainda não capturado
+Not seen in any of your games yet.	Ainda não visto em nenhum dos seus jogos.
+Where	Onde
+Nothing to show here.	Nada para mostrar aqui.
+None of these yet.	Nenhum destes ainda.
+Summary	Resumo
+Stats	Atributos
+Moves	Golpes
+Item	Item
+Nature	Natureza
+Ability	Habilidade
+Ball	Bola
+Format	Formato
+Gen {#}	Gen {}
+Trade Evolve: On	Evoluir Na Troca: Sim
+Trade Evolve: Off	Evoluir Na Troca: Não
+Undo All	Desfazer Tudo
+Drag or tap to move Pokémon between your games and the Bank.	Arraste ou toque para mover Pokémon entre seus jogos e o Banco.
+Drag a Pokémon to a free place to move it: within a box, to the other panel (another game, or another box of the same one), or into the Bank.	Arraste um Pokémon para um lugar livre para movê-lo: na mesma caixa, para o outro painel (outro jogo, ou outra caixa do mesmo) ou para o Banco.
+Or tap one to see it here, then tap a free place. Nothing is written until Save; Undo All puts everything back.	Ou toque num para vê-lo aqui e depois toque num lugar livre. Nada é gravado até Salvar; Desfazer Tudo põe tudo de volta.
+Pokémon go to games of their generation or newer, as in the real games. The Bank keeps any.	Os Pokémon vão para jogos da geração deles ou mais novos, como nos jogos de verdade. O Banco guarda qualquer um.
+That place is taken: drop it on a free one.	Esse lugar está ocupado: solte num livre.
+The other panel shows this party already.	O outro painel já mostra esta equipe.
+Not saved yet: Save, or Undo All (or back again to leave them).	Ainda não salvo: Salvar, ou Desfazer Tudo (ou voltar de novo para deixar assim).
+Everything put back as it was saved.	Tudo voltou como estava salvo.
+{} moved.	{} movido.
+{} moved to {}.	{} movido para {}.
+{#} change saved.	{} mudança salva.
+{#} changes saved.	{} mudanças salvas.
+{#} change to save	{} mudança para salvar
+{#} changes to save	{} mudanças para salvar
+What? {} is evolving!	O quê? {} está evoluindo!
+Congratulations!	Parabéns!
+{} evolved into {}!	{} evoluiu para {}!
+Tap to skip	Toque para pular
+Tap to close	Toque para fechar
+Choose a Pokémon first.	Escolha um Pokémon primeiro.
+Import Saves	Importar Saves
+IMPORT SAVES	IMPORTAR SAVES
+BRING IN SAVES FROM MY BOY AND MY OLDBOY.	TRAGA OS SAVES DO MY BOY E DO MY OLDBOY.
+ROMS	ROMS
+YOUR GAMES' FILES: RENAME, HIDE OR DELETE THEM.	OS ARQUIVOS DOS SEUS JOGOS: RENOMEIE, ESCONDA OU APAGUE.
+LAUNCHER	LAUNCHER
+THE LOOK OF THE LIST: LAYOUT, MUSIC PLAYER, CAMERA CUTOUT.	O VISUAL DA LISTA: LAYOUT, PLAYER DE MÚSICA, RECORTE DA CÂMERA.
+NOTHING HERE YET	NADA AQUI AINDA
+POKEHUB'S UPDATES WILL COME FROM ITS OWN PLACE, LATER.	AS ATUALIZAÇÕES DO POKEHUB VÃO VIR DE UM LUGAR PRÓPRIO, MAIS PARA FRENTE.
+Layout	Layout
+Music Player	Player De Música
+Camera Cutout	Recorte Da Câmera
+Import	Importar
+Import All	Importar Todos
+Search Again	Procurar De Novo
+Yes, Replace It	Sim, Substituir
+No, Keep Mine	Não, Manter O Meu
+)FDXLANG";
 inline const char* LauncherLangData(const char* code)
 {
     if (!strcmp(code, "de")) return (const char*)kLauncherLang_de;
@@ -3651,5 +4324,6 @@ inline const char* LauncherLangData(const char* code)
     if (!strcmp(code, "it")) return (const char*)kLauncherLang_it;
     if (!strcmp(code, "ja")) return (const char*)kLauncherLang_ja;
     if (!strcmp(code, "ko")) return (const char*)kLauncherLang_ko;
+    if (!strcmp(code, "pt")) return (const char*)kLauncherLang_pt;
     return nullptr;
 }

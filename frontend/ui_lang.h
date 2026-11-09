@@ -16,10 +16,10 @@
 
 namespace UiLang
 {
-inline int lang = 0; // English, Spanish, Italian, French, German, Japanese, Korean
+inline int lang = 0; // English, Spanish, Italian, French, German, Japanese, Korean, Portuguese (Brazil)
 inline int system = 0;
 inline std::string choice = "auto";
-inline const char* Codes[] = {"en","es","it","fr","de","ja","ko"};
+inline const char* Codes[] = {"en","es","it","fr","de","ja","ko","pt"};
 inline std::string Normalise(std::string code) {
     for(char& c:code) if(c>='A'&&c<='Z') c+=32;
     const auto end=code.find_first_of("_-"); if(end!=std::string::npos)code.resize(end);
@@ -27,11 +27,11 @@ inline std::string Normalise(std::string code) {
 }
 inline int Language(const std::string& code) {
     const auto normal=Normalise(code);
-    for(int i=0;i<7;++i)if(normal==Codes[i])return i;
+    for(int i=0;i<8;++i)if(normal==Codes[i])return i;
     return 0;
 }
 inline const std::vector<std::pair<std::string,std::string>>& Choices() {
-    static const std::vector<std::pair<std::string,std::string>> values={{"auto","AUTO"},{"en","ENGLISH"},{"es","ESPAÑOL"},{"it","ITALIANO"},{"fr","FRANÇAIS"},{"de","DEUTSCH"},{"ja","日本語"},{"ko","한국어"}};return values;
+    static const std::vector<std::pair<std::string,std::string>> values={{"auto","AUTO"},{"en","ENGLISH"},{"es","ESPAÑOL"},{"it","ITALIANO"},{"fr","FRANÇAIS"},{"de","DEUTSCH"},{"ja","日本語"},{"ko","한국어"},{"pt","PORTUGUÊS"}};return values;
 }
 inline std::string ChoiceName() { for(const auto& value:Choices())if(value.first==choice)return value.second;return "AUTO"; }
 inline std::string NextChoice(int direction) {

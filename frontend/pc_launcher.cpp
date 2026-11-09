@@ -801,7 +801,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         if (SDL_GetDisplayDPI(0, &ddpi, nullptr, nullptr) == 0 && ddpi > 96.0f) { winW = (int)(winW * ddpi / 96.0f); winH = (int)(winH * ddpi / 96.0f); }
     }
 #endif
-    SDL_Window* window = SDL_CreateWindow("Pokémon Fulldex", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winW, winH,
+    SDL_Window* window = SDL_CreateWindow("PokeHub", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winW, winH,
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
     if (!window)
     {
@@ -3308,9 +3308,7 @@ bool Start(int& argc, char**& argv)
     if (directGame < 0) Updater::Check(true);
 #endif
 #endif
-#ifdef __ANDROID__
-    if (directGame < 0) JavaVoid("checkUpdatesQuiet");
-#endif
+    // (PokeHub: no look for updates at the start; they will come from its own place, later.)
     DiscordPresence::InLauncher();
     for (;;)
     {

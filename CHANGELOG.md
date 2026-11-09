@@ -3,6 +3,11 @@
 
 ## Unreleased
 
+- **PokeHub.** The app is called PokeHub on the phone. It no longer looks for updates at the start
+  (the Updates group stays, empty, until updates come from its own place); the Hub page and the
+  themes (Theme Editor, My Themes, Theme Gallery) are out of the settings for now.
+- **Portuguese (Brazil).** A new language, in the settings and the launcher, including My PC and the
+  Pokédex; AUTO picks it on a phone set to Portuguese.
 - **My PC: the same game (or the Bank) in both panels**, in two different boxes, as PKVault allows: the
   Bank's "Bobs" box on the left and "Legendaries" on the right, or Red's party and its Box 1. Never the
   same box twice: the arrows step over the box the other panel shows.

@@ -1962,11 +1962,17 @@ inline void ThemesRefresh()
     });
 }
 #ifdef __ANDROID__
-static const int kLauncherMenuRows = 6; // (Layout, Theme Editor, My Themes, Theme Gallery, Music Player, Camera Cutout)
+// (PokeHub: no themes for now, so Layout, Music Player and Camera Cutout.)
+static const int kLauncherMenuRows = 3;
+inline int LauncherMenuItem(int row) { static const int items[3] = { 0, 4, 5 }; return row >= 0 && row < 3 ? items[row] : 0; }
 #elif defined(__SWITCH__)
 static const int kLauncherMenuRows = 4; // (No Music Player on a Switch: there is nothing to play from.)
 #else
 static const int kLauncherMenuRows = 5;
+#endif
+#ifndef __ANDROID__
+// (The menu's rows as they are shown: all of them.)
+inline int LauncherMenuItem(int row) { return row; }
 #endif
 inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 11 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : kLauncherMenuRows; }
 // A on a theme: Apply, Show In Folder (a PC), Delete.
@@ -3769,6 +3775,7 @@ inline int LookDo(int row, int dir)
     if (LauncherMode() == 0)
     {
         // (The menu: Layout, Theme Editor, My Themes, Theme Gallery.)
+        row = LauncherMenuItem(row);
         if (row == 0) { l.layout = l.layout == "tiles" ? "sidebar" : "tiles"; LookSave(); Hub().version++; return 0; }
         if (row == 4) { l.music = l.music == "corner" ? "top" : l.music == "top" ? "compact" : l.music == "compact" ? "compactb" : l.music == "compactb" ? "off" : "corner"; LookSave(); Hub().version++; return 0; }
         if (row == 5) { l.avoidCutout = !l.avoidCutout; LookSave(); Hub().version++; return 0; } // (Android: Camera Cutout)
@@ -6558,7 +6565,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)((portP ? 10 : 18) * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : PhoneLook() && c.h > c.w && sp.navY > 0 ? sp.navY - (int)(12 * u) : c.h - (int)((ShortNow() ? 14 : 64) * u); // (a phone sideways: the panels run to the foot of the screen, the back button is in the bar)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
     GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 5 ? std::string("Import Saves") : HubMode() == 6 ? std::string("My PC") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
-    const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
+    const std::string where = std::string("PokeHub   \xC2\xB7   ") + PlatformLabel();
     if (!ShortNow() && !portP) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
     {
@@ -7034,7 +7041,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 // (Its name and a line in the font itself.)
                 CleanFont::FontId() = i;
                 GTFit(c, x + (int)(14 * u), y + (int)(50 * u), kLauncherFonts[i].name, 20 * u, cw - (int)(28 * u), text, true);
-                GTFit(c, x + (int)(14 * u), y + (int)(76 * u), "Pok\xC3\xA9mon Fulldex 123", 14 * u, cw - (int)(28 * u), hint, false);
+                GTFit(c, x + (int)(14 * u), y + (int)(76 * u), "PokeHub 123", 14 * u, cw - (int)(28 * u), hint, false);
                 CleanFont::FontId() = was;
             }
             ts.pageW = 0;
@@ -7177,14 +7184,20 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             {
                 const std::string count = std::to_string(ts.list.size()) + (ts.list.size() == 1 ? " Theme" : " Themes");
                 row(0, Glass::I_LAYOUT, "Layout", "How the home screen is set out: the sidebar with a grid, or tiles with a game carousel", TilesOn() ? "Tiles" : PanelOn() ? "Panel" : "Sidebar");
+#ifndef __ANDROID__
                 row(1, Glass::I_SPARKLE, "Theme Editor", "Colours, pictures, blur and the rest of the launcher's look", "");
                 row(2, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
                 row(3, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Online");
-#ifndef __SWITCH__
+#else
+                (void)count;
+#endif
+#if defined(__ANDROID__)
+                row(1, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: full size, a small pill of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact Top" : Look().music == "compactb" ? "Compact Bottom" : Look().music == "off" ? "Off" : "Bottom Left");
+#elif !defined(__SWITCH__)
                 row(4, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: full size, a small pill of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact Top" : Look().music == "compactb" ? "Compact Bottom" : Look().music == "off" ? "Off" : "Bottom Left");
 #endif
 #ifdef __ANDROID__
-                row(5, Glass::I_FULLSCREEN, "Camera Cutout", "Keep every launcher screen clear of the camera hole, or fill the whole screen", Look().avoidCutout ? "Avoid" : "Fill");
+                row(2, Glass::I_FULLSCREEN, "Camera Cutout", "Keep every launcher screen clear of the camera hole, or fill the whole screen", Look().avoidCutout ? "Avoid" : "Fill");
 #endif
             }
             else
@@ -7219,10 +7232,11 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                     "Browse themes other players have shared, try one on before you keep it, enter a theme code from a friend, or share one of your own.",
                     "Shows the song playing on your device with previous, play and next. Bottom Left: a square at the foot of the sidebar. Top: a bar along the top. Compact Top and Compact Bottom: just previous, play and next in a small pill, along the top or at the foot of the sidebar. Off: no player. Its buttons use your Buttons look from the Theme Editor.",
                     "Avoid: every launcher screen keeps clear of the phone's camera hole, and the strip beside it stays black. Fill: the launcher runs across the whole screen, behind the camera hole, as the games do. Choose it to switch." };
-                GT(c, ix, y + 14 * u, titles[F.prow], 22 * u, text, true);
+                const int item = LauncherMenuItem(F.prow);
+                GT(c, ix, y + 14 * u, titles[item], 22 * u, text, true);
                 y += (int)(44 * u);
-                para(about[F.prow], text, 14 * u);
-                if (F.prow == 4)
+                para(about[item], text, 14 * u);
+                if (item == 4)
                 {
                     // (A small picture of each choice, the chosen one outlined.)
                     static const char* const keys[5] = { "corner", "top", "compact", "compactb", "off" };
@@ -8247,12 +8261,12 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         GT(c, rx + (int)(48 * u), ry + rowH * 0.5f, names[i], 17 * u, text, true);
     }
     {
-        const std::vector<std::string> lines = WrapLines("Fulldex doesn't include any games. Play with ROMs from games you own.", 13 * u, lw - 2 * pad - (int)(28 * u));
+        const std::vector<std::string> lines = WrapLines("PokeHub, made from Pok\xC3\xA9mon Fulldex by Mamesj. It doesn't include any games. Play with ROMs from games you own.", 13 * u, lw - 2 * pad - (int)(28 * u));
         const int ch = (int)(66 * u) + (int)lines.size() * (int)(18 * u);
         const int cx = L + pad, cy = top + lhA - pad - ch, cw = lw - 2 * pad;
         if (cy >= top + pad + 5 * (rowH + rg)) { // (not on a short screen: it would be drawn over the rows)
         Glass::Round(c, cx, cy, cw, ch, 12 * u, SettingsArt::Row, 0x3DFFFFFF, 1.0f * u);
-        GT(c, cx + (int)(14 * u), cy + 24 * u, "Fulldex", 20 * u, text, true);
+        GT(c, cx + (int)(14 * u), cy + 24 * u, "PokeHub", 20 * u, text, true);
         GT(c, cx + (int)(14 * u), cy + 48 * u, PlatformLabel(), 14 * u, hint, true);
         int ly = cy + (int)(70 * u);
         for (const std::string& l : lines) { GT(c, cx + (int)(14 * u), ly, l, 13 * u, hint, false); ly += (int)(18 * u); }
@@ -9440,9 +9454,9 @@ inline std::vector<Setting> SettingsList()
     const std::vector<std::pair<std::string, std::string>> onOff = { { "1", "ON" }, { "0", "OFF" } };
     std::vector<Setting> l;
 #ifdef __ANDROID__
-    l.push_back({ "!updates", "CHECK FOR UPDATES", { { "", "CHECK" } }, "",
-                  "CHECKS GITHUB FOR A NEW VERSION. INSTALL DOWNLOADS IT: IT IS CHECKED AGAINST THE RELEASE SHA256SUMS.TXT AND ANDROID ASKS "
-                  "BEFORE INSTALLING. THE OLD VERSION IS KEPT. YOUR ROMS / SAVES AND SETTINGS STAY AS THEY ARE." });
+    // (PokeHub: no updates from the original project's GitHub. Its own place comes later; the
+    // group stays, saying so.)
+    l.push_back({ nullptr, "NOTHING HERE YET", {}, "", "POKEHUB'S UPDATES WILL COME FROM ITS OWN PLACE, LATER." });
 #elif defined(__APPLE__)
     l.push_back({ "!updates", "CHECK FOR UPDATES", { { "", "CHECK" } }, "",
                   "CHECKS GITHUB FOR A NEW VERSION. WHEN THERE IS ONE: CHOOSE AGAIN TO OPEN ITS PAGE AND DOWNLOAD IT THERE." });
@@ -9460,11 +9474,13 @@ inline std::vector<Setting> SettingsList()
                   "WHERE YOUR SAVES ARE KEPT. CHOOSE A FOLDER OF YOUR OWN: YOUR SAVES AND FULLDEX FILES ARE COPIED THERE (NOTHING THERE IS REPLACED / THE OLD FOLDER STAYS AS IT IS) "
                   "AND FULLDEX USES IT FROM ITS NEXT START. A FOLDER DROPBOX OR ONEDRIVE OR SYNCTHING KEEPS IN SYNC WORKS TOO. CHOOSE AGAIN TO GO BACK TO THE FOLDER BESIDE THE ROMS." });
 #endif
+#ifndef __ANDROID__
     l.push_back({ "!releases", "RELEASE PAGE", { { "", "OPEN" } }, "",
                   "OPENS THE LIST OF RELEASES ON GITHUB: THE CHANGES IN EACH VERSION, AND THE DOWNLOADS." });
     l.push_back({ nullptr, "RELEASE NOTES", {}, "",
                   "THE CHANGES IN EACH VERSION ARE LISTED ON ITS RELEASE PAGE ON GITHUB. YOUR ROMS / SAVES AND SETTINGS STAY WHEN FULLDEX UPDATES. "
                   "THE VERSION BEFORE IS KEPT, IN CASE YOU NEED TO GO BACK." });
+#endif
 
 #ifdef __SWITCH__
     // (The first start's 60 FPS and WORLD DETAIL depend on the game: SoulSilver and HeartGold
@@ -9622,7 +9638,7 @@ inline int GroupOf(const Setting& s)
     if (s.key && (!strcmp(s.key, "!updates") || !strcmp(s.key, "!releases"))) return 8;
     if (s.key && !strcmp(s.key,"!favourite")) return 6;
     if (s.key && !strcmp(s.key, "!saves_folder")) return 6; // (GAME LIST)
-    if (!s.key) return !strcmp(s.name, "KEYS AND BUTTONS") ? 3 : !strcmp(s.name, "RELEASE NOTES") ? 8 : 7;
+    if (!s.key) return !strcmp(s.name, "KEYS AND BUTTONS") ? 3 : !strcmp(s.name, "RELEASE NOTES") || !strcmp(s.name, "NOTHING HERE YET") ? 8 : 7;
     if (!strncmp(s.key,"extra_",6)) return 9;
     if (!strcmp(s.key, "list_lang")) return 0;
     if (!strncmp(s.key, "list_", 5)) return 6;
@@ -9704,9 +9720,8 @@ struct SettingsPage
         }
         // (This fork: the pages that were in the sidebar, opened from here.)
         items.push_back({ "!open_import", "IMPORT SAVES", { { "", ">" } }, "", "BRING IN SAVES FROM MY BOY AND MY OLDBOY." });
-        items.push_back({ "!open_hub", "HUB", { { "", ">" } }, "", "CLOUD SAVES / MOVE POKEMON / TRADE / POKEDEX / IMPORT SAVES." });
         items.push_back({ "!open_roms", "ROMS", { { "", ">" } }, "", "YOUR GAMES' FILES: RENAME, HIDE OR DELETE THEM." });
-        items.push_back({ "!open_launcher", "LAUNCHER", { { "", ">" } }, "", "THE LOOK OF THE LIST: THEMES, LAYOUT, FONT, MUSIC PLAYER." });
+        items.push_back({ "!open_launcher", "LAUNCHER", { { "", ">" } }, "", "THE LOOK OF THE LIST: LAYOUT, MUSIC PLAYER, CAMERA CUTOUT." });
         selected = row;
         scroll = 0;
         follow = true;
