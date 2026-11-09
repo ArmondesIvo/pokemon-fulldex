@@ -160,8 +160,8 @@ mkdir -p "$W/classes" "$W/dex"
 BUILD_EPOCH="$(date +%s)"
 printf '%s\n' "$BUILD_EPOCH" > "$HERE/build-android-dist/fulldex-build-id.txt"
 # (SSR_UPDATE_URL: PokeHub's own update file, latest.json, tools/pokehub/publish_update.sh; empty: none.)
-case "${SSR_UPDATE_URL:-}" in *'"'*|*'\\'*) echo "SSR_UPDATE_URL has a quote or a backslash" >&2; exit 1 ;; esac
-printf 'package io.github.mamesj.pokemonds; final class BuildInfo { static final long BUILT_AT = %s000L; static final String UPDATE_URL = "%s"; }\n' "$BUILD_EPOCH" "${SSR_UPDATE_URL:-}" > "$W/BuildInfo.java"
+case "${SSR_UPDATE_URL:-}${SSR_ACCOUNT_URL:-}" in *'"'*|*'\\'*) echo "SSR_UPDATE_URL has a quote or a backslash" >&2; exit 1 ;; esac
+printf 'package io.github.mamesj.pokemonds; final class BuildInfo { static final long BUILT_AT = %s000L; static final String UPDATE_URL = "%s"; static final String ACCOUNT_URL = "%s"; }\n' "$BUILD_EPOCH" "${SSR_UPDATE_URL:-}" "${SSR_ACCOUNT_URL:-}" > "$W/BuildInfo.java"
 # The icon: the picture as it is for Android 7 and older, and an adaptive icon for Android 8 on
 # (mipmap-anydpi-v26), whose launchers cut it to their own shape (a circle on a Pixel). Without
 # one, the square picture was shrunk inside a white circle. Its one layer is the picture at 70% of

@@ -3,6 +3,9 @@
 
 ## Unreleased
 
+- **An account figure on the home screen,** in place of Search, Sort and the music player: tap it to
+  sign in to PokeHub with Google (through PokeHub's own server), or to see who is signed in and sign
+  out. The session is kept in the app's private storage.
 - **The update question in PokeHub's own look,** and with every skipped version's news: several updates
   waiting are asked about once, and the newest is installed. The settings in Portuguese use the clean
   font again (they had fallen back to the pixel font).

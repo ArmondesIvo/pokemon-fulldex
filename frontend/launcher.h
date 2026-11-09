@@ -1964,14 +1964,15 @@ inline void ThemesRefresh()
 // (The Launcher page opened by the Hub's Themes: only the theme rows, back goes to the Hub.)
 inline bool& LauncherThemesOnly() { static bool b = false; return b; }
 #ifdef __ANDROID__
-// (PokeHub: the Launcher page has Layout, Music Player and Camera Cutout; the themes are the Hub's.)
-static const int kLauncherMenuRows = 3;
+// (PokeHub: the Launcher page has Layout and Camera Cutout (no music player); the themes are the Hub's.)
+inline int LauncherMenuRows() { return LauncherThemesOnly() ? 3 : 2; }
 inline int LauncherMenuItem(int row)
 {
-    static const int look[3] = { 0, 4, 5 }, themes[3] = { 1, 2, 3 };
-    return row >= 0 && row < 3 ? (LauncherThemesOnly() ? themes : look)[row] : 0;
+    static const int look[2] = { 0, 5 }, themes[3] = { 1, 2, 3 };
+    if (row < 0 || row >= LauncherMenuRows()) return 0;
+    return LauncherThemesOnly() ? themes[row] : look[row];
 }
-inline int LauncherMenuRowOf(int item) { for (int r = 0; r < 3; r++) if (LauncherMenuItem(r) == item) return r; return 0; }
+inline int LauncherMenuRowOf(int item) { for (int r = 0; r < LauncherMenuRows(); r++) if (LauncherMenuItem(r) == item) return r; return 0; }
 #elif defined(__SWITCH__)
 static const int kLauncherMenuRows = 4; // (No Music Player on a Switch: there is nothing to play from.)
 #else
@@ -1981,8 +1982,9 @@ static const int kLauncherMenuRows = 5;
 // (The menu's rows as they are shown: all of them.)
 inline int LauncherMenuItem(int row) { return row; }
 inline int LauncherMenuRowOf(int item) { return item; }
+inline int LauncherMenuRows() { return kLauncherMenuRows; }
 #endif
-inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 11 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : kLauncherMenuRows; }
+inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 11 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : LauncherMenuRows(); }
 // A on a theme: Apply, Show In Folder (a PC), Delete.
 inline void OpenThemeMenu(int i)
 {
@@ -5021,6 +5023,39 @@ inline void OpenQuitAsk()
     F.dItems = { "Quit", "Cancel" };
     F.dPaths = { "#quit", "#close" };
 }
+// PokeHub's account: who is signed in (the Java side keeps it, in the app's private storage, and
+// signs in through PokeHub's server with Google; GameActivity.accountInfo: "email\tname", or "").
+struct AccountState { bool signedIn = false; std::string email, name; };
+inline AccountState& Account() { static AccountState a; return a; }
+inline void AccountFrom(const std::string& info)
+{
+    AccountState& a = Account();
+    const size_t t = info.find('\t');
+    a.signedIn = !info.empty();
+    a.email = info.substr(0, t);
+    a.name = t == std::string::npos ? std::string() : info.substr(t + 1);
+}
+// The figure on the top bar: who is signed in and Sign Out, or Sign In With Google.
+inline void OpenAccountAsk()
+{
+    GlassFocus& F = Focus();
+    const AccountState& a = Account();
+    F.dialog = 12;
+    F.drow = 0;
+    F.dTitle = "Your Account";
+    if (a.signedIn)
+    {
+        F.dMsg = (a.name.empty() ? a.email : a.name + "\n" + a.email) + "\n\n" + LauncherText::Tr("Signed in to PokeHub with Google.");
+        F.dItems = { "Close", "Sign Out" };
+        F.dPaths = { "#close", "#signout" };
+    }
+    else
+    {
+        F.dMsg = "Sign in with your Google account (Gmail) to keep your saves in PokeHub's cloud, the same on every phone.";
+        F.dItems = { "Sign In With Google", "Later" };
+        F.dPaths = { "#signin", "#close" };
+    }
+}
 // PokeHub's update, found by the Java side (Updates.java, its offer: "NEW\tversion\tnotes",
 // "LATEST" or "ERROR"), asked in the launcher's own look. Update: the Java side downloads it,
 // checks it and hands it to Android's installer.
@@ -7312,12 +7347,11 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 else
                 {
                 row(0, Glass::I_LAYOUT, "Layout", "How the home screen is set out: the sidebar with a grid, or tiles with a game carousel", TilesOn() ? "Tiles" : PanelOn() ? "Panel" : "Sidebar");
-                row(1, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: full size, a small pill of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact Top" : Look().music == "compactb" ? "Compact Bottom" : Look().music == "off" ? "Off" : "Bottom Left");
 #elif !defined(__SWITCH__)
                 row(4, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: full size, a small pill of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact Top" : Look().music == "compactb" ? "Compact Bottom" : Look().music == "off" ? "Off" : "Bottom Left");
 #endif
 #ifdef __ANDROID__
-                row(2, Glass::I_FULLSCREEN, "Camera Cutout", "Keep every launcher screen clear of the camera hole, or fill the whole screen", Look().avoidCutout ? "Avoid" : "Fill");
+                row(1, Glass::I_FULLSCREEN, "Camera Cutout", "Keep every launcher screen clear of the camera hole, or fill the whole screen", Look().avoidCutout ? "Avoid" : "Fill");
                 }
 #endif
             }
@@ -9183,8 +9217,15 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
         const int searchW = q.empty() && icn ? bh : GW(searchL, tpx, true) + (int)(q.empty() ? (pnl ? 26 : 36) : (pnl ? 46 : 52)) * u, searchX = sortX - (int)(10 * u) - searchW;
         const int last = LastTab();
         tool(1, prt ? (int)(12 * u) : sp.tabX[last] + sp.tabW[last] + (int)(10 * u), bh, "+", -1);
+#ifdef __ANDROID__
+        // (PokeHub: no Search, no Sort; in Sort's place the account, a figure to tap to sign in.)
+        (void)searchW; (void)searchL; (void)sortL;
+        tool(3, sortX, sortW, std::string(), Glass::I_PEOPLE);
+        if (Account().signedIn) Glass::Round(c, sortX + sortW - (int)(13 * u), by + (int)(5 * u), (int)(8 * u), (int)(8 * u), 4 * u, 0xFF6BD18Fu);
+#else
         tool(2, searchX, searchW, searchL, icn ? Glass::I_SEARCH : -1);
         tool(3, sortX, sortW, icn ? std::string() : sortL, icn ? Glass::I_SORT : Glass::I_LAYERS);
+#endif
         // NOW PLAYING along the top (Launcher > Music Player > Top): between the tabs and Search / Sort.
         if (Look().music == "off") { }
         else if ((ShortNow() || (Look().music == "compact" && !TilesOn() && !pnl)) && Music().shown && !Music().idle) { const int mw = 3 * (int)(bh * 0.9f); DrawMusicButtons(c, searchX - (int)(10 * u) - mw, by, mw, bh, u); }
@@ -9857,7 +9898,7 @@ struct SettingsPage
         // (This fork: the pages that were in the sidebar, opened from here.)
         items.push_back({ "!open_hub", "HUB", { { "", ">" } }, "", "CLOUD SAVES / TRADE / THEMES." });
         items.push_back({ "!open_roms", "ROMS", { { "", ">" } }, "", "YOUR GAMES' FILES: RENAME, HIDE OR DELETE THEM." });
-        items.push_back({ "!open_launcher", "LAUNCHER", { { "", ">" } }, "", "THE LOOK OF THE LIST: LAYOUT, MUSIC PLAYER, CAMERA CUTOUT." });
+        items.push_back({ "!open_launcher", "LAUNCHER", { { "", ">" } }, "", "THE LOOK OF THE LIST: LAYOUT, CAMERA CUTOUT." });
         selected = row;
         scroll = 0;
         follow = true;

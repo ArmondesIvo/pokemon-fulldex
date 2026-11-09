@@ -53,6 +53,7 @@ public class GameActivity extends SDLActivity {
         catch (Exception ignored) { }
         super.onCreate(state);
         startupTrace("Activity created", true);
+        Account.handle(this, getIntent()); // (opened by the sign-in link itself, the app not running)
         getContentResolver().registerContentObserver(Settings.System.getUriFor(
             Settings.System.ACCELEROMETER_ROTATION), false, rotationObserver);
         secondScreen = new SecondScreen(this);
@@ -171,6 +172,20 @@ public class GameActivity extends SDLActivity {
     }
 
     // At launch: a dialog only when a new version is available.
+    // PokeHub's account (Account.java), for the launcher's figure: "email\tname", or "".
+    public static String accountInfo() { return self != null ? Account.info(self) : ""; }
+    public static void accountSignIn() { if (self != null) Account.signIn(self); }
+    public static void accountSignOut() { if (self != null) Account.signOut(self); }
+    public static String accountReady() { return Account.ready() ? "1" : ""; }
+
+    // The browser's way back after signing in (singleTask: this activity, not a new one).
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (Account.handle(this, intent)) return;
+        setIntent(intent);
+    }
+
     // PokeHub's update found (Updates.java), for the launcher to ask about: "" none yet.
     public static String updateOffer() { return Updates.takeOffer(); }
     // The launcher's Update: download, check and hand it to Android's installer.

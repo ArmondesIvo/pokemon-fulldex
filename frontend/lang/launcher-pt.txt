@@ -659,7 +659,7 @@ BRING IN SAVES FROM MY BOY AND MY OLDBOY.	TRAGA OS SAVES DO MY BOY E DO MY OLDBO
 ROMS	ROMS
 YOUR GAMES' FILES: RENAME, HIDE OR DELETE THEM.	OS ARQUIVOS DOS SEUS JOGOS: RENOMEIE, ESCONDA OU APAGUE.
 LAUNCHER	LAUNCHER
-THE LOOK OF THE LIST: LAYOUT, MUSIC PLAYER, CAMERA CUTOUT.	O VISUAL DA LISTA: LAYOUT, PLAYER DE MÚSICA, RECORTE DA CÂMERA.
+THE LOOK OF THE LIST: LAYOUT, CAMERA CUTOUT.	O VISUAL DA LISTA: LAYOUT, RECORTE DA CÂMERA.
 LOOKS FOR A NEW VERSION OF POKEHUB. ANDROID ASKS BEFORE INSTALLING IT. YOUR GAMES, SAVES AND SETTINGS STAY AS THEY ARE.	PROCURA UMA VERSÃO NOVA DO POKEHUB. O ANDROID PERGUNTA ANTES DE INSTALAR. SEUS JOGOS, SAVES E CONFIGURAÇÕES FICAM COMO ESTÃO.
 Layout	Layout
 Music Player	Player De Música
@@ -685,3 +685,9 @@ Later	Depois
 OK	OK
 You have the newest version of PokeHub.	Você já tem a versão mais nova do PokeHub.
 Could not look for an update now. Check the internet and try again later.	Não deu para procurar atualização agora. Confira a internet e tente de novo mais tarde.
+Your Account	Sua Conta
+Sign In With Google	Entrar Com O Google
+Sign Out	Sair Da Conta
+Signed in to PokeHub with Google.	Conectado ao PokeHub com o Google.
+Sign in with your Google account (Gmail) to keep your saves in PokeHub's cloud, the same on every phone.	Entre com sua conta Google (Gmail) para guardar seus saves na nuvem do PokeHub, iguais em todo celular.
+Signing in is not ready yet in this version.	O login ainda não está pronto nesta versão.

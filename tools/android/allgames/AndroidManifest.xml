@@ -59,6 +59,13 @@
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
+            <!-- PokeHub's sign-in coming back from the browser (Account.java): pokehub://signin?... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pokehub" android:host="signin" />
+            </intent-filter>
         </activity>
         <!-- NOW PLAYING (NowPlaying.java): what notification access is given to, so the pause menu
              can show the player's music app's song; it reads no notifications. -->

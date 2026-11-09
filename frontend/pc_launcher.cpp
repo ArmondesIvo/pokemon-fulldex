@@ -1352,6 +1352,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         {
             Launcher::GlassFocus& F = Launcher::Focus();
             if (onTabs && F.onSort && F.tool == 1 && !Launcher::TabHidden().empty()) { Launcher::OpenPlusMenu(); return; } // (+: new, or one hidden shown)
+#ifdef __ANDROID__
+            if (onTabs && F.onSort && F.tool == 3) { Launcher::OpenAccountAsk(); return; } // (PokeHub: the account, in Sort's place)
+#endif
             if (onTabs && F.onSort && F.tool != 3)
             {
                 // (The tab bar's + and Search: the keyboard, for a new tab or the search.)
@@ -1770,6 +1773,13 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (pick == "#quit") quit = true; // (Quit Fulldex?: yes)
 #ifdef __ANDROID__
             if (pick == "#update") JavaVoid("updateInstall"); // (PokeHub Update: yes)
+            if (pick == "#signin")
+            {
+                // (Your Account: to Google, in the browser; not yet when this build has no server.)
+                if (JavaString("accountReady").empty()) { dialogClose(); Launcher::Focus().dialog = 12; Launcher::Focus().drow = 0; Launcher::Focus().dTitle = "Your Account"; Launcher::Focus().dMsg = "Signing in is not ready yet in this version."; Launcher::Focus().dItems = { "OK" }; Launcher::Focus().dPaths = { "#close" }; return; }
+                JavaVoid("accountSignIn");
+            }
+            if (pick == "#signout") { JavaVoid("accountSignOut"); Launcher::AccountFrom(""); }
 #endif
             return;
         }
@@ -2699,6 +2709,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (Launcher::Focus().dialog == 0 && SDL_GetTicks() - lastOffer > 500)
             {
                 lastOffer = SDL_GetTicks();
+                // (Who is signed in, as the Java side has it: after the browser brings a sign-in back.)
+                Launcher::AccountFrom(JavaString("accountInfo"));
                 const std::string offer = JavaString("updateOffer");
                 if (!offer.empty()) { Launcher::OpenUpdateAsk(offer); fprintf(stderr, "[launcher] update offer: %s\n", offer.substr(0, 40).c_str()); }
             }
@@ -2942,7 +2954,12 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             // NOW PLAYING: the music app's song, now and then, for the bar on the home screen (SSR_LIST_NOWPLAYING: a made-up song, for the test picture).
             {
                 Launcher::MusicBar& MB = Launcher::Music();
-                NowPlaying::Start(); NowPlaying::Want(2);
+#ifdef __ANDROID__
+                // (PokeHub: no music player, and so no asking to read the phone's notifications.)
+                Launcher::Music().shown = false;
+                if (false)
+#endif
+                { NowPlaying::Start(); NowPlaying::Want(2); }
                 NowPlaying::Info np = NowPlaying::Now();
                 const bool fake = getenv("SSR_LIST_NOWPLAYING") != nullptr;
                 if (fake)
@@ -2950,7 +2967,11 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     np.active = true; np.playing = true; np.canPrev = np.canNext = true; np.title = "Midnight City"; np.artist = "M83"; np.app = "Spotify";
                     if (np.art.empty()) { np.artW = np.artH = 64; np.art.resize(64 * 64); for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) np.art[y * 64 + x] = 0xFF000000u | ((60 + x * 3) << 16) | ((40 + y) << 8) | (200 - y * 2); np.artVersion = 1; }
                 }
+#ifdef __ANDROID__
+                MB.shown = false;
+#else
                 MB.shown = NowPlaying::Supported() || fake;
+#endif
                 MB.idle = !np.active && !np.needAccess;
                 MB.blind = np.needAccess; MB.playing = np.playing; MB.canPrev = np.canPrev; MB.canNext = np.canNext;
                 MB.title = np.title; MB.artist = np.artist; MB.app = np.app;
