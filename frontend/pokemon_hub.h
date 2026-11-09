@@ -124,6 +124,9 @@ struct MonDetail
     int tid = 0, metLevel = 0;
     std::string moves[4];
     int stats[6] = {}, ivs[6] = {}, evs[6] = {}; // HP, Attack, Defense, Speed, Sp. Atk, Sp. Def
+    // (For the arena battles: the moves' numbers, the types' (0 Normal .. 17 Fairy; -1 none) and
+    // its stats as they would be at level 50, its IVs, EVs and nature kept.)
+    int moveIds[4] = {}, typeIds[2] = { -1, -1 }, stats50[6] = {};
 };
 bool Detail(const Save& save, int box, int slot, MonDetail& out);
 // PKVault's Edit: a Pokémon's effort values (each 0 to 252, 510 in all) and its nickname (in memory,

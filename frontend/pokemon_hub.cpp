@@ -981,7 +981,10 @@ void DetailOf(const pksm::PKX& source, int box, int slot, MonDetail& out)
     {
         const int m = (int)pk->move((u8)i);
         out.moves[i] = m ? MoveName(m) : std::string();
+        out.moveIds[i] = m;
     }
+    out.typeIds[0] = (int)(u8)pk->type1();
+    out.typeIds[1] = pk->type2() == pk->type1() ? -1 : (int)(u8)pk->type2();
     const pksm::Stat st[6] = { pksm::Stat::HP, pksm::Stat::ATK, pksm::Stat::DEF, pksm::Stat::SPD, pksm::Stat::SPATK, pksm::Stat::SPDEF };
     for (int i = 0; i < 6; i++)
     {
@@ -989,6 +992,9 @@ void DetailOf(const pksm::PKX& source, int box, int slot, MonDetail& out)
         out.ivs[i] = pk->iv(st[i]);
         out.evs[i] = pk->ev(st[i]);
     }
+    // (At level 50, on the copy: the arena's battles are all fought there.)
+    pk->level(50);
+    for (int i = 0; i < 6; i++) out.stats50[i] = pk->stat(st[i]);
 }
 }
 

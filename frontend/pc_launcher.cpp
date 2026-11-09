@@ -867,7 +867,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     Launcher::LoadTabs(fo.saves);
     static int lastTab = std::max(0, std::min(Launcher::TabCount() - 1, atoi(Launcher::ConfigValue(fo.cfg, "launcher_tab2").c_str())));
     // (A tab hidden since, or MY PC, which is no list: the first one shown instead.)
-    if (Launcher::TabIsHidden(lastTab) || lastTab == Launcher::TAB_MYPC || lastTab == Launcher::TAB_DEX) lastTab = Launcher::FirstTab();
+    if (Launcher::TabIsHidden(lastTab) || lastTab == Launcher::TAB_MYPC || lastTab == Launcher::TAB_DEX || lastTab == Launcher::TAB_BATTLE) lastTab = Launcher::FirstTab();
     int tab = lastTab, scroll = 0, result = -1;
     // false while the list is where a finger (or the mouse, held) dragged it, rather than where
     // the chosen game is; a key, button or tap that chooses a game makes it follow again.
@@ -1040,6 +1040,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         // (MY PC is no list of games: it opens the Pokémon PC, the tab before it staying chosen.)
         if ((t + Launcher::TabCount()) % Launcher::TabCount() == Launcher::TAB_MYPC) { Launcher::OpenMyPc(); fprintf(stderr, "[launcher] my pc (%s)\n", why); return; }
         if ((t + Launcher::TabCount()) % Launcher::TabCount() == Launcher::TAB_DEX) { Launcher::OpenDexTab(); fprintf(stderr, "[launcher] pokedex (%s)\n", why); return; }
+#ifdef SSR_POKEMON_HUB
+        if ((t + Launcher::TabCount()) % Launcher::TabCount() == Launcher::TAB_BATTLE) { Launcher::OpenBattleTab(); fprintf(stderr, "[launcher] battle (%s)\n", why); return; }
+#endif
         tab = (t + Launcher::TabCount()) % Launcher::TabCount();
         fprintf(stderr, "[launcher] tab %s (%s)\n", Launcher::TabName(tab), why);
         scroll = 0;
@@ -1942,10 +1945,60 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             note = !ok ? "COULD NOT SAVE THE NAME" : name.empty() ? "NAME RESET" : "RENAMED";
         }
     };
+#ifdef SSR_POKEMON_HUB
+    // The arena's fight: fingers each on their own (the stick and a button at once), the mouse as
+    // one more (not the copies of fingers SDL makes), keys on a PC. True when it took the event.
+    auto battleEvent = [&](const SDL_Event& ev) -> bool {
+        int ww = 1, wh = 1;
+        SDL_GetWindowSize(window, &ww, &wh);
+        switch (ev.type)
+        {
+        case SDL_FINGERDOWN: case SDL_FINGERMOTION: case SDL_FINGERUP:
+            Launcher::BattlePointer(ev.type == SDL_FINGERDOWN ? 0 : ev.type == SDL_FINGERMOTION ? 1 : 2, (long long)ev.tfinger.fingerId, ev.tfinger.x * canvas.w, ev.tfinger.y * canvas.h);
+            return true;
+        case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: case SDL_MOUSEMOTION:
+        {
+            const bool touch = ev.type == SDL_MOUSEMOTION ? ev.motion.which == SDL_TOUCH_MOUSEID : ev.button.which == SDL_TOUCH_MOUSEID;
+            if (touch) return true;
+            if (ev.type == SDL_MOUSEMOTION && !(ev.motion.state & SDL_BUTTON_LMASK)) return true;
+            const float x = (float)(ev.type == SDL_MOUSEMOTION ? ev.motion.x : ev.button.x) * canvas.w / std::max(1, ww);
+            const float y = (float)(ev.type == SDL_MOUSEMOTION ? ev.motion.y : ev.button.y) * canvas.h / std::max(1, wh);
+            Launcher::BattlePointer(ev.type == SDL_MOUSEBUTTONDOWN ? 0 : ev.type == SDL_MOUSEMOTION ? 1 : 2, -2, x, y);
+            return true;
+        }
+        case SDL_KEYDOWN: case SDL_KEYUP:
+        {
+            const bool down = ev.type == SDL_KEYDOWN;
+            if (down && ev.key.repeat) return true;
+            int w = -1;
+            switch (ev.key.keysym.scancode)
+            {
+            case SDL_SCANCODE_W: case SDL_SCANCODE_UP: w = 0; break;
+            case SDL_SCANCODE_A: case SDL_SCANCODE_LEFT: w = 1; break;
+            case SDL_SCANCODE_S: case SDL_SCANCODE_DOWN: w = 2; break;
+            case SDL_SCANCODE_D: case SDL_SCANCODE_RIGHT: w = 3; break;
+            case SDL_SCANCODE_J: w = 10; break;
+            case SDL_SCANCODE_K: w = 11; break;
+            case SDL_SCANCODE_L: w = 12; break;
+            case SDL_SCANCODE_U: w = 13; break;
+            case SDL_SCANCODE_SPACE: w = 14; break;
+            case SDL_SCANCODE_ESCAPE: case SDL_SCANCODE_AC_BACK: case SDL_SCANCODE_P: w = 20; break;
+            default: break;
+            }
+            if (w >= 0) Launcher::BattleKeyIn(w, down);
+            return true;
+        }
+        case SDL_MOUSEWHEEL: case SDL_TEXTINPUT: case SDL_CONTROLLERBUTTONDOWN: case SDL_CONTROLLERBUTTONUP: case SDL_CONTROLLERAXISMOTION:
+            return true;
+        default:
+            return false;
+        }
+    };
+#endif
     while (!quit)
     {
         SDL_Event e;
-        bool any = SDL_WaitEventTimeout(&e, Launcher::PcAnimating() ? 16 : 50); // (an evolution shown: smoothly)
+        bool any = SDL_WaitEventTimeout(&e, Launcher::PcAnimating() || Launcher::BattleOn() ? 8 : 50); // (an evolution or a fight shown: smoothly)
         while (any)
         {
             if (e.type == SDL_APP_WILLENTERBACKGROUND) appBackgrounded = true;
@@ -1966,6 +2019,10 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 texture = nullptr;
                 fprintf(stderr, "[launcher] render surface reset; recreating launcher texture\n");
             }
+#ifdef SSR_POKEMON_HUB
+            // THE ARENA's fight takes every finger, the mouse and the keys while it is up.
+            if (Launcher::BattleOn() && battleEvent(e)) { any = SDL_PollEvent(&e); continue; }
+#endif
             // (RETROACHIEVEMENTS' LOG IN takes the keyboard, the buttons and taps while it is up.)
             if (raOpen && e.type != SDL_QUIT)
             {
@@ -2441,6 +2498,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     break;
                 }
 #ifdef SSR_POKEMON_HUB
+                // BATTLE (the tab): its own taps.
+                if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_HUB && Launcher::HubMode() == 9 && !Launcher::Mover().open && Launcher::Focus().dialog == 0
+                    && (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONUP) && !(e.type == SDL_MOUSEBUTTONUP && Launcher::BackAt(mx, my)))
+                {
+                    if (e.type == SDL_MOUSEBUTTONUP) Launcher::BattlePagePointer(2, mx, my);
+                    dragging = pressed = false;
+                    break;
+                }
                 // TRADES: its own taps.
                 if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_HUB && Launcher::HubMode() == 8 && !Launcher::Mover().open && Launcher::Focus().dialog == 0
                     && (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONUP) && !(e.type == SDL_MOUSEBUTTONUP && Launcher::BackAt(mx, my)))

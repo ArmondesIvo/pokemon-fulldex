@@ -35,6 +35,7 @@
 
 #include "ui.h"
 #include "optional_features.h"
+#include "battle_engine.h" // (the arena's fight: outside namespace Launcher, as it has std headers)
 #include "cloud_saves.h"
 #include "net_http.h"
 #include <fstream>
@@ -75,7 +76,7 @@ inline const char* PlatformName(int p) { return p == DS ? "DS" : p == GBA ? "GBA
 // last. ROMHACKS: the hacks, whatever their console.)
 // (GB: the Game Boy and Game Boy Color games, played by the GBA player, apart from the GBA's. MY PC:
 // not a list of games, the Pokémon PC (the Hub's Move Pokémon, with the Bank), opened from the bar.)
-enum TabId { TAB_HOME, TAB_ALL, TAB_DS, TAB_GBA, TAB_3DS, TAB_HACKS, TAB_GB, TAB_MYPC, TAB_DEX, TABS };
+enum TabId { TAB_HOME, TAB_ALL, TAB_DS, TAB_GBA, TAB_3DS, TAB_HACKS, TAB_GB, TAB_MYPC, TAB_DEX, TAB_BATTLE, TABS };
 // Tabs of the player's own, after the built-in ones (tab TABS + k): a name and its games' ROM paths;
 // kept in fulldex-tabs.txt beside the saves, a line a tab (its name, then its ROMs), tab-separated.
 // A tab of the player's own: its games, and the built-in tab it comes after (Move Left / Right; Home stays first).
@@ -120,7 +121,7 @@ inline void LoadTabOrder()
 {
     TabOrderAll().clear();
     TabHidden().clear();
-    bool found = false, fork = false, beforeDex = false;
+    bool found = false, fork = false, beforeDex = false, beforeBattle = false;
     if (FILE* f = fopen(TabOrderPath().c_str(), "rb"))
     {
         char line[4096];
@@ -131,7 +132,7 @@ inline void LoadTabOrder()
             const size_t tb = l.find('\t');
             if (tb == std::string::npos) continue;
             const std::string key = l.substr(0, tb);
-            if (key == "layout") { fork = true; beforeDex = l.substr(tb + 1) == "myboy1"; }
+            if (key == "layout") { fork = true; beforeDex = l.substr(tb + 1) == "myboy1"; beforeBattle = beforeDex || l.substr(tb + 1) == "myboy2"; }
             if (key != "order" && key != "hidden") continue;
             if (key == "order") found = true;
             std::vector<int>& dst = key == "hidden" ? TabHidden() : TabOrderAll();
@@ -154,6 +155,16 @@ inline void LoadTabOrder()
         std::vector<int>& o = TabOrderAll();
         const auto pc = std::find(o.begin(), o.end(), (int)TAB_MYPC);
         o.insert(pc == o.end() ? o.end() : pc + 1, (int)TAB_DEX);
+    }
+    if (beforeBattle)
+    {
+        // (Saved before the BATTLE tab, number 9: the player's own tabs one on again; it goes after
+        // the POKEDEX.)
+        for (std::vector<int>* v : { &TabOrderAll(), &TabHidden() })
+            for (int& t : *v) if (t >= TAB_BATTLE) t++;
+        std::vector<int>& o = TabOrderAll();
+        const auto dx = std::find(o.begin(), o.end(), (int)TAB_DEX);
+        o.insert(dx == o.end() ? o.end() : dx + 1, (int)TAB_BATTLE);
         TabOrderFix();
         SaveTabOrder();
         return;
@@ -174,7 +185,7 @@ inline void LoadTabOrder()
     {
         // (This fork's tabs, once: GB, GBA, DS, 3DS and My PC first, Home and All hidden; the
         // player's own tabs and what they hid kept. "layout" in the file says it was done.)
-        std::vector<int> o = { TAB_GB, TAB_GBA, TAB_DS, TAB_3DS, TAB_MYPC, TAB_DEX };
+        std::vector<int> o = { TAB_GB, TAB_GBA, TAB_DS, TAB_3DS, TAB_MYPC, TAB_DEX, TAB_BATTLE };
         for (const int t : TabOrderAll()) if (std::find(o.begin(), o.end(), t) == o.end()) o.push_back(t);
         TabOrderAll() = o;
         for (const int t : { (int)TAB_HOME, (int)TAB_ALL }) if (!TabIsHidden(t)) TabHidden().push_back(t);
@@ -193,7 +204,7 @@ inline bool SaveTabOrder()
     std::string o, h;
     for (const int t : TabOrderAll()) o += (o.empty() ? "" : ",") + std::to_string(t);
     for (const int t : TabHidden()) h += (h.empty() ? "" : ",") + std::to_string(t);
-    fprintf(f, "layout\tmyboy2\norder\t%s\nhidden\t%s\n", o.c_str(), h.c_str());
+    fprintf(f, "layout\tmyboy3\norder\t%s\nhidden\t%s\n", o.c_str(), h.c_str());
     return fclose(f) == 0;
 }
 inline std::string TabsSig()
@@ -260,10 +271,10 @@ inline bool SaveTabs()
 // kept apart from the focus, which a click can start again.
 inline std::string& SearchText() { static std::string s; return s; }
 inline std::string& SortKey() { static std::string s; return s; }
-inline const char* TabName(int t) { static const char* n[] = { "HOME", "ALL", "DS", "GBA", "3DS", "ROMHACKS", "GB", "MY PC", "POKEDEX" }; return t >= 0 && t < TABS ? n[t] : t < TabCount() ? "CUSTOM" : "ALL"; }
+inline const char* TabName(int t) { static const char* n[] = { "HOME", "ALL", "DS", "GBA", "3DS", "ROMHACKS", "GB", "MY PC", "POKEDEX", "BATALHA" }; return t >= 0 && t < TABS ? n[t] : t < TabCount() ? "CUSTOM" : "ALL"; }
 inline std::string TabLabel(int t)
 {
-    static const char* n[] = { "Home", "All", "DS", "GBA", "3DS", "Romhacks", "GB", "My PC", "Pok\xC3\xA9" "dex" };
+    static const char* n[] = { "Home", "All", "DS", "GBA", "3DS", "Romhacks", "GB", "My PC", "Pok\xC3\xA9" "dex", "Batalha" };
     if (t >= 0 && t < TABS) return n[t];
     const int k = t - TABS;
     return k >= 0 && k < (int)CustomTabs().size() ? CustomTabs()[k].name : std::string("All");
@@ -533,6 +544,7 @@ inline bool InTab(const std::vector<Game>& games, int i, int tab)
     case TAB_GB: return g.platform == GBA && IsGbGame(g);
     case TAB_MYPC: return false;
     case TAB_DEX: return false;
+    case TAB_BATTLE: return false;
     case TAB_3DS: return g.platform == N3DS;
     case TAB_HACKS: return IsHack(g);
     default: return true;
@@ -1459,7 +1471,7 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
     for (int p = 0; p < PLATFORMS; p++)
     {
         if (tab >= TAB_DS && tab <= TAB_3DS && p != tab - TAB_DS) continue;
-        if ((tab == TAB_GB && p != GBA) || tab == TAB_MYPC || tab == TAB_DEX) continue;
+        if ((tab == TAB_GB && p != GBA) || tab == TAB_MYPC || tab == TAB_DEX || tab == TAB_BATTLE) continue;
         std::vector<int> mine;
         for (size_t i = 0; i < games.size(); i++)
             if (games[i].platform == p && InTab(games, (int)i, tab)) mine.push_back((int)i);
@@ -4792,13 +4804,13 @@ inline int ThemePick(const std::string& pick)
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
 static const char* const kReleasesUrl = "https://github.com/mamesj/pokemon-fulldex/releases";
-inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 3 : HubMode() == 6 || HubMode() == 4 || HubMode() == 8 ? 1 : HubMode() == 5 ? ImportRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
+inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 3 : HubMode() == 6 || HubMode() == 4 || HubMode() == 8 || HubMode() == 9 ? 1 : HubMode() == 5 ? ImportRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
     if (Mover().open) return MoverActions(row);
     if (HubMode() == 2) return TradeActions(row);
     if (HubMode() == 4) return {};
-    if (HubMode() == 6 || HubMode() == 8) return {};
+    if (HubMode() == 6 || HubMode() == 8 || HubMode() == 9) return {};
     if (HubMode() == 5) return ImportActions(row);
     if (HubMode() == 3) return SavesDs() ? std::vector<std::string>(10, "Slot") : std::vector<std::string>(); // (Manage Saves: its slots)
     if (HubMode() == 0) return {};
@@ -4949,7 +4961,7 @@ inline std::string HubDo(int row, int act)
     if (Mover().open) return MoverDo(row, act);
     if (HubMode() == 2) return TradeDo(row, act);
     if (HubMode() == 4) return DexDo(row, act);
-    if (HubMode() == 6 || HubMode() == 8) return "";
+    if (HubMode() == 6 || HubMode() == 8 || HubMode() == 9) return "";
     if (HubMode() == 5) return ImportDo(row, act);
     if (HubMode() == 3) return SavesSlotDo(act);
     const std::vector<std::string> acts = HubActions(row);
@@ -5287,6 +5299,7 @@ inline bool PageBack()
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
     if (F.page == SIDE_HUB && HubMode() == 6) { if (PcBack()) return true; HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; }
     if (F.page == SIDE_HUB && HubMode() == 8) { HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; } // (Trades: back to the games)
+    if (F.page == SIDE_HUB && HubMode() == 9) { HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; } // (Battle: back to the games)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().fromTab) { MoverShow(false); Mover().fromTab = false; F.page = -1; F.side = -1; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = HubRowOf(2); F.rScroll = 0; Hub().version++; return true; }
@@ -5539,7 +5552,8 @@ struct PcState
     int downX = 0, downY = 0, dragX = 0, dragY = 0, dSide = -1, dBox = 0, dSlot = -1;
     // (Choosing Pokémon for an online trade, PokeHub's: a tap marks one or takes the mark off; need
     // 0 any from 1 to 6, else exactly that many; each by its save's path, box and place.)
-    struct Pick { bool on = false; int need = 0; std::string title; std::vector<std::tuple<std::string, int, int>> chosen; } pick;
+    // (purpose 0 an online trade, 1 the arena's team.)
+    struct Pick { bool on = false; int need = 0, purpose = 0; std::string title; std::vector<std::tuple<std::string, int, int>> chosen; } pick;
     // (A Pokémon evolving on its way, as the games show it: from, to, its name, when it began.)
     struct Evo { bool on = false; int from = 0, to = 0; bool shiny = false; std::string name; std::chrono::steady_clock::time_point at; } evo;
 };
@@ -6258,7 +6272,7 @@ inline void DrawPcPage(Canvas& c, bool solid, float u, int L, int R, int top, in
             PcHitAdd(bx, fy + (int)(6 * u), bw, bh, kind, 0, 0);
             bx -= (int)(8 * u);
         };
-        if (ready) button("Send", PC_PICK_SEND, true);
+        if (ready) button(P.pick.purpose == 1 ? "Usar" : "Send", PC_PICK_SEND, true);
         button("Cancel", PC_PICK_CANCEL, false);
         const std::string count = need ? LauncherText::Tr("Chosen") + " " + std::to_string(n) + " / " + std::to_string(need) : LauncherText::Tr("Chosen") + " " + std::to_string(n) + " / 6";
         const std::string left = P.pick.title + "   \xC2\xB7   " + count + (P.msg.empty() ? std::string() : "   \xC2\xB7   " + P.msg);
@@ -6318,6 +6332,8 @@ inline void PcRenameDone(const std::string& t)
 #endif
 }
 inline void TradesPicked(bool send); // (the online trade's choice made, or given up: below)
+inline void BattlePicked(bool use);   // (the arena's team chosen, or not: pokehub_battle.h)
+inline void PickDone(bool ok);
 inline void PcTap(const PcHit& h)
 {
 #ifdef SSR_POKEMON_HUB
@@ -6359,8 +6375,8 @@ inline void PcTap(const PcHit& h)
             // (Choosing for a trade: marked or not; its details shown as it is.)
             if (!full) break;
             P.selSide = h.side; P.selBox = S.box; P.selSlot = h.value;
-            if (S.box == PokemonHub::PARTY) { P.msg = "Put it in a box first: one in the party cannot go on a trade."; break; }
-            if (m.egg) { P.msg = "An egg cannot go on a trade."; break; }
+            if (S.box == PokemonHub::PARTY && P.pick.purpose == 0) { P.msg = "Put it in a box first: one in the party cannot go on a trade."; break; }
+            if (m.egg) { P.msg = P.pick.purpose == 1 ? "Um ovo n\xC3\xA3o luta." : "An egg cannot go on a trade."; break; }
             auto& ch = P.pick.chosen;
             const auto key = std::make_tuple(S.path, S.box, h.value);
             const auto it = std::find(ch.begin(), ch.end(), key);
@@ -6380,8 +6396,8 @@ inline void PcTap(const PcHit& h)
         else P.selSide = -1;
         break;
     }
-    case PC_PICK_SEND: TradesPicked(true); break;
-    case PC_PICK_CANCEL: TradesPicked(false); break;
+    case PC_PICK_SEND: PickDone(true); break;
+    case PC_PICK_CANCEL: PickDone(false); break;
     case PC_TAB: P.tab = h.value; break;
     case PC_EVOLVE: P.evolve = !P.evolve; break;
     case PC_CLOSE: P.selSide = -1; break;
@@ -6479,7 +6495,7 @@ inline bool PcBack()
 {
     PcState& P = Pc();
     if (P.evo.on) { P.evo.on = false; Hub().version++; return true; }
-    if (P.pick.on) { TradesPicked(false); return true; }
+    if (P.pick.on) { PickDone(false); return true; }
     if (P.selSide >= 0) { P.selSide = -1; Hub().version++; return true; }
     if (P.pending)
     {
@@ -6814,6 +6830,9 @@ inline void DexPointer(int phase, int x, int y)
 inline void DexWheel(int by) { DexState& d = Dex(); d.scroll = std::max(0, std::min(d.scrollMax, d.scroll - by * (int)(60 * d.u))); Hub().version++; }
 
 #include "pokehub_trades.h" // (online trades: HubMode 8, the bell)
+#include "pokehub_battle.h" // (the arena: HubMode 9, the BATTLE tab, and the fight over everything)
+// (My PC's choosing done: for whichever asked.)
+inline void PickDone(bool ok) { if (Pc().pick.purpose == 1) BattlePicked(ok); else TradesPicked(ok); }
 struct ClipGuard
 {
     Canvas& c; GlassFocus& F; int y0, y1, pad;
@@ -6838,7 +6857,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const int barH = portP ? (int)(44 * u) : sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)((portP ? 10 : 18) * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : PhoneLook() && c.h > c.w && sp.navY > 0 ? sp.navY - (int)(12 * u) : c.h - (int)((ShortNow() ? 14 : 64) * u); // (a phone sideways: the panels run to the foot of the screen, the back button is in the bar)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
-    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 5 ? std::string("Import Saves") : HubMode() == 6 ? std::string("My PC") : HubMode() == 8 ? std::string("Trades") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : LauncherThemesOnly() ? "Themes" : "Launcher") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 5 ? std::string("Import Saves") : HubMode() == 6 ? std::string("My PC") : HubMode() == 8 ? std::string("Trades") : HubMode() == 9 ? std::string("Batalha") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : LauncherThemesOnly() ? "Themes" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("PokeHub   \xC2\xB7   ") + PlatformLabel();
     if (!ShortNow() && !portP) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -7823,6 +7842,9 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 4) { DrawDexPage(c, u, L, R, top, bottom); return; } // (Pokédex)
 #ifdef SSR_POKEMON_HUB
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 8) { DrawTradesPage(c, u, L, R, top, bottom); return; } // (Trades)
+#ifdef SSR_POKEMON_HUB
+    if (F.page == SIDE_HUB && !Mover().open && HubMode() == 9) { DrawBattlePage(c, u, L, R, top, bottom); return; } // (Battle)
+#endif
 #endif
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 5)
     {
@@ -9803,6 +9825,7 @@ inline void Draw(Canvas& c, const std::vector<Game>& games, int tab, int selecte
         const View v = MakeView(c, games, tab);
         DrawGlass(c, games, v, tab, selected, scroll, note, hintText, follow, onTabs, settingsChosen);
         DrawTradeAnim(c, GU(c)); // (a done trade's scene, over everything)
+        DrawBattle(c, GU(c));    // (the arena's fight, over everything)
         return;
     }
     DrawClassic(c, games, tab, selected, scroll, note, hintText, th, follow, onTabs);

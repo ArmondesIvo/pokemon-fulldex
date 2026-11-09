@@ -3,6 +3,11 @@
 
 ## Unreleased
 
+- **Arena battles (beta), against the bot.** A Batalha tab after the Pokédex: choose up to 6 of your
+  Pokémon in My PC (boxes, party or Bank) and fight in real time in a stadium, with a stick and five
+  buttons made from each one's own moves (the strongest is the ULT, charged by fighting) plus a dash.
+  When one faints the next comes in; 99 seconds a pair. Everyone fights at level 50; your saves are
+  never changed. The bot picks 6 of your other Pokémon; Easy, Normal or Hard.
 - **Online trades.** A bell beside the account figure (a red dot when one waits on you). Choose up to 6
   of yours in My PC and a player; they choose the one they want and put as many of theirs on the
   table; you take one. Either can call it off. Each Pokémon is shown with its origin, level, nature,
