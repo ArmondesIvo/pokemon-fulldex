@@ -48,8 +48,14 @@ final class SaveImport {
     static String copy(String from, String to) {
         if (state() != 2) return "ERROR SHIZUKU IS NOT ALLOWED";
         if (from.indexOf('\'') >= 0 || to.indexOf('\'') >= 0) return "ERROR A FOLDER'S NAME HAS A QUOTE IN IT";
-        final String script = "mkdir -p '" + to + "' || exit 2; cd '" + from + "' || exit 3; "
-                + "for f in *.sav *.SAV *.srm *.SRM *.sa1; do [ -f \"$f\" ] && cp -p \"$f\" '" + to + "/' && echo \"$f\"; done; exit 0";
+        // (Each copied to a temporary name first and renamed once whole, so a copy cut short is never
+        // taken for a save; "./" before each name, so one starting with "-" is not read as an
+        // option; any that failed make the whole answer an error, naming them.)
+        final String script = "mkdir -p '" + to + "' || exit 2; cd '" + from + "' || exit 3; bad=''; "
+                + "for f in *.sav *.SAV *.srm *.SRM *.sa1; do [ -f \"$f\" ] || continue; "
+                + "if cp -p -- \"./$f\" '" + to + "/.part-'\"$f\" && mv -f -- '" + to + "/.part-'\"$f\" '" + to + "/'\"$f\"; "
+                + "then echo \"$f\"; else rm -f -- '" + to + "/.part-'\"$f\"; bad=\"$bad $f\"; fi; done; "
+                + "[ -z \"$bad\" ] || { echo \"COULD NOT COPY:$bad\" >&2; exit 4; }; exit 0";
         try {
             // (newProcess is Shizuku's own, kept from other apps' view since API 13 in favour of
             // a "user service"; for one copy, that is a great deal more than needed.)
@@ -60,6 +66,7 @@ final class SaveImport {
             String err = readAll(p.getErrorStream());
             int code = p.waitFor();
             if (code == 3) return "ERROR NOTHING THERE: " + from;
+            if (code == 4) return "ERROR " + err.trim();
             if (code != 0) return "ERROR " + (err.isEmpty() ? "THE COPY FAILED (" + code + ")" : err.trim());
             return out;
         } catch (Throwable t) {

@@ -9,6 +9,7 @@
 #include "utils/i18n.hpp"
 
 #include <algorithm>
+#include <map>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -220,6 +221,7 @@ struct Save::Impl
     bool bank = false;
     std::vector<std::unique_ptr<pksm::PKX>> slots;
     std::vector<std::pair<int, std::vector<u8>>> touched; // (place, its file before; empty: none)
+    std::map<int, std::string> touchedPath;               // (place, that file's name: .pk4 or .pk5 alike are 136 bytes)
 
     // The places in a box: 30, but 20 in Red, Blue, Yellow, Gold, Silver and Crystal. (A place past
     // them is another box's, or not a box's at all: never read or written as one.)
@@ -466,8 +468,11 @@ std::unique_ptr<pksm::PKX> FromGameBoy(const pksm::PKX& source, pksm::Sav& to)
     pk3->species(pk2->species());
     pk3->TID(pk2->TID());
     pk3->SID(0);
-    pk3->version(to.version());
-    pk3->PID(pksm::PKX::getRandomPID(pk2->species(), pk2->gender(), to.version(), pk2->nature(), (u8)pk2->alternativeForm(), 0,
+    // (Its origin a Gen 3 game: the one it arrives in, or, going on to a later generation, FireRed,
+    // whose PID keeps gender, nature and Unown's letter; a Gen 6 game's would only keep shininess.)
+    const pksm::GameVersion origin = GenNumber(to.generation()) == 3 ? to.version() : pksm::GameVersion::FR;
+    pk3->version(origin);
+    pk3->PID(pksm::PKX::getRandomPID(pk2->species(), pk2->gender(), origin, pk2->nature(), (u8)pk2->alternativeForm(), 0,
                                      pk2->shiny(), pk3->TSV(), 0, Generation::THREE));
     pk3->experience(pk2->experience());
     pk3->otFriendship(pk2->otFriendship());
@@ -597,6 +602,7 @@ void BankSet(Save& s, int box, int slot, std::unique_ptr<pksm::PKX> pk)
         const std::string f = BankFileFound(s.d->path, box, slot);
         if (!f.empty()) ReadFile(f, before);
         s.d->touched.push_back({ place, before });
+        s.d->touchedPath[place] = f;
     }
     s.d->slots[(size_t)place] = std::move(pk);
     s.d->changed = true;
@@ -740,16 +746,18 @@ void BankUndoAdding(Save& s)
         if (!now.empty()) fs::remove(P(now), ec);
         if (!t.second.empty())
         {
-            // (Its old file's generation, from its length: as PKHeX's box forms are.)
+            // (Under its own old name: by its length alone a .pk5 would come back a .pk4, a .pk7 a .pk6.)
+            const auto known = s.d->touchedPath.find(t.first);
             const size_t n = t.second.size();
             const int g = n == 69 || n == 59 ? 1 : n == 73 || n == 63 ? 2 : n == 80 ? 3 : n == 232 ? 6 : 4;
-            WriteAtomic(BankFile(s.d->path, box, slot, g), t.second.data(), n);
+            WriteAtomic(known != s.d->touchedPath.end() && !known->second.empty() ? known->second : BankFile(s.d->path, box, slot, g), t.second.data(), n);
         }
     }
 }
 void BankDone(Save& s)
 {
     s.d->touched.clear();
+    s.d->touchedPath.clear();
     s.d->changed = false;
 }
 bool WriteSave(Save& s, std::string& error)
@@ -971,6 +979,8 @@ bool Relocate(Save& save, int box, int slot, int toBox, int toSlot, std::string&
     if (save.ReadOnly()) { error = "THE HUB CANNOT CHANGE THIS GAME'S SAVE YET"; return false; }
     if (box == toBox && slot == toSlot) return true;
     if (toBox == PARTY && (save.IsBank() || toSlot != (int)save.d->sav->partyCount())) { error = "A PARTY FILLS FROM THE FIRST PLACE"; return false; }
+    // (Six is a full party: a seventh would be written past it, over the save's other data.)
+    if (toBox == PARTY && toSlot >= 6) { error = "THE PARTY IS FULL"; return false; }
     if (toBox != PARTY && save.d->At(toBox, toSlot)) { error = "THAT PLACE IS TAKEN"; return false; }
     if (toBox != PARTY && (toBox < 0 || toBox >= save.Boxes() || toSlot < 0 || toSlot >= save.d->Slots())) { error = "NO SUCH PLACE"; return false; }
     if (box == PARTY && toBox != PARTY && LastInParty(save, box, slot)) { error = "IT IS THE LAST POKEMON IN YOUR PARTY: A GAME NEEDS ONE"; return false; }

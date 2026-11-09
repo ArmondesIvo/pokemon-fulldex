@@ -3,6 +3,12 @@
 
 ## Unreleased
 
+- **Safer saves (a review's findings).** A failed Save in My PC keeps your changes instead of dropping
+  them; the party can never get a seventh Pokémon; the Bank, put back after a failed save, keeps each
+  Pokémon's own format (Gen 5 and 7 ones came back as Gen 4 and 6); Import All copies one save a game
+  (the newest) and never writes one backup over another; Move Pokémon and My PC read saves again after
+  an import; copies through Shizuku that fail are reported, never left half-copied.
+- **GBA widescreen: sprites read past the backgrounds' table** when shown in the sides; fixed.
 - **My PC: trade evolutions between Red, Blue, Yellow, Gold, Silver and Crystal**, as the Time Capsule
   did (a Kadabra moved from Red to Crystal arrives an Alakazam), and **an evolution scene** when a
   Pokémon evolves on its way: its shape and the new one's in white, swapping faster, a flash, sparkles.

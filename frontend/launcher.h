@@ -2506,6 +2506,9 @@ inline void PcRenameDone(const std::string& t); // (My PC, below)
 inline bool PcBack(); // (My PC, below)
 inline void PcReopen();
 inline void PcRefresh();
+// (Counted up whenever a save is replaced from outside the pages that hold saves open, so they
+// read theirs again before showing or writing them.)
+inline int& ImportedSaves() { static int n = 0; return n; }
 inline void KeyboardDone(int& tab, std::string& note)
 {
     GlassFocus& F = Focus();
@@ -3359,7 +3362,8 @@ inline std::vector<std::string> ImportSavesIn(const std::string& dir)
         if (!e.is_regular_file(ec)) continue;
         const std::string n = e.path().filename().string(), l = ImportLower(n);
         const bool sav = l.size() > 4 && (l.compare(l.size() - 4, 4, ".sav") == 0 || l.compare(l.size() - 4, 4, ".srm") == 0 || l.compare(l.size() - 4, 4, ".sa1") == 0);
-        if (sav && l.find(".bak") == std::string::npos) out.push_back(e.path().string());
+        // (".part-": a copy not finished, see SaveImport.java.)
+        if (sav && l.find(".bak") == std::string::npos && l.rfind(".part-", 0) != 0) out.push_back(e.path().string());
     }
     std::sort(out.begin(), out.end());
     return out;
@@ -3493,7 +3497,10 @@ inline bool ImportOne(const ImportFile& f, std::string& err)
         const time_t t = time(nullptr);
         strftime(when, sizeof when, "%Y%m%d-%H%M%S", localtime(&t));
         const std::string stem = f.key.substr(0, f.key.rfind('.'));
-        std::filesystem::copy_file(f.target, dir + "/" + stem + "-before-import-" + when + ".sav", std::filesystem::copy_options::overwrite_existing, ec);
+        // (Never over another backup: two in one second get -2, -3...)
+        std::string to = dir + "/" + stem + "-before-import-" + when + ".sav";
+        for (int k = 2; std::filesystem::exists(to, ec) && k < 100; k++) to = dir + "/" + stem + "-before-import-" + when + "-" + std::to_string(k) + ".sav";
+        std::filesystem::copy_file(f.target, to, std::filesystem::copy_options::none, ec);
         if (ec) { err = "could not back up the save there"; return false; }
     }
     std::filesystem::create_directories(std::filesystem::path(f.target).parent_path(), ec);
@@ -3571,7 +3578,15 @@ inline std::string ImportDo(int row, int act)
         for (const ImportFile& f : s.files)
             if (f.target.empty()) continue;
             else if (f.newerHere) kept += (kept.empty() ? "" : ", ") + f.game;
-            else todo.push_back(f);
+            else
+            {
+                // (Two saves for one game, Emerald.sav and Emerald.srm: only the one played last,
+                // or the older would be copied over the newer.)
+                std::error_code e1, e2;
+                auto same = std::find_if(todo.begin(), todo.end(), [&](const ImportFile& o) { return o.target == f.target; });
+                if (same == todo.end()) todo.push_back(f);
+                else if (std::filesystem::last_write_time(f.path, e1) > std::filesystem::last_write_time(same->path, e2) && !e1 && !e2) *same = f;
+            }
     }
     else
     {
@@ -3597,7 +3612,13 @@ inline std::string ImportDo(int row, int act)
     s.msg = std::to_string(done) + (done == 1 ? " save" : " saves") + " imported; any save that was there was backed up first, in the backups folder." + (fails.empty() ? "" : " Not imported: " + fails + ".")
           + (kept.empty() ? "" : " Kept, as yours here are newer: " + kept + " (choose one alone to replace it anyway).");
     // (The lists of saves read again: the dates and what each game has now.)
-    if (done) { const std::string dir = s.folder, where = s.where; ImportList(dir, where); }
+    if (done)
+    {
+        const std::string dir = s.folder, where = s.where;
+        ImportList(dir, where);
+        // (Saves held open elsewhere, My PC's and the Pokédex's, read again: they are older now.)
+        ImportedSaves()++;
+    }
     Hub().version++;
     return "";
 }
@@ -3608,6 +3629,10 @@ inline void MoverShow(bool open)
     m.msg.clear();
     m.swapping = false;
     if (open && m.from == m.to) m.to = m.from == 0 ? 1 : 0;
+#ifdef SSR_POKEMON_HUB
+    // (Read again on opening: My PC, a game played, or an import may have written them since.)
+    if (open) MoverOpenSaves(true);
+#endif
     Hub().version++;
 }
 // A game's save and the cloud, for Home: 0 not there (or cloud saves off), 1 kept in the cloud, 2 changed on both.
@@ -5366,6 +5391,8 @@ inline void PcOpenSide(int i, bool again = false)
 }
 inline void PcReopen() { PcOpenSide(0, true); PcOpenSide(1, true); Pc().pending = 0; Hub().version++; }
 inline void PcRefresh() { if (Pc().ready && !Pc().pending) PcReopen(); }
+// (Saves replaced by an import since My PC read them: read again, unless changes are waiting.)
+inline void PcCheckImported() { static int seen = 0; if (seen != ImportedSaves()) { seen = ImportedSaves(); PcRefresh(); } }
 // (The first time: the Bank on the left, the first game on the right.)
 inline void PcEnsure()
 {
@@ -5402,8 +5429,9 @@ inline bool PcSave()
     std::string err;
     std::vector<std::string> backups;
     bool ok = P.s[0].save && P.s[1].save && PokemonHub::Commit(*P.s[0].save, *P.s[1].save, err, &backups);
-    P.msg = ok ? std::to_string(P.pending) + (P.pending == 1 ? " change" : " changes") + " saved. Both saves were backed up first." : "Could not save: " + err;
-    PcReopen();
+    P.msg = ok ? std::to_string(P.pending) + (P.pending == 1 ? " change" : " changes") + " saved. Both saves were backed up first." : "Could not save: " + err + ". Your changes are still here: Save again, or Undo All.";
+    // (Failed: the changes kept as they are, not read over, so nothing done is lost.)
+    if (ok) PcReopen();
     return ok;
 }
 // A Pokémon from one place to a free one: in the same game, or to the other panel's game.
@@ -5936,6 +5964,7 @@ inline void DrawPcPage(Canvas& c, bool solid, float u, int L, int R, int top, in
     F.rVis = 0; F.pdY = c.h; F.prow = 0; F.pact = -1;
 #ifdef SSR_POKEMON_HUB
     PcEnsure();
+    PcCheckImported();
 #endif
     const uint32_t text = PcPal::Ink, hint = PcPal::Hint;
     // (PKVault's page: cream, in a terracotta frame.)
@@ -6013,7 +6042,7 @@ inline void PcTap(const PcHit& h)
     {
     case PC_GAME:
         if (h.value == S.game) break;
-        if (P.pending) PcSave(); // (another game: what was changed is saved first)
+        if (P.pending && !PcSave()) break; // (another game: what was changed is saved first; not saved, it stays)
         if (h.value == P.s[1 - h.side].game) std::swap(P.s[0].game, P.s[1].game), std::swap(P.s[0].box, P.s[1].box); // (the same game on both sides: they change places)
         else { S.game = h.value; S.box = 0; }
         P.selSide = -1;
