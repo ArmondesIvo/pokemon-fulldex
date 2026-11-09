@@ -3242,6 +3242,11 @@ struct DexState
     int sel = 0, scroll = 0, scrollMax = 0;
     bool down = false, drag = false;
     int downX = 0, downY = 0, downScroll = 0;
+    // (The games counted: their saves' paths, none for all of them; the strip of their chips, how
+    // far it is scrolled sideways, and where it is, for a finger.)
+    std::vector<std::string> only;
+    int chipScroll = 0, chipMax = 0, stripY = 0, stripH = 0, downChip = 0;
+    bool onStrip = false;
     float u = 1;
 };
 inline DexState& Dex() { static DexState d; return d; }
@@ -3257,6 +3262,7 @@ inline void DexLoad(bool again = false)
     d.games = 0;
     for (const MoverGame& g : MoverGames())
     {
+        if (!d.only.empty() && std::find(d.only.begin(), d.only.end(), g.path) == d.only.end()) continue;
         std::string err;
         if (auto sv = OpenMoverGame(g, err))
         {
@@ -6005,7 +6011,7 @@ inline bool PcBack()
 // a heading with its region and counts; the chosen one's card on the right. A card: its number,
 // its picture (a silhouette when it was never seen), a Poké Ball when caught, a box when one is
 // in a game or the Bank now, a sparkle for a shiny. Touch only: a tap chooses, a drag scrolls.
-enum { DEX_FILTER = 1, DEX_CARD };
+enum { DEX_FILTER = 1, DEX_CARD, DEX_GAME };
 inline std::vector<PcHit>& DexHits() { static std::vector<PcHit> h; return h; }
 inline const char* DexRegion(int g) { static const char* r[] = { "", "Kanto", "Johto", "Hoenn", "Sinnoh", "Unova", "Kalos", "Alola" }; return g >= 1 && g <= 7 ? r[g] : ""; }
 inline const char* DexRoman(int g) { static const char* r[] = { "", "I", "II", "III", "IV", "V", "VI", "VII" }; return g >= 1 && g <= 7 ? r[g] : ""; }
@@ -6075,8 +6081,60 @@ inline void DrawDexPage(Canvas& c, float u, int L, int R, int top, int bottom)
         if (bx > x + (int)(10 * u))
             for (const auto& e : b) bx += DexBadge(c, bx, top + barH / 2, e.first, e.second.first, e.second.second, u) + (int)(5 * u);
     }
+    // The games counted: All, or any of them (a tap each, on or off), in a strip that a finger
+    // drags sideways when they are more than fit.
+    const int stripH = (int)(38 * u), sy = top + barH + gap;
+    {
+        PcCard(c, L, sy, R - L, stripH, 10 * u, u);
+        d.stripY = sy; d.stripH = stripH;
+        const int x0 = L + (int)(8 * u), x1 = R - (int)(8 * u), chH = stripH - (int)(10 * u), cy = sy + (int)(5 * u);
+        // (What is drawn past its ends put back after: the pixels of its band kept now.)
+        std::vector<uint32_t> band(c.px.begin() + (size_t)sy * c.w, c.px.begin() + (size_t)(sy + stripH) * c.w);
+        const std::vector<MoverGame> gs = MoverGames();
+        int cx = x0 - d.chipScroll;
+        auto chip = [&](const std::string& label, bool on, int value) {
+            const int cw = GW(label, 12.5f * u, true) + (int)(22 * u);
+            if (cx + cw > x0 && cx < x1)
+            {
+                PcButton(c, cx, cy, cw, chH, 8 * u, on, u);
+                GT(c, cx + (int)(11 * u), cy + chH * 0.5f, label, 12.5f * u, on ? PcPal::OnPrimary : text, true);
+                const int hx = std::max(cx, x0), hw = std::min(cx + cw, x1) - hx;
+                if (hw > 0) hits.push_back({ hx, cy, hw, chH, DEX_GAME, 0, value });
+            }
+            cx += cw + (int)(6 * u);
+        };
+        chip("All Games", d.only.empty(), -1);
+        for (int i = 0; i < (int)gs.size(); i++)
+        {
+            std::string n = PcShortName(gs[i].name);
+            for (const char* pre : { "Pok\xC3\xA9mon ", "POK\xC3\x89MON ", "Pokemon ", "POKEMON " })
+                if (n.rfind(pre, 0) == 0 && n.size() > strlen(pre)) { n = n.substr(strlen(pre)); break; }
+            chip(n, std::find(d.only.begin(), d.only.end(), gs[i].path) != d.only.end(), i);
+        }
+        d.chipMax = std::max(0, cx + d.chipScroll - (int)(6 * u) - x1);
+        d.chipScroll = std::max(0, std::min(d.chipScroll, d.chipMax));
+        for (int yy = 0; yy < stripH; yy++)
+            for (int xx = 0; xx < c.w; xx++)
+                if (xx < x0 || xx >= x1) c.px[(size_t)(sy + yy) * c.w + xx] = band[(size_t)yy * c.w + xx];
+        // (More beyond an end: a fade there, the card's colour.)
+        for (int side = 0; side < 2; side++)
+        {
+            if (side == 0 ? d.chipScroll <= 0 : d.chipScroll >= d.chipMax) continue;
+            const int fw = (int)(22 * u);
+            for (int yy = cy; yy < cy + chH; yy++)
+                for (int k = 0; k < fw; k++)
+                {
+                    const int xx = side == 0 ? x0 + k : x1 - 1 - k;
+                    if (xx < 0 || xx >= c.w) continue;
+                    uint32_t& p = c.px[(size_t)yy * c.w + xx];
+                    const float a = 1.0f - (float)k / fw;
+                    auto mix = [&](int sh) { const int q = (p >> sh) & 255, t = (PcPal::Card >> sh) & 255; return (uint32_t)(q + (t - q) * a) << sh; };
+                    p = 0xFF000000u | mix(16) | mix(8) | mix(0);
+                }
+        }
+    }
     // The chosen one's card, on the right.
-    const int gy = top + barH + gap, gh = bottom - gy;
+    const int gy = sy + stripH + gap, gh = bottom - gy;
     const int dw = std::min((int)(270 * u), (R - L) / 3), gw = R - L - dw - gap;
 #ifdef SSR_POKEMON_HUB
     if (d.sel <= 0 || d.sel >= (int)d.marks.size() || std::find(d.list.begin(), d.list.end(), d.sel) == d.list.end()) d.sel = d.list.empty() ? 0 : d.list.front();
@@ -6230,12 +6288,13 @@ inline void DrawDexPage(Canvas& c, float u, int L, int R, int top, int bottom)
 inline void DexPointer(int phase, int x, int y)
 {
     DexState& d = Dex();
-    if (phase == 0) { d.down = true; d.drag = false; d.downX = x; d.downY = y; d.downScroll = d.scroll; return; }
+    if (phase == 0) { d.down = true; d.drag = false; d.downX = x; d.downY = y; d.downScroll = d.scroll; d.downChip = d.chipScroll; d.onStrip = y >= d.stripY && y < d.stripY + d.stripH; return; }
     if (phase == 1)
     {
         if (!d.down) return;
-        if (!d.drag && std::abs(y - d.downY) > (int)(10 * d.u)) d.drag = true;
-        if (d.drag) { d.scroll = std::max(0, std::min(d.scrollMax, d.downScroll - (y - d.downY))); Hub().version++; }
+        if (!d.drag && (d.onStrip ? std::abs(x - d.downX) : std::abs(y - d.downY)) > (int)(10 * d.u)) d.drag = true;
+        if (d.drag && d.onStrip) { d.chipScroll = std::max(0, std::min(d.chipMax, d.downChip - (x - d.downX))); Hub().version++; }
+        else if (d.drag) { d.scroll = std::max(0, std::min(d.scrollMax, d.downScroll - (y - d.downY))); Hub().version++; }
         return;
     }
     const bool was = d.drag;
@@ -6248,6 +6307,20 @@ inline void DexPointer(int phase, int x, int y)
         if (x < h.x || x >= h.x + h.w || y < h.y || y >= h.y + h.h) continue;
         if (h.kind == DEX_FILTER) { d.filter = h.value; DexLoad(true); d.scroll = 0; }
         else if (h.kind == DEX_CARD) d.sel = h.value;
+        else if (h.kind == DEX_GAME)
+        {
+            // (All: every game again. A game: on or off; none left on is all of them.)
+            const std::vector<MoverGame> gs = MoverGames();
+            if (h.value < 0) d.only.clear();
+            else if (h.value < (int)gs.size())
+            {
+                const auto it = std::find(d.only.begin(), d.only.end(), gs[(size_t)h.value].path);
+                if (it == d.only.end()) d.only.push_back(gs[(size_t)h.value].path);
+                else d.only.erase(it);
+            }
+            DexLoad(true);
+            d.scroll = 0;
+        }
         Hub().version++;
         return;
     }
