@@ -10,6 +10,14 @@
 //   GET|PUT|DELETE /saves/<name>        a save of the signed-in player's (the app's cloud saves,
 //   GET|PUT|DELETE /saves/<name>.json   frontend/cloud_saves.cpp: the WebDAV way, by GET and PUT)
 //                  kept in the private R2 bucket SAVES, under users/<their Google id>/<name>.
+//   GET  /users                          the other players: "id<TAB>name<TAB>email" lines
+//   GET  /trades                         the player's open trades (and finished ones not yet put away)
+//   POST /trades                         a new one: "to<TAB>id", then N "M<TAB>gen<TAB>data<TAB>place"
+//   POST /trades/<id>/counter            B: "pick<TAB>i", then N "M..." lines of theirs
+//   POST /trades/<id>/finish             A: "pick<TAB>i": done
+//   POST /trades/<id>/cancel             either, while open
+//   POST /trades/<id>/settled            this side's app has put its Pokémon where they go
+//   (Text, a line a thing, tab-separated: the app reads it without a JSON library.)
 //
 // Settings: GOOGLE_CLIENT_ID (a variable) and GOOGLE_CLIENT_SECRET (a secret), a Google OAuth
 // client of the "Web application" kind whose redirect address is <this worker>/auth/callback.
@@ -26,6 +34,8 @@ export default {
       if (url.pathname === "/auth/signout" && request.method === "POST") return await signout(request, env);
       if (url.pathname === "/me" && request.method === "GET") return await me(request, env);
       if (url.pathname.startsWith("/saves/")) return await saves(request, url, env);
+      if (url.pathname === "/users" && request.method === "GET") return await users(request, env);
+      if (url.pathname === "/trades" || url.pathname.startsWith("/trades/")) return await trades(request, url, env);
       if (url.pathname === "/") return info("PokeHub", HOME);
       if (url.pathname === "/privacy") return info("PokeHub: Privacidade", PRIVACY);
       return text("Not found", 404);
@@ -216,4 +226,92 @@ async function saves(request, url, env) {
     return json({ ok: true });
   }
   return json({ error: "method" }, 405);
+}
+
+// ---- Online trades -----------------------------------------------------------------------
+function lines(body) { return new Response(body, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } }); }
+const clean = (s) => String(s || "").replace(/[\t\r\n]/g, " ");
+async function users(request, env) {
+  const s = await session(request, env);
+  if (!s) return text("not signed in", 401);
+  const r = await env.DB.prepare("SELECT id, name, email FROM users WHERE id != ?1 ORDER BY name, email").bind(s.id).all();
+  return lines(r.results.map((u) => `${u.id}\t${clean(u.name)}\t${clean(u.email)}`).join("\n") + "\n");
+}
+// A side's Pokémon as sent: N lines of "M<TAB>gen<TAB>base64<TAB>place", each checked.
+function parseMons(rows, want) {
+  const mons = [];
+  for (const l of rows) {
+    const f = l.split("\t");
+    if (f[0] !== "M") continue;
+    const gen = Number(f[1]), data = f[2] || "", place = f[3] || "";
+    if (!(gen >= 1 && gen <= 7) || !/^[A-Za-z0-9+/=]{20,600}$/.test(data) || place.length > 800 || /[\t\r\n]/.test(place)) return null;
+    mons.push(`${gen}\t${data}\t${place}`);
+  }
+  if (mons.length < 1 || mons.length > 6 || (want && mons.length !== want)) return null;
+  return mons;
+}
+async function trades(request, url, env) {
+  const s = await session(request, env);
+  if (!s) return text("not signed in", 401);
+  const now = Math.floor(Date.now() / 1000);
+  if (url.pathname === "/trades" && request.method === "GET") {
+    const r = await env.DB.prepare(
+      "SELECT t.*, ua.name AS a_name, ua.email AS a_email, ub.name AS b_name, ub.email AS b_email FROM trades t " +
+      "JOIN users ua ON ua.id = t.a_user JOIN users ub ON ub.id = t.b_user " +
+      "WHERE (t.a_user = ?1 AND t.a_settled = 0) OR (t.b_user = ?1 AND t.b_settled = 0) ORDER BY t.updated DESC LIMIT 50"
+    ).bind(s.id).all();
+    let out = "";
+    for (const t of r.results) {
+      const mine = t.a_user === s.id ? "a" : "b";
+      const other = mine === "a" ? { name: t.b_name, email: t.b_email } : { name: t.a_name, email: t.a_email };
+      out += `T\t${t.id}\t${mine}\t${t.state}\t${t.count}\t${clean(other.name)}\t${clean(other.email)}\t${t.b_pick}\t${t.a_pick}\t${t.updated}\t${t.cancelled_by === s.id ? 1 : 0}\n`;
+      // (A's are seen by both; B's by A once B has put them on the table. A place only to its owner.)
+      const side = (letter, text, owner) => (text ? text.split("\n") : []).forEach((m, i) => {
+        const [gen, data, place] = m.split("\t");
+        out += `${letter}\t${i}\t${gen}\t${data}\t${owner === s.id ? place || "" : ""}\n`;
+      });
+      side("A", t.a_mons, t.a_user);
+      if (t.state !== "offered" || mine === "b") side("B", t.b_mons, t.b_user);
+    }
+    return lines(out);
+  }
+  const rows = (await request.text()).split("\n");
+  if (url.pathname === "/trades" && request.method === "POST") {
+    const to = (rows[0] || "").split("\t");
+    if (to[0] !== "to" || !to[1] || to[1] === s.id) return text("bad partner", 400);
+    if (!(await env.DB.prepare("SELECT id FROM users WHERE id = ?1").bind(to[1]).first())) return text("no such player", 404);
+    const mons = parseMons(rows, 0);
+    if (!mons) return text("bad Pokémon", 400);
+    const id = randomHex(12);
+    await env.DB.prepare("INSERT INTO trades (id, a_user, b_user, state, count, a_mons, created, updated) VALUES (?1, ?2, ?3, 'offered', ?4, ?5, ?6, ?6)")
+      .bind(id, s.id, to[1], mons.length, mons.join("\n"), now).run();
+    return lines(id + "\n");
+  }
+  const m = url.pathname.match(/^\/trades\/([0-9a-f]{24})\/(counter|finish|cancel|settled)$/);
+  if (!m || request.method !== "POST") return text("Not found", 404);
+  const t = await env.DB.prepare("SELECT * FROM trades WHERE id = ?1").bind(m[1]).first();
+  if (!t || (t.a_user !== s.id && t.b_user !== s.id)) return text("no such trade", 404);
+  const isA = t.a_user === s.id;
+  const pick = Number(((rows[0] || "").split("\t"))[1]);
+  if (m[2] === "counter") {
+    if (isA || t.state !== "offered") return text("not now", 409);
+    if (!(pick >= 0 && pick < t.count)) return text("bad pick", 400);
+    const mons = parseMons(rows, t.count);
+    if (!mons) return text(`put ${t.count} on the table`, 400);
+    await env.DB.prepare("UPDATE trades SET state = 'countered', b_mons = ?1, b_pick = ?2, updated = ?3 WHERE id = ?4 AND state = 'offered'")
+      .bind(mons.join("\n"), pick, now, t.id).run();
+  } else if (m[2] === "finish") {
+    if (!isA || t.state !== "countered") return text("not now", 409);
+    if (!(pick >= 0 && pick < t.count)) return text("bad pick", 400);
+    await env.DB.prepare("UPDATE trades SET state = 'done', a_pick = ?1, updated = ?2 WHERE id = ?3 AND state = 'countered'").bind(pick, now, t.id).run();
+  } else if (m[2] === "cancel") {
+    if (t.state !== "offered" && t.state !== "countered") return text("not now", 409);
+    await env.DB.prepare("UPDATE trades SET state = 'cancelled', cancelled_by = ?1, updated = ?2 WHERE id = ?3 AND state IN ('offered', 'countered')").bind(s.id, now, t.id).run();
+  } else {
+    // settled: this side's app has its Pokémon back, or the one it got. Both: the trade is gone.
+    if (t.state !== "done" && t.state !== "cancelled") return text("not now", 409);
+    await env.DB.prepare(`UPDATE trades SET ${isA ? "a_settled" : "b_settled"} = 1 WHERE id = ?1`).bind(t.id).run();
+    await env.DB.prepare("DELETE FROM trades WHERE id = ?1 AND a_settled = 1 AND b_settled = 1").bind(t.id).run();
+  }
+  return lines("ok\n");
 }
