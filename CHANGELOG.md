@@ -3,6 +3,10 @@
 
 ## Unreleased
 
+- **My PC: Gen 1 and 2 Pokémon go to the Game Boy Advance games and on.** Red, Blue, Yellow, Gold,
+  Silver and Crystal Pokémon can now be moved to Ruby, Sapphire, Emerald, FireRed and LeafGreen (and
+  from there to Gen 4 to 6), keeping their level, moves, nickname, trainer, shininess and gender; their
+  DVs become IVs twice as big. The Gen 1 and 2 games are also called by their names instead of "?".
 - **RetroAchievements: a wrong clock is named when logging in fails.** A device whose date is
   wrong (a Switch set years ahead, often) cannot check the server's certificate, and the settings
   only said LOGIN FAILED. They now say CHECK THE CLOCK, and the message asks whether the date and

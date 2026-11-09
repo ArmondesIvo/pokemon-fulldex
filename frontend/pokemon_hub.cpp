@@ -1,11 +1,14 @@
 // The Pokémon hub (pokemon_hub.h) on PKSM-Core.
 #include "pokemon_hub.h"
 
+#include "pkx/PK2.hpp"
+#include "pkx/PK3.hpp"
 #include "pkx/PKX.hpp"
 #include "sav/Sav.hpp"
 #include "utils/i18n.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -96,6 +99,13 @@ const TradeEvo* EvolutionFor(const pksm::PKX& pk, const pksm::Sav& to, int trade
 std::string GameNameOf(const pksm::Sav& s)
 {
     const GameVersion v = s.version();
+    if (v == GameVersion::RD || v == GameVersion::GN || v == GameVersion::BU) return "Red / Blue";
+    if (v == GameVersion::YW) return "Yellow";
+    if (v == GameVersion::GD || v == GameVersion::SV) return "Gold / Silver";
+    if (v == GameVersion::C) return "Crystal";
+    // (A save of the first two generations that PKSM-Core cannot tell apart further.)
+    if (s.generation() == Generation::ONE) return "Red / Blue / Yellow";
+    if (s.generation() == Generation::TWO) return "Gold / Silver / Crystal";
     if (v == GameVersion::S || v == GameVersion::R) return "Ruby / Sapphire";
     if (v == GameVersion::E) return "Emerald";
     if (v == GameVersion::FR || v == GameVersion::LG) return "FireRed / LeafGreen";
@@ -422,6 +432,72 @@ void Evolve(pksm::PKX& pk, const TradeEvo& e, int generation)
 namespace
 {
 // The Pokémon as it would arrive, and the check of it. needRoom: a free place in the boxes too.
+// A Gen 1 or 2 Pokémon brought straight into Ruby, Sapphire, Emerald, FireRed or LeafGreen (and on
+// from there, as a Gen 3 one, to Gen 4 to 6): no game ever did it, so this is the Hub's own way,
+// keeping all it can (PKSM-Core has only the way back, PK3::convertToG2, and Sun and Moon's).
+//  - Its DVs (0 to 15) become IVs (0 to 31) twice as big, plus one: the strongest stays the strongest.
+//  - Its shininess, gender and Unown letter, kept by choosing its PID (Gen 3 reads them from it).
+//  - Its nature, as Poké Transporter did: its experience, modulo 25.
+//  - Its stat experience (up to 65535) becomes EVs by the square root (PK3::convertToG2 squares
+//    them), at most 510 in all.
+//  - Level, moves and their PP, nickname, OT and ID, friendship, Pokérus, and a Gen 2 one's item.
+// It is "met in a trade" (location 254) in the game it arrives in, at the level it has.
+std::unique_ptr<pksm::PKX> FromGameBoy(const pksm::PKX& source, pksm::Sav& to)
+{
+    std::unique_ptr<pksm::PK2> own;
+    const pksm::PK2* pk2 = nullptr;
+    if (GenNumber(source.generation()) == 1)
+    {
+        own = source.convertToG2(to);
+        pk2 = own.get();
+    }
+    else
+        pk2 = static_cast<const pksm::PK2*>(&source);
+    if (!pk2) return nullptr;
+    auto pk3 = pksm::PKX::getPKM<Generation::THREE>(nullptr, pksm::PK3::BOX_LENGTH);
+    if (!pk3) return nullptr;
+    pk3->language(pk2->language());
+    pk3->species(pk2->species());
+    pk3->TID(pk2->TID());
+    pk3->SID(0);
+    pk3->version(to.version());
+    pk3->PID(pksm::PKX::getRandomPID(pk2->species(), pk2->gender(), to.version(), pk2->nature(), (u8)pk2->alternativeForm(), 0,
+                                     pk2->shiny(), pk3->TSV(), 0, Generation::THREE));
+    pk3->experience(pk2->experience());
+    pk3->otFriendship(pk2->otFriendship());
+    // (A Gen 1 Pokémon's "item" is its catch rate, which only the Time Capsule took for one.)
+    if (GenNumber(source.generation()) == 2) pk3->heldItem(pk2->heldItem());
+    using pksm::Stat;
+    for (Stat s : { Stat::HP, Stat::ATK, Stat::DEF, Stat::SPD, Stat::SPATK, Stat::SPDEF })
+        pk3->iv(s, (u8)(pk2->iv(s == Stat::SPDEF ? Stat::SPATK : s) * 2 + 1));
+    int total = 0;
+    for (Stat s : { Stat::HP, Stat::ATK, Stat::DEF, Stat::SPD, Stat::SPATK, Stat::SPDEF })
+    {
+        int e = (int)std::sqrt((double)pk2->ev(s == Stat::SPDEF ? Stat::SPATK : s));
+        e = std::min({ e, 255, 510 - total });
+        total += e;
+        pk3->ev(s, (u16)e);
+    }
+    for (u8 i = 0; i < 4; i++)
+    {
+        pk3->move(i, pk2->move(i));
+        pk3->PPUp(i, pk2->PPUp(i));
+        pk3->PP(i, pk2->PP(i));
+    }
+    pk3->setAbility(0);
+    pk3->ball(pksm::Ball::Poke);
+    pk3->pkrsStrain(pk2->pkrsStrain());
+    pk3->pkrsDays(pk2->pkrsDays());
+    pk3->otGender(pksm::Gender::Male);
+    pk3->metLevel(pk2->level());
+    pk3->metLocation(0xFE);
+    pk3->nickname(pk2->nickname());
+    pk3->otName(pk2->otName());
+    pk3->fixMoves();
+    pk3->refreshChecksum();
+    if (GenNumber(to.generation()) == 3) return pk3;
+    return to.transfer(*pk3);
+}
 std::unique_ptr<pksm::PKX> ArrivingPk(const pksm::PKX& source, int a, bool readOnly, const Save& to, Check& c, bool needRoom, int tradedFor)
 {
     auto pk = BoxForm(source);
@@ -441,14 +517,6 @@ std::unique_ptr<pksm::PKX> ArrivingPk(const pksm::PKX& source, int a, bool readO
         return pk;
     }
     const int b = to.Generation();
-    // (Red, Blue, Yellow and Gold, Silver, Crystal traded both ways, by the Time Capsule; from them,
-    // Pokémon only ever went on to Sun and Moon, by Poké Transporter.)
-    if (a <= 2 && b >= 3 && b < 7)
-    {
-        c.verdict = Verdict::NotInGame;
-        c.reason = "GEN 1 AND 2 POKEMON ONLY WENT ON TO SUN AND MOON, AS IN THE ORIGINAL GAMES";
-        return nullptr;
-    }
     if (b < a && !(a <= 2 && b <= 2))
     {
         c.verdict = Verdict::Backwards;
@@ -461,7 +529,9 @@ std::unique_ptr<pksm::PKX> ArrivingPk(const pksm::PKX& source, int a, bool readO
         c.reason = "EGGS CAN ONLY MOVE BETWEEN GAMES OF THE SAME GENERATION";
         return nullptr;
     }
-    auto arrives = to.d->sav->transfer(*pk);
+    // (Red, Blue, Yellow and Gold, Silver, Crystal traded both ways, by the Time Capsule; to Sun and
+    // Moon by Poké Transporter, PKSM-Core's; to Gen 3 to 6, by FromGameBoy.)
+    auto arrives = a <= 2 && b >= 3 && b < 7 ? FromGameBoy(*pk, *to.d->sav) : to.d->sav->transfer(*pk);
     if (!arrives) { c.verdict = Verdict::NotInGame; c.reason = "IT CANNOT GO TO " + Upper(to.GameName()); return nullptr; }
     const auto why = to.d->sav->invalidTransferReason(*arrives);
     if (why != pksm::Sav::BadTransferReason::OKAY)
@@ -479,7 +549,7 @@ std::unique_ptr<pksm::PKX> ArrivingPk(const pksm::PKX& source, int a, bool readO
         for (int j = 0; j < 4; j++) kept = kept || (int)arrives->move((u8)j) == m;
         if (!kept) c.losses.push_back("FORGETS " + MoveName(m) + (IsHm(m) ? " (HM)" : ""));
     }
-    if (pk->heldItem() != 0 && arrives->heldItem() != pk->heldItem())
+    if (a != 1 && pk->heldItem() != 0 && arrives->heldItem() != pk->heldItem())
         c.losses.push_back("LEAVES ITS " + ItemName(pk->heldItem()) + " BEHIND");
     if (const TradeEvo* e = EvolutionFor(*arrives, *to.d->sav, tradedFor))
     {
