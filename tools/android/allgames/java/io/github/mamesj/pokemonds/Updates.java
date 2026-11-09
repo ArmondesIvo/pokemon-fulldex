@@ -34,7 +34,7 @@ import java.util.Map;
 
 final class Updates {
     private static final String TAG = "PokemonDS";
-    private static final String TITLE = "Pokémon Fulldex updates";
+    private static final String TITLE = "Atualização do PokeHub";
     private static final String ASSET = "pokemon-ds-wide-android.apk";
     private static final String RELEASES = "https://api.github.com/repos/mamesj/pokemon-fulldex/releases?per_page=30";
     private static final String DOWNLOADS = "https://github.com/mamesj/pokemon-fulldex/releases/download/";
@@ -45,8 +45,54 @@ final class Updates {
     private Updates() {}
 
     private static final class Release {
-        String url, sumsUrl, page;
+        String url, sumsUrl, page, sha, version, notes;
         long updated, built;
+    }
+
+    // PokeHub's own updates: one small file (BuildInfo.UPDATE_URL, set when the APK is built) that
+    // names the newest APK, when it was built, and its SHA-256, made by tools/pokehub/publish_update.sh:
+    //   {"built": 1762700000, "version": "...", "apk": "pokehub-1762700000.apk", "sha256": "...", "notes": "..."}
+    // "apk" may be a whole address or one beside the file. Empty: no updates looked for at all.
+    static boolean ours() { return BuildInfo.UPDATE_URL != null && !BuildInfo.UPDATE_URL.isEmpty(); }
+    private static Release fromManifest(String json, String manifestUrl) throws Exception {
+        org.json.JSONObject m = new org.json.JSONObject(json);
+        Release r = new Release();
+        String apk = m.getString("apk");
+        r.url = apk.startsWith("https://") || apk.startsWith("http://") ? apk : manifestUrl.substring(0, manifestUrl.lastIndexOf('/') + 1) + apk;
+        r.built = Math.multiplyExact(m.getLong("built"), 1000L);
+        r.sha = m.getString("sha256").toLowerCase(java.util.Locale.US);
+        if (!r.sha.matches("[0-9a-f]{64}")) throw new IOException("bad sha256 in " + manifestUrl);
+        r.version = m.optString("version", "");
+        r.notes = m.optString("notes", "");
+        r.page = r.url;
+        return r;
+    }
+    private static void checkOurs(final Activity a, final boolean launch) {
+        new Thread(() -> {
+            try {
+                // (The file asked for afresh each time: no cache between it and the app.)
+                Release r = fromManifest(get(BuildInfo.UPDATE_URL + "?t=" + System.currentTimeMillis(), 64 << 10), BuildInfo.UPDATE_URL);
+                final boolean newer = r.built > BuildInfo.BUILT_AT;
+                Log.i(TAG, "update check (PokeHub): " + r.url + " built " + r.built + (newer ? " (newer)" : " (installed)"));
+                a.runOnUiThread(() -> {
+                    if (a.isFinishing() || a.isDestroyed()) return;
+                    if (launch && !newer) return;
+                    AlertDialog.Builder d = new AlertDialog.Builder(a).setTitle(TITLE).setNegativeButton(launch ? "Depois" : "Fechar", null);
+                    if (newer) {
+                        String what = r.notes.isEmpty() ? "" : "\n\nO que mudou:\n" + r.notes;
+                        d.setMessage("Tem uma versão nova do PokeHub" + (r.version.isEmpty() ? "" : " (" + r.version + ")") + ". Atualizar agora?"
+                                + what + "\n\nSeus jogos, saves e configurações continuam como estão.");
+                        d.setPositiveButton("Atualizar", (x, y) -> install(a, r, r.sha));
+                    } else {
+                        d.setMessage("Você já tem a versão mais nova do PokeHub.");
+                    }
+                    d.show();
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "Update check failed", e);
+                if (!launch) say(a, "Não deu para procurar atualização agora. Confira a internet e tente de novo mais tarde.");
+            }
+        }, "PokeHub-update-check").start();
     }
 
     // The list of releases: GitHub's, or for a test a list on the PC (tools/updater/fake_release.py),
@@ -195,6 +241,10 @@ final class Updates {
     // launch: only show a dialog when a new version is available (the list just opened).
     static void check(final Activity a) { check(a, false); }
     static void check(final Activity a, final boolean launch) {
+        if (ours()) { checkOurs(a, launch); return; }
+        // (PokeHub never asks the original project's GitHub: without a file of its own, nothing.)
+        if (launch) return;
+        if (true) { say(a, "As atualizações do PokeHub ainda não estão configuradas nesta versão."); return; }
         new Thread(() -> {
             try {
                 String list = releasesUrl(a);
@@ -252,19 +302,19 @@ final class Updates {
         // (Android 8 on: the player allows this app to install apps, once, in Android's settings.)
         if (Build.VERSION.SDK_INT >= 26 && !a.getPackageManager().canRequestPackageInstalls()) {
             new AlertDialog.Builder(a).setTitle(TITLE)
-                .setMessage("Android needs your permission for Pokémon Fulldex to install its update. "
-                        + "Turn on \"Allow from this source\" on the next page, then choose CHECK FOR UPDATES again.")
+                .setMessage("O Android precisa da sua permissão para o PokeHub instalar a atualização. "
+                        + "Ligue \"Permitir desta fonte\" na próxima tela, volte e toque em Atualizar de novo.")
                 .setPositiveButton("OK", (x, y) -> {
                     try {
                         a.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                                 Uri.parse("package:" + a.getPackageName())));
                     } catch (Exception e) { Log.e(TAG, "unknown sources settings", e); }
                 })
-                .setNegativeButton("Cancel", null).show();
+                .setNegativeButton("Cancelar", null).show();
             return;
         }
         final AlertDialog progress = new AlertDialog.Builder(a).setTitle(TITLE)
-            .setMessage("Downloading the new version...").setCancelable(false).show();
+            .setMessage("Baixando a versão nova...").setCancelable(false).show();
         new Thread(() -> {
             File apk = new File(a.getCacheDir(), "update.apk");
             String error = null;
@@ -285,7 +335,7 @@ final class Updates {
                 String got = hex(md.digest());
                 if (!got.equals(digest)) {
                     Log.e(TAG, "update checksum " + got + ", the release says " + digest);
-                    error = "The download was damaged (its checksum does not match the release's). Nothing was changed.";
+                    error = "O download veio com defeito (o SHA-256 não bate). Nada foi mudado.";
                 } else {
                     // The version installed now, kept where a PC sees it over USB.
                     File keep = new File(a.getExternalFilesDir(null), "update");
@@ -296,7 +346,7 @@ final class Updates {
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Update failed", e);
-                error = "The update could not be downloaded. Nothing was changed. (" + e.getMessage() + ")";
+                error = "Não deu para baixar a atualização. Nada foi mudado. (" + e.getMessage() + ")";
             } finally {
                 apk.delete();
             }
@@ -341,8 +391,8 @@ final class Updates {
                         } else if (status != PackageInstaller.STATUS_SUCCESS) {
                             prefs(c).edit().remove("pending_sha").apply();
                             if (status != PackageInstaller.STATUS_FAILURE_ABORTED)
-                                say(a, "Android did not install the update: " + i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
-                                        + "\n\nThe version you have is unchanged.");
+                                say(a, "O Android não instalou a atualização: " + i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+                                        + "\n\nA versão que você tem continua igual.");
                         }
                     }
                 };

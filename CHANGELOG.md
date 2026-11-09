@@ -3,6 +3,10 @@
 
 ## Unreleased
 
+- **PokeHub's own updates.** At each start the app reads a small file of PokeHub's own (built in with
+  SSR_UPDATE_URL) and, when a newer version is there, asks to update; Android installs it after a yes,
+  keeping saves and settings. `tools/pokehub/publish_update.sh` puts a new build online. Import Saves
+  is out of the settings.
 - **PokeHub.** The app is called PokeHub on the phone. It no longer looks for updates at the start
   (the Updates group stays, empty, until updates come from its own place); the Hub page and the
   themes (Theme Editor, My Themes, Theme Gallery) are out of the settings for now.

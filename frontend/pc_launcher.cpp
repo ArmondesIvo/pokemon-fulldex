@@ -3308,7 +3308,11 @@ bool Start(int& argc, char**& argv)
     if (directGame < 0) Updater::Check(true);
 #endif
 #endif
-    // (PokeHub: no look for updates at the start; they will come from its own place, later.)
+#ifdef __ANDROID__
+    // (PokeHub's own updates, at the start: a question only when there is a new version. Without
+    // an update file built in, the Java side looks for nothing.)
+    if (directGame < 0) JavaVoid("checkUpdatesQuiet");
+#endif
     DiscordPresence::InLauncher();
     for (;;)
     {

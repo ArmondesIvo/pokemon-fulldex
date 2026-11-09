@@ -9454,9 +9454,10 @@ inline std::vector<Setting> SettingsList()
     const std::vector<std::pair<std::string, std::string>> onOff = { { "1", "ON" }, { "0", "OFF" } };
     std::vector<Setting> l;
 #ifdef __ANDROID__
-    // (PokeHub: no updates from the original project's GitHub. Its own place comes later; the
-    // group stays, saying so.)
-    l.push_back({ nullptr, "NOTHING HERE YET", {}, "", "POKEHUB'S UPDATES WILL COME FROM ITS OWN PLACE, LATER." });
+    // (PokeHub's own updates, from the file tools/pokehub/publish_update.sh puts online; never the
+    // original project's GitHub. Also looked for once at each start.)
+    l.push_back({ "!updates", "CHECK FOR UPDATES", { { "", "CHECK" } }, "",
+                  "LOOKS FOR A NEW VERSION OF POKEHUB. ANDROID ASKS BEFORE INSTALLING IT. YOUR GAMES, SAVES AND SETTINGS STAY AS THEY ARE." });
 #elif defined(__APPLE__)
     l.push_back({ "!updates", "CHECK FOR UPDATES", { { "", "CHECK" } }, "",
                   "CHECKS GITHUB FOR A NEW VERSION. WHEN THERE IS ONE: CHOOSE AGAIN TO OPEN ITS PAGE AND DOWNLOAD IT THERE." });
@@ -9719,7 +9720,6 @@ struct SettingsPage
             items.push_back({ sg.key, sg.name, { { "", ">" } }, "", groupText[g].c_str() });
         }
         // (This fork: the pages that were in the sidebar, opened from here.)
-        items.push_back({ "!open_import", "IMPORT SAVES", { { "", ">" } }, "", "BRING IN SAVES FROM MY BOY AND MY OLDBOY." });
         items.push_back({ "!open_roms", "ROMS", { { "", ">" } }, "", "YOUR GAMES' FILES: RENAME, HIDE OR DELETE THEM." });
         items.push_back({ "!open_launcher", "LAUNCHER", { { "", ">" } }, "", "THE LOOK OF THE LIST: LAYOUT, MUSIC PLAYER, CAMERA CUTOUT." });
         selected = row;
