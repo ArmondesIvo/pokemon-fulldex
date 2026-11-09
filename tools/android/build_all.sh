@@ -219,10 +219,11 @@ XML
 "$BT/aapt2" compile --dir "$W/res" -o "$W/res.zip"
 "$BT/aapt2" link -o "$W/base.apk" -I "$JAR" --manifest tools/android/allgames/AndroidManifest.xml \
     --min-sdk-version 24 --target-sdk-version 34 "$W/res.zip"
-javac -nowarn --release 11 -cp "$JAR" -d "$W/classes" \
+LIBS="$(find tools/android/allgames/libs -name '*.jar' | sort | tr '\n' ':')"
+javac -nowarn --release 11 -cp "$JAR:$LIBS" -d "$W/classes" \
     "$W/BuildInfo.java" $(find "$DEPS/$SDL_NAME/android-project/app/src/main/java" tools/android/allgames/java -name '*.java') 2>&1
 [ -f "$W/classes/io/github/mamesj/pokemonds/GameActivity.class" ] || fail "the app's Java code did not compile"
-"$BT/d8" --release --min-api 24 --lib "$JAR" --output "$W/dex" $(find "$W/classes" -name '*.class')
+"$BT/d8" --release --min-api 24 --lib "$JAR" --output "$W/dex" $(find "$W/classes" -name '*.class') $(find tools/android/allgames/libs -name '*.jar' | sort)
 (cd "$W/dex" && zip -q -X "$W/base.apk" classes.dex)
 
 say "Packing and signing the APK"

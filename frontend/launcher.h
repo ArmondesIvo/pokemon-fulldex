@@ -3228,6 +3228,244 @@ inline std::string DexDo(int row, int act)
     }
     return "";
 }
+// IMPORT SAVES (the Hub's sixth row): another emulator's saves (My Boy's, My OldBoy's) copied
+// into Fulldex's, each to the game it belongs to, the save already there backed up first. Where
+// they are: the emulator's old public folder (MyBoy, MyOldBoy), Download, the ROM folder, a folder
+// the player chooses, or (Android 11 on, where no app may read another's Android/data) the
+// emulator's own folder read with Shizuku, when the player has it running (SaveImport.java).
+// Rows: 0 the emulator, 1 where to look, 2 import all, then one a save found.
+const int IMPORT_FIRST = 3;
+struct ImportHooks
+{
+    std::function<int()> shizukuState;   // -1 too old, 0 none, 1 not allowed yet, 2 allowed
+    std::function<void()> shizukuAsk;
+    std::function<std::string(const std::string&, const std::string&)> shizukuCopy;
+    std::function<void()> chooseFolder;
+    std::function<bool()> picking;
+    std::function<std::string()> picked; // once; "" none, "?" one the app cannot read
+    std::string storage;                 // the phone's own storage (/storage/emulated/0), "" elsewhere
+};
+inline ImportHooks& Importer() { static ImportHooks h; return h; }
+struct ImportFile { std::string path, name, key, game, target; };
+struct ImportState
+{
+    int emu = 0;            // 0 My Boy, 1 My OldBoy
+    bool searched = false;
+    std::string folder, where, msg;
+    std::vector<ImportFile> files;
+};
+inline ImportState& Import() { static ImportState s; return s; }
+inline const char* ImportEmuName(int e) { return e == 1 ? "My OldBoy" : "My Boy"; }
+inline const char* ImportPackage(int e) { return e == 1 ? "com.fastemulator.gbc" : "com.fastemulator.gba"; }
+inline std::string ImportLower(std::string x) { for (char& ch : x) ch = (char)tolower((unsigned char)ch); return x; }
+inline std::string ImportStem(const std::string& path)
+{
+    std::string n = path.substr(path.find_last_of("/\\") + 1);
+    const size_t dot = n.rfind('.');
+    return ImportLower(dot == std::string::npos ? n : n.substr(0, dot));
+}
+// The .sav files in a folder (not ours: Fulldex's own backups and before-launch copies left out).
+inline std::vector<std::string> ImportSavesIn(const std::string& dir)
+{
+    std::vector<std::string> out;
+    std::error_code ec;
+    if (dir.empty() || !std::filesystem::is_directory(dir, ec)) return out;
+    for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+    {
+        if (!e.is_regular_file(ec)) continue;
+        const std::string n = e.path().filename().string(), l = ImportLower(n);
+        const bool sav = l.size() > 4 && (l.compare(l.size() - 4, 4, ".sav") == 0 || l.compare(l.size() - 4, 4, ".srm") == 0 || l.compare(l.size() - 4, 4, ".sa1") == 0);
+        if (sav && l.find(".bak") == std::string::npos) out.push_back(e.path().string());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+// Which of the player's games a save belongs to: the ROM of the same name (as those emulators
+// name their saves), else, for a Pokémon save, the one game of its kind in the list.
+inline const Game* ImportGameFor(const std::string& savePath)
+{
+    const std::string stem = ImportStem(savePath);
+    for (const Game& g : RomList())
+        if (g.platform == GBA && !g.saveName.empty() && ImportStem(g.rom) == stem) return &g;
+#ifdef SSR_POKEMON_HUB
+    std::string err;
+    if (auto sv = PokemonHub::Save::Open(savePath, err))
+    {
+        const std::string n = ImportLower(sv->GameName());
+        std::vector<std::string> keys;
+        auto has = [&](const char* w) { return n.find(w) != std::string::npos; };
+        if (has("firered") || has("leafgreen")) keys = { "firered", "leafgreen" };
+        else if (has("emerald")) keys = { "emerald" };
+        else if (has("ruby") || has("sapphire")) keys = { "ruby", "sapphire" };
+        else if (has("crystal")) keys = { "crystal" };
+        else if (has("gold") || has("silver")) keys = { "gold", "silver" };
+        else if (sv->Generation() == 1) keys = { "red", "blue", "green", "yellow" };
+        const Game* found = nullptr;
+        int count = 0;
+        for (const Game& g : RomList())
+            for (const std::string& k : keys)
+                if (g.platform == GBA && g.saveName == k + ".sav") { found = &g; count++; }
+        if (count == 1) return found;
+    }
+#endif
+    return nullptr;
+}
+inline void ImportList(const std::string& dir, const std::string& where)
+{
+    ImportState& s = Import();
+    s.folder = dir;
+    s.where = where;
+    s.files.clear();
+    for (const std::string& p : ImportSavesIn(dir))
+    {
+        ImportFile f;
+        f.path = p;
+        f.name = p.substr(p.find_last_of("/\\") + 1);
+        if (const Game* g = ImportGameFor(p))
+        {
+            f.key = g->saveName;
+            f.game = ShortName(*g);
+            f.target = HubSavePath(*g);
+        }
+        s.files.push_back(f);
+    }
+}
+// Looks where the chosen emulator's saves may be: with Shizuku (allowed), its own folder; else
+// the public ones. The first with saves in it is listed.
+inline void ImportSearch()
+{
+    ImportState& s = Import();
+    ImportHooks& h = Importer();
+    s.searched = true;
+    s.msg.clear();
+    s.files.clear();
+    s.folder.clear();
+    s.where = "Nothing Found";
+    const std::string st = h.storage;
+    const std::string pkg = ImportPackage(s.emu), own = st.empty() ? std::string() : st + "/Android/data/" + pkg + "/files/save";
+    if (!own.empty() && h.shizukuState && h.shizukuState() == 2 && h.shizukuCopy)
+    {
+        const std::string stage = HubDir() + "/import/" + pkg;
+        std::error_code ec;
+        std::filesystem::remove_all(stage, ec);
+        const std::string out = h.shizukuCopy(own, stage);
+        if (out.rfind("ERROR", 0) != 0)
+        {
+            ImportList(stage, std::string(ImportEmuName(s.emu)) + "'s Own Folder (Shizuku)");
+            if (!s.files.empty()) return;
+        }
+        else s.msg = "Shizuku could not read " + std::string(ImportEmuName(s.emu)) + "'s folder: " + out.substr(6);
+    }
+    std::vector<std::pair<std::string, std::string>> look;
+    if (!st.empty())
+    {
+        const std::string pub = s.emu == 1 ? "MyOldBoy" : "MyBoy";
+        look = { { own, ImportEmuName(s.emu) + std::string("'s Own Folder") }, { st + "/" + pub + "/save", pub + "/save" },
+                 { st + "/" + pub, pub }, { st + "/Download", "Download" } };
+    }
+    for (const auto& w : look)
+    {
+        ImportList(w.first, w.second);
+        if (!s.files.empty()) return;
+    }
+    s.files.clear();
+    s.folder.clear();
+    s.where = "Nothing Found";
+    if (s.msg.empty())
+        s.msg = h.shizukuState && h.shizukuState() == 1 ? "Shizuku is running: choose Allow Shizuku to read " + std::string(ImportEmuName(s.emu)) + "'s own folder."
+              : "No saves found. Copy them to a folder (by USB from a PC, or with a file manager) and choose Choose A Folder.";
+}
+// One save in: the game's save backed up (backups/<game>-before-import-<when>.sav), then copied.
+inline bool ImportOne(const ImportFile& f, std::string& err)
+{
+    if (f.target.empty()) { err = "no game for it"; return false; }
+    std::error_code ec;
+    if (std::filesystem::exists(f.target, ec))
+    {
+        const std::string dir = HubDir() + "/backups";
+        std::filesystem::create_directories(dir, ec);
+        char when[32];
+        const time_t t = time(nullptr);
+        strftime(when, sizeof when, "%Y%m%d-%H%M%S", localtime(&t));
+        const std::string stem = f.key.substr(0, f.key.rfind('.'));
+        std::filesystem::copy_file(f.target, dir + "/" + stem + "-before-import-" + when + ".sav", std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) { err = "could not back up the save there"; return false; }
+    }
+    std::filesystem::create_directories(std::filesystem::path(f.target).parent_path(), ec);
+    std::filesystem::copy_file(f.path, f.target, std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec) { err = "could not copy it"; return false; }
+    return true;
+}
+inline void ImportShow()
+{
+    HubMode() = 5;
+    ImportState& s = Import();
+    s.msg.clear();
+    s.searched = false;
+    Hub().version++;
+}
+// (Each frame the page is up: the folder chosen in Android's picker, when it comes back.)
+inline void ImportTick()
+{
+    ImportState& s = Import();
+    if (!s.searched) ImportSearch();
+    if (Importer().picked)
+    {
+        const std::string p = Importer().picked();
+        if (p == "?") { s.msg = "Fulldex cannot read that folder. Android keeps every app's own folder (Android/data) to itself: copy the saves somewhere else first."; Hub().version++; }
+        else if (!p.empty())
+        {
+            ImportList(p, p.substr(p.find_last_of('/') + 1));
+            s.msg = s.files.empty() ? "No saves (.sav) in that folder." : "";
+            Hub().version++;
+        }
+    }
+}
+inline int ImportRows() { ImportTick(); return IMPORT_FIRST + (int)Import().files.size(); }
+inline int ImportReady() { int n = 0; for (const ImportFile& f : Import().files) n += !f.target.empty(); return n; }
+inline std::vector<std::string> ImportActions(int row)
+{
+    ImportState& s = Import();
+    if (row == 0) return { "My Boy", "My OldBoy" };
+    if (row == 1)
+    {
+        std::vector<std::string> r = { "Search Again" };
+        if (Importer().chooseFolder) r.push_back("Choose A Folder");
+        const int sh = Importer().shizukuState ? Importer().shizukuState() : 0;
+        if (sh == 1) r.push_back("Allow Shizuku");
+        return r;
+    }
+    if (row == 2) return ImportReady() ? std::vector<std::string>{ "Import All" } : std::vector<std::string>{};
+    const int i = row - IMPORT_FIRST;
+    if (i >= 0 && i < (int)s.files.size() && !s.files[i].target.empty()) return { "Import" };
+    return {};
+}
+inline std::string ImportDo(int row, int act)
+{
+    ImportState& s = Import();
+    const std::vector<std::string> acts = ImportActions(row);
+    if (act < 0 || act >= (int)acts.size()) return "";
+    const std::string a = acts[act];
+    Hub().version++;
+    if (row == 0) { s.emu = act; ImportSearch(); Focus().rScroll = 0; return ""; }
+    if (a == "Search Again") { ImportSearch(); return ""; }
+    if (a == "Choose A Folder") { Importer().chooseFolder(); return ""; }
+    if (a == "Allow Shizuku") { Importer().shizukuAsk(); s.msg = "Say yes in Shizuku's question, then choose Search Again."; return ""; }
+    std::vector<ImportFile> todo;
+    if (a == "Import All") { for (const ImportFile& f : s.files) if (!f.target.empty()) todo.push_back(f); }
+    else if (a == "Import") todo.push_back(s.files[(size_t)(row - IMPORT_FIRST)]);
+    int done = 0;
+    std::string fails;
+    for (const ImportFile& f : todo)
+    {
+        std::string err;
+        if (ImportOne(f, err)) done++;
+        else fails += (fails.empty() ? "" : ", ") + f.name + " (" + err + ")";
+    }
+    s.msg = std::to_string(done) + (done == 1 ? " save" : " saves") + " imported; any save that was there was backed up first, in the backups folder." + (fails.empty() ? "" : " Not imported: " + fails + ".");
+    Hub().version++;
+    return "";
+}
 inline void MoverShow(bool open)
 {
     MoverState& m = Mover();
@@ -3275,6 +3513,7 @@ inline bool HubEnter(int row)
     else if (row == 2) { HubMode() = 2; F.prow = 2; }
     else if (row == 3) return false; // (Discord: a link, nothing to open here)
     else if (row == 4) { DexShow(); F.prow = DEX_FIRST; }
+    else if (row == 5) { ImportShow(); F.prow = 1; }
     else { MoverShow(true); F.prow = MOVER_FIRST; }
     F.pact = -1; F.rScroll = 0;
     Hub().version++;
@@ -4355,12 +4594,13 @@ inline int ThemePick(const std::string& pick)
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
 static const char* const kReleasesUrl = "https://github.com/mamesj/pokemon-fulldex/releases";
-inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 5 : HubMode() == 4 ? DexRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
+inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 6 : HubMode() == 4 ? DexRows() : HubMode() == 5 ? ImportRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
     if (Mover().open) return MoverActions(row);
     if (HubMode() == 2) return TradeActions(row);
     if (HubMode() == 4) return DexActions(row);
+    if (HubMode() == 5) return ImportActions(row);
     if (HubMode() == 3) return SavesDs() ? std::vector<std::string>(10, "Slot") : std::vector<std::string>(); // (Manage Saves: its slots)
     if (HubMode() == 0) return {};
     HubLoad();
@@ -4478,6 +4718,7 @@ inline std::string HubDo(int row, int act)
     if (Mover().open) return MoverDo(row, act);
     if (HubMode() == 2) return TradeDo(row, act);
     if (HubMode() == 4) return DexDo(row, act);
+    if (HubMode() == 5) return ImportDo(row, act);
     if (HubMode() == 3) return SavesSlotDo(act);
     const std::vector<std::string> acts = HubActions(row);
     if (act < 0 || act >= (int)acts.size()) return "";
@@ -4719,7 +4960,7 @@ inline bool PageBack()
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
-    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 4) { HubMode() = 0; F.prow = 4; F.rScroll = 0; Hub().version++; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && (HubMode() == 4 || HubMode() == 5)) { F.prow = HubMode(); HubMode() = 0; F.rScroll = 0; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() != 0) { HubMode() = 0; F.prow = 0; F.rScroll = 0; Hub().version++; return true; }
     if ((F.page == SIDE_ROMS || F.page == SIDE_HUB) && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
     if (TilesOn()) { const int pg = F.page; F.page = -1; F.side = pg; return true; } // (the window closed: back on the tile that opened it)
@@ -4917,7 +5158,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const int barH = portP ? (int)(44 * u) : sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)((portP ? 10 : 18) * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : PhoneLook() && c.h > c.w && sp.navY > 0 ? sp.navY - (int)(12 * u) : c.h - (int)((ShortNow() ? 14 : 64) * u); // (a phone sideways: the panels run to the foot of the screen, the back button is in the bar)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
-    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 5 ? std::string("Import Saves") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     if (!ShortNow() && !portP) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -5882,6 +6123,106 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         return;
     }
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 3) { DrawSavesPage(c, solid, u, L, R, top, bottom); return; } // (Manage Saves)
+    if (F.page == SIDE_HUB && !Mover().open && HubMode() == 5)
+    {
+        // Import Saves: the emulator, where to look, import all, then the saves found.
+        ImportState& im = Import();
+        const int n = ImportRows();
+        const std::vector<std::string> acts = HubActions(F.prow);
+        const uint32_t okCol = 0xFF8FE3A2u, noCol = 0xFFAEB7C4u, warnCol = 0xFFF2C46Bu;
+        const bool stkP = PhoneLook() && c.h > c.w; const int rw = stkP ? R - L : (int)(360 * u), gap = (int)(18 * u), lw2 = stkP ? R - L : R - L - rw - gap, lhP = stkP ? (int)((bottom - top) * 0.55f) : bottom - top, dTopP = stkP ? top + lhP + gap : top, dHP = stkP ? bottom - dTopP : bottom - top, pad = (int)(12 * u);
+        const int rowH = (int)(46 * u), rg = (int)(6 * u);
+        Menu::FrostBox(c, solid, L, top, lw2, lhP, 18 * u);
+        const int vis = std::max(1, (lhP - 2 * pad + rg) / (rowH + rg));
+        F.prow = std::max(0, std::min(F.prow, n - 1));
+        if (F.pact >= (int)acts.size()) F.pact = acts.empty() ? -1 : (int)acts.size() - 1;
+        if (!F.freeScroll) { if (F.prow < F.rScroll) F.rScroll = F.prow; if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1; }
+        F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
+        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
+        const int ready = ImportReady();
+        const int sh = Importer().shizukuState ? Importer().shizukuState() : 0;
+        for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
+        {
+            const int rx = L + pad, ry = top + pad + (i - F.rScroll) * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+            if (i == F.prow)
+            {
+                if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
+            }
+            std::string k, v, chip;
+            uint32_t chipCol = hint;
+            int icon = Glass::I_LOAD;
+            if (i == 0) { k = "From"; v = ImportEmuName(im.emu); chip = im.emu == 1 ? "Game Boy" : "GBA"; icon = Glass::I_POKEBALL; }
+            else if (i == 1)
+            {
+                k = "Look In"; v = im.where; icon = Glass::I_GRID;
+                chip = sh == 2 ? "Shizuku On" : sh == 1 ? "Shizuku: Allow" : "";
+                chipCol = sh == 2 ? okCol : warnCol;
+            }
+            else if (i == 2) { k = "Import"; v = ready ? "All " + std::to_string(ready) : std::string("-"); chip = std::to_string(im.files.size()) + " Found"; }
+            else
+            {
+                const ImportFile& f = im.files[(size_t)(i - IMPORT_FIRST)];
+                k = "Save"; v = f.name;
+                chip = f.target.empty() ? "No Game For It" : "To " + f.game;
+                chipCol = f.target.empty() ? noCol : okCol;
+            }
+            Glass::DrawIcon(c, icon, rx + 18 * u, mid, 9 * u, text);
+            int chipX = rx + rww;
+            if (!chip.empty())
+            {
+                const int chipW = GW(chip, 12 * u, true) + (int)(20 * u);
+                chipX = rx + rww - (int)(10 * u) - chipW;
+                Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+                GT(c, chipX + (int)(10 * u), mid, chip, 12 * u, chipCol, true);
+            }
+            GT(c, rx + (int)(48 * u), mid, k, 13 * u, hint, true);
+            GTFit(c, rx + (int)(118 * u), mid, v, 16 * u, chipX - (rx + (int)(118 * u)) - (int)(10 * u), text, true);
+        }
+        if (n > vis)
+        {
+            const int tx = L + lw2 - (int)(7 * u), ty = top + (int)(16 * u), th = lhP - (int)(32 * u);
+            Glass::Round(c, tx, ty, (int)(3 * u), th, 1.5f * u, 0x26FFFFFFu);
+            const int thumbH = std::max((int)(24 * u), th * vis / n), thumbY = ty + (th - thumbH) * F.rScroll / std::max(1, n - vis);
+            Glass::Round(c, tx, thumbY, (int)(3 * u), thumbH, 1.5f * u, 0xCCFFFFFFu);
+        }
+        const int dx = stkP ? L : R - rw, ix = dx + (int)(20 * u), iw = rw - (int)(40 * u);
+        Menu::FrostBox(c, solid, dx, dTopP, rw, dHP, 18 * u);
+        static int dKey = -1; { const int nk = F.page * 100000 + F.prow * 100 + LauncherMode() * 10 + HubMode() + (Look().edit + 1) * 10000000; if (nk != dKey) { dKey = nk; F.dScroll = 0; } }
+        F.dScroll = std::min(F.dScroll, F.dMax); TextLow() = 0; F.pdY = stkP ? dTopP : 0;
+        const int dTopC = dTopP - (stkP ? F.dScroll : 0);
+        ClipGuard clipG(c, F, stkP ? dTopP : 0, stkP ? bottom : c.h, (int)(16 * u));
+        int y = dTopC + (int)(20 * u);
+        auto para = [&](const std::string& s2, uint32_t col, float px) {
+            for (const std::string& line : WrapLines(s2, px, iw)) { GT(c, ix, y + px * 0.6f, line, px, col, false); y += (int)(px * 1.45f); }
+            y += (int)(8 * u);
+        };
+        GT(c, ix, y + 14 * u, "Import Saves", 22 * u, text, true);
+        y += (int)(48 * u);
+        if (!im.msg.empty()) para(im.msg, warnCol, 14 * u);
+        if (F.prow == 0) para("Choose the emulator the saves come from: My Boy for GBA games, My OldBoy for Game Boy and Game Boy Color ones.", hint, 13 * u);
+        else if (F.prow == 1)
+        {
+            para(im.folder.empty() ? std::string("No saves found yet.") : "Found in: " + im.folder, text, 13 * u);
+            para(sh == 2 ? "Shizuku is on: Fulldex reads the emulator's own folder with it."
+               : sh == 1 ? "Shizuku is running: choose Allow Shizuku and say yes, then Search Again, to read the emulator's own folder."
+                         : "Android 11 and later keep each app's own folder (Android/data) to itself. Copy the saves somewhere else first (by USB from a PC, or a file manager), then Choose A Folder. Or turn on Shizuku.", hint, 13 * u);
+        }
+        else if (F.prow == 2) para("Brings in every save found that goes with one of your games. The save already there for a game is backed up first, in the backups folder beside your saves.", hint, 13 * u);
+        else if (F.prow - IMPORT_FIRST < (int)im.files.size())
+        {
+            const ImportFile& f = im.files[(size_t)(F.prow - IMPORT_FIRST)];
+            para(f.name, text, 15 * u);
+            if (f.target.empty()) para("No game in your list goes with it: Fulldex matches a save to the ROM of the same name, or a Pokemon save to the one game of its kind. Rename it as the ROM (with .sav) and Search Again.", hint, 13 * u);
+            else
+            {
+                std::error_code ec;
+                para("Goes to " + f.game + ".", okCol, 14 * u);
+                para(std::filesystem::exists(f.target, ec) ? "That game has a save already: it is backed up first, then replaced by this one." : "That game has no save yet.", hint, 13 * u);
+            }
+        }
+        return;
+    }
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 4)
     {
         // The Pokédex: the filter, then a row a species; the chosen one's standing beside them.
@@ -6027,7 +6368,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         lk.unlock();
         const int moverGames = (int)MoverGames().size();
         const bool stkP = PhoneLook() && c.h > c.w; const int rw = stkP ? R - L : (int)(400 * u), gap = (int)(18 * u), lw2 = stkP ? R - L : R - L - rw - gap, lhP = stkP ? (int)((bottom - top) * 0.55f) : bottom - top, dTopP = stkP ? top + lhP + gap : top, dHP = stkP ? bottom - dTopP : bottom - top, pad = (int)(14 * u);
-        const int n = 5, rg = (int)(10 * u), rowH = std::min((int)(72 * u), std::max((int)(52 * u), (lhP - 2 * pad - (n - 1) * rg) / n));
+        const int n = 6, rg = (int)(8 * u), rowH = std::min((int)(72 * u), std::max((int)(46 * u), (lhP - 2 * pad - (n - 1) * rg) / n));
         const HubLink::Status link = HubLink::Snapshot();
         Menu::FrostBox(c, solid, L, top, lw2, lhP, 18 * u);
         F.prow = std::max(0, std::min(F.prow, n - 1));
@@ -6063,6 +6404,12 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 st = link.state == HubLink::State::Linked ? "Linked" : link.state == HubLink::State::Online ? "Online" : link.state == HubLink::State::Hosting ? "Room Open" : link.state == HubLink::State::Browsing ? "Looking" : "Same Wi-Fi";
                 if (link.state != HubLink::State::Off) col = 0xFF8CC8FFu;
             }
+            else if (i == 5)
+            {
+                name = "Import Saves";
+                sub = "Bring in your saves from My Boy or My OldBoy";
+                st = "My Boy";
+            }
             else if (i == 4)
             {
                 name = "Pok\xC3\xA9" "dex";
@@ -6082,7 +6429,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 sub = "Between your own games and the Bank, as a trade would";
                 st = std::to_string(moverGames) + (moverGames == 1 ? " Save" : " Saves");
             }
-            Glass::DrawIcon(c, i == 0 ? Glass::I_GLOBE : i == 2 ? Glass::I_PEOPLE : i == 3 ? Glass::I_CHAT : i == 4 ? Glass::I_GRID : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
+            Glass::DrawIcon(c, i == 0 ? Glass::I_GLOBE : i == 2 ? Glass::I_PEOPLE : i == 3 ? Glass::I_CHAT : i == 4 ? Glass::I_GRID : i == 5 ? Glass::I_LOAD : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
             GT(c, rx + (int)(60 * u), mid - 11 * u, name, 18 * u, text, true);
             const int chipW = GW(st, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(46 * u) - chipW;
             GTFit(c, rx + (int)(60 * u), mid + 13 * u, sub, 13 * u, chipX - (rx + (int)(60 * u)) - (int)(12 * u), hint, false);
@@ -6107,7 +6454,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             GT(c, cx, cy + 28 * u, v, 15 * u, text, true);
             (void)cw;
         };
-        GT(c, ix, y + 14 * u, F.prow == 0 ? "Cloud Saves" : F.prow == 2 ? "Trade" : F.prow == 3 ? "Fulldex Discord" : F.prow == 4 ? "Pok\xC3\xA9" "dex" : "Move Pok\xC3\xA9mon", 22 * u, text, true);
+        GT(c, ix, y + 14 * u, F.prow == 0 ? "Cloud Saves" : F.prow == 2 ? "Trade" : F.prow == 3 ? "Fulldex Discord" : F.prow == 4 ? "Pok\xC3\xA9" "dex" : F.prow == 5 ? "Import Saves" : "Move Pok\xC3\xA9mon", 22 * u, text, true);
         y += (int)(44 * u);
         if (F.prow == 0)
         {
@@ -6155,6 +6502,11 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #endif
                  , hint, 13 * u);
 #endif
+        }
+        else if (F.prow == 5)
+        {
+            para("Bring the saves you have in My Boy (GBA) or My OldBoy (Game Boy) into Fulldex: each goes to its game, and the save already there is backed up first.", text, 14 * u);
+            para("Fulldex looks in their folders by itself. Since Android 11 no app may read another app's own folder; with Shizuku running Fulldex can, else copy the saves to a folder first (by USB from a PC, or with a file manager) and choose it.", hint, 13 * u);
         }
         else if (F.prow == 4)
         {

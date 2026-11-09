@@ -35,6 +35,10 @@ public class GameActivity extends SDLActivity {
     private static final String TAG = "PokemonDS";
     private static final int PICK_FOLDER = 4201;
     private static final int ASK_FILES = 4202;
+    private static final int PICK_IMPORT = 4203;
+    // IMPORT SAVES' folder (SaveImport): the picker open, and the folder chosen ("" none yet).
+    private static volatile boolean importPicking;
+    private static volatile String importPicked = "";
     private static volatile GameActivity self;
     private SecondScreen secondScreen;
     // True from chooseFolder() until the picker (and the access question before it) is done.
@@ -190,6 +194,32 @@ public class GameActivity extends SDLActivity {
         return picking;
     }
 
+    // IMPORT SAVES (frontend/launcher.h, through pc_launcher.cpp): Shizuku, and a folder to look in.
+    public static int shizukuState() { return SaveImport.state(); }
+    public static void shizukuAsk() { if (self != null) self.runOnUiThread(SaveImport::ask); }
+    public static String shizukuCopy(String from, String to) { return SaveImport.copy(from, to); }
+    public static boolean importPicking() { return importPicking; }
+    // The folder chosen, once ("" when none was, or it was taken already).
+    public static String importPicked() {
+        String p = importPicked;
+        importPicked = "";
+        return p;
+    }
+    public static void chooseImportFolder() {
+        if (self == null || importPicking) return;
+        importPicking = true;
+        self.runOnUiThread(() -> {
+            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            pick.putExtra("android.content.extra.SHOW_ADVANCED", true);
+            try {
+                self.startActivityForResult(pick, PICK_IMPORT);
+            } catch (Exception e) {
+                Log.e(TAG, "no folder picker", e);
+                importPicking = false;
+            }
+        });
+    }
+
     // Asks for access to files if the app does not have it yet, then shows the folder picker.
     public static void chooseFolder() {
         if (self == null || picking) return;
@@ -288,6 +318,15 @@ public class GameActivity extends SDLActivity {
 
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
+        if (request == PICK_IMPORT) {
+            if (result == RESULT_OK && data != null && data.getData() != null) {
+                String path = pathOf(data.getData());
+                Log.i(TAG, "Import folder: " + path);
+                importPicked = path == null ? "?" : path;
+            }
+            importPicking = false;
+            return;
+        }
         if (request == PICK_FOLDER) {
             if (result == RESULT_OK && data != null && data.getData() != null) {
                 String path = pathOf(data.getData());

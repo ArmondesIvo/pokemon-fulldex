@@ -265,6 +265,38 @@ void JavaBoolArg(const char* method, bool value)
     CallActivity(method, "(Z)V", [&](JNIEnv* env, jclass c, jmethodID m) { env->CallStaticVoidMethod(c, m, value ? JNI_TRUE : JNI_FALSE); });
 }
 
+// IMPORT SAVES (Launcher::Importer): Shizuku and the folder picker, in GameActivity (SaveImport.java).
+void SetImporter()
+{
+    Launcher::ImportHooks& h = Launcher::Importer();
+    h.storage = "/storage/emulated/0";
+    h.shizukuState = [] {
+        int out = 0;
+        CallActivity("shizukuState", "()I", [&](JNIEnv* env, jclass c, jmethodID m) { out = env->CallStaticIntMethod(c, m); });
+        return out;
+    };
+    h.shizukuAsk = [] { JavaVoid("shizukuAsk"); };
+    h.shizukuCopy = [](const std::string& from, const std::string& to) {
+        std::string out = "ERROR NO ANDROID";
+        CallActivity("shizukuCopy", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", [&](JNIEnv* env, jclass c, jmethodID m) {
+            jstring a = env->NewStringUTF(from.c_str()), b = env->NewStringUTF(to.c_str());
+            if (jstring r = (jstring)env->CallStaticObjectMethod(c, m, a, b))
+            {
+                const char* utf = env->GetStringUTFChars(r, nullptr);
+                out = utf ? utf : "";
+                env->ReleaseStringUTFChars(r, utf);
+                env->DeleteLocalRef(r);
+            }
+            env->DeleteLocalRef(a);
+            env->DeleteLocalRef(b);
+        });
+        return out;
+    };
+    h.chooseFolder = [] { JavaVoid("chooseImportFolder"); };
+    h.picking = [] { return JavaBool("importPicking"); };
+    h.picked = [] { return JavaString("importPicked"); };
+}
+
 // The ROM folder the player chose (GameActivity.romFolder), with the saves in a folder inside
 // it; until one is chosen, the app's own folder.
 void SetRomFolder(Folders& fo)
@@ -3123,6 +3155,7 @@ bool Start(int& argc, char**& argv)
     MakeDir(fo.funcs);
     ExtractFuncs(fo);
     SetRomFolder(fo);
+    SetImporter();
     if (const char* ar = getenv("SSR_ANDROID_ROMS")) { fo.roms = ar; fo.saves = fo.roms + "/saves"; fo.art = fo.roms; MakeDir(fo.roms); }
     if (!fo.roms.empty()) MakeDir(fo.saves);
 #else

@@ -20,6 +20,9 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- The player's ROMs and saves, in the folder they choose. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- IMPORT SAVES: Shizuku, when the player has it, to read another emulator's own folder
+         (SaveImport.java). -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
@@ -73,5 +76,14 @@
             android:process=":restart"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:exported="false" />
+        <!-- Shizuku hands its binder to the app here (libs/shizuku-provider). -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="io.github.mamesj.pokemonds.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+        <meta-data android:name="moe.shizuku.client.V3_SUPPORT" android:value="true" />
     </application>
 </manifest>
