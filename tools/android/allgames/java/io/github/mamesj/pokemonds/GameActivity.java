@@ -171,6 +171,13 @@ public class GameActivity extends SDLActivity {
     }
 
     // At launch: a dialog only when a new version is available.
+    // PokeHub's update found (Updates.java), for the launcher to ask about: "" none yet.
+    public static String updateOffer() { return Updates.takeOffer(); }
+    // The launcher's Update: download, check and hand it to Android's installer.
+    public static void updateInstall() {
+        if (self != null) Updates.installOffered(self);
+    }
+
     public static void checkUpdatesQuiet() {
         if (self != null) Updates.check(self, true);
     }

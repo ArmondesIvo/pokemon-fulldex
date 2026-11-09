@@ -63,9 +63,31 @@ final class Updates {
         r.sha = m.getString("sha256").toLowerCase(java.util.Locale.US);
         if (!r.sha.matches("[0-9a-f]{64}")) throw new IOException("bad sha256 in " + manifestUrl);
         r.version = m.optString("version", "");
-        r.notes = m.optString("notes", "");
+        // (What changed in every version newer than this one, newest first: several skipped
+        // updates are asked about once, with all their news, and the newest is the one taken.)
+        StringBuilder notes = new StringBuilder();
+        org.json.JSONArray history = m.optJSONArray("history");
+        if (history != null) {
+            for (int i = 0; i < history.length() && i < 20; i++) {
+                org.json.JSONObject h = history.optJSONObject(i);
+                if (h == null || Math.multiplyExact(h.optLong("built"), 1000L) <= BuildInfo.BUILT_AT) continue;
+                String n = h.optString("notes", "").trim();
+                if (n.isEmpty()) continue;
+                if (notes.length() > 0) notes.append("\n");
+                notes.append("• ").append(n);
+            }
+        }
+        r.notes = notes.length() > 0 ? notes.toString() : m.optString("notes", "");
         r.page = r.url;
         return r;
+    }
+    // (What was found, for the launcher to ask about in its own look: GameActivity.updateOffer.)
+    private static volatile String offer = "";
+    private static volatile Release offered;
+    static synchronized String takeOffer() { String o = offer; offer = ""; return o; }
+    static void installOffered(final Activity a) {
+        final Release r = offered;
+        if (r != null) a.runOnUiThread(() -> install(a, r, r.sha));
     }
     private static void checkOurs(final Activity a, final boolean launch) {
         new Thread(() -> {
@@ -74,23 +96,15 @@ final class Updates {
                 Release r = fromManifest(get(BuildInfo.UPDATE_URL + "?t=" + System.currentTimeMillis(), 64 << 10), BuildInfo.UPDATE_URL);
                 final boolean newer = r.built > BuildInfo.BUILT_AT;
                 Log.i(TAG, "update check (PokeHub): " + r.url + " built " + r.built + (newer ? " (newer)" : " (installed)"));
-                a.runOnUiThread(() -> {
-                    if (a.isFinishing() || a.isDestroyed()) return;
-                    if (launch && !newer) return;
-                    AlertDialog.Builder d = new AlertDialog.Builder(a).setTitle(TITLE).setNegativeButton(launch ? "Depois" : "Fechar", null);
-                    if (newer) {
-                        String what = r.notes.isEmpty() ? "" : "\n\nO que mudou:\n" + r.notes;
-                        d.setMessage("Tem uma versão nova do PokeHub" + (r.version.isEmpty() ? "" : " (" + r.version + ")") + ". Atualizar agora?"
-                                + what + "\n\nSeus jogos, saves e configurações continuam como estão.");
-                        d.setPositiveButton("Atualizar", (x, y) -> install(a, r, r.sha));
-                    } else {
-                        d.setMessage("Você já tem a versão mais nova do PokeHub.");
-                    }
-                    d.show();
-                });
+                if (newer) {
+                    offered = r;
+                    offer = "NEW\t" + r.version + "\t" + r.notes.replace('\t', ' ');
+                } else if (!launch) {
+                    offer = "LATEST";
+                }
             } catch (Exception e) {
                 Log.e(TAG, "Update check failed", e);
-                if (!launch) say(a, "Não deu para procurar atualização agora. Confira a internet e tente de novo mais tarde.");
+                if (!launch) offer = "ERROR";
             }
         }, "PokeHub-update-check").start();
     }

@@ -5021,6 +5021,33 @@ inline void OpenQuitAsk()
     F.dItems = { "Quit", "Cancel" };
     F.dPaths = { "#quit", "#close" };
 }
+// PokeHub's update, found by the Java side (Updates.java, its offer: "NEW\tversion\tnotes",
+// "LATEST" or "ERROR"), asked in the launcher's own look. Update: the Java side downloads it,
+// checks it and hands it to Android's installer.
+inline void OpenUpdateAsk(const std::string& offer)
+{
+    GlassFocus& F = Focus();
+    if (offer.rfind("NEW\t", 0) == 0)
+    {
+        const size_t t2 = offer.find('\t', 4);
+        const std::string version = offer.substr(4, t2 == std::string::npos ? std::string::npos : t2 - 4), notes = t2 == std::string::npos ? std::string() : offer.substr(t2 + 1);
+        F.dialog = 12;
+        F.drow = 0;
+        F.dTitle = "PokeHub Update";
+        F.dMsg = LauncherText::Tr("A new version of PokeHub is ready.") + (version.empty() ? "" : " (" + version + ")")
+               + (notes.empty() ? std::string() : "\n\n" + LauncherText::Tr("What's new:") + "\n" + notes)
+               + "\n\n" + LauncherText::Tr("Your games, saves and settings stay as they are.");
+        F.dItems = { "Update", "Later" };
+        F.dPaths = { "#update", "#close" };
+        return;
+    }
+    F.dialog = 12;
+    F.drow = 0;
+    F.dTitle = "PokeHub Update";
+    F.dMsg = offer == "LATEST" ? "You have the newest version of PokeHub." : "Could not look for an update now. Check the internet and try again later.";
+    F.dItems = { "OK" };
+    F.dPaths = { "#close" };
+}
 // Support on the About page (a PC): which page to open.
 inline void OpenSupportAsk()
 {
@@ -9262,7 +9289,8 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
             auto flush = [&]() { if (!word.empty()) { const std::string t = line.empty() ? word : line + " " + word; if (!line.empty() && GW(t, 15 * u, false) > avail) { lines.push_back(line); line = word; } else line = t; word.clear();
                 while (GW(line, 15 * u, false) > avail) { size_t cut = 0, i = 0; while (i < line.size()) { size_t j = i + 1; while (j < line.size() && ((unsigned char)line[j] & 0xC0) == 0x80) j++; if (cut > 0 && GW(line.substr(0, j), 15 * u, false) > avail) break; cut = j; i = j; } if (cut == 0 || cut >= line.size()) break; lines.push_back(line.substr(0, cut)); line = line.substr(cut); } } };
             const std::string tmsg = LauncherText::Tr(msg); // (the player's language first: then the lines are cut where its words are)
-            for (char ch : tmsg) { if (ch == ' ') flush(); else word += ch; }
+            // (A line break in the message starts a new line; two, a blank one between.)
+            for (char ch : tmsg) { if (ch == '\n') { flush(); lines.push_back(line); line.clear(); } else if (ch == ' ') flush(); else word += ch; }
             flush();
             if (!line.empty()) lines.push_back(line);
         }

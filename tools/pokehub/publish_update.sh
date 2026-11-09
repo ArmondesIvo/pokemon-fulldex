@@ -49,10 +49,19 @@ NAME="pokehub-$BUILT.apk"
 VERSION="$(date -d "@$BUILT" '+%d/%m/%Y %H:%M')"
 WORK="$(mktemp -d)"
 trap 'rm -rf -- "$WORK"' EXIT
-python3 - "$WORK/latest.json" "$BUILT" "$VERSION" "$NAME" "$SHA" "$NOTES" <<'PY'
+# (What changed in the versions before, from the file online now: an app several versions behind
+# shows all their news when it is asked to update, once, to the newest.)
+curl -fsS "$WANT?t=$(date +%s)" -o "$WORK/before.json" 2>/dev/null || echo '{}' > "$WORK/before.json"
+python3 - "$WORK/latest.json" "$WORK/before.json" "$BUILT" "$VERSION" "$NAME" "$SHA" "$NOTES" <<'PY'
 import json, sys
-out, built, version, apk, sha, notes = sys.argv[1:]
-json.dump({"built": int(built), "version": version, "apk": apk, "sha256": sha, "notes": notes},
+out, before, built, version, apk, sha, notes = sys.argv[1:]
+try:
+    old = json.load(open(before, encoding="utf-8"))
+except ValueError:
+    old = {}
+history = old.get("history") or ([{"built": old["built"], "version": old.get("version", ""), "notes": old.get("notes", "")}] if "built" in old else [])
+history = [{"built": int(built), "version": version, "notes": notes}] + [h for h in history if h.get("built") != int(built)]
+json.dump({"built": int(built), "version": version, "apk": apk, "sha256": sha, "notes": notes, "history": history[:20]},
           open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 PY
 

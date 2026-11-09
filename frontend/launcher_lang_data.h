@@ -4321,6 +4321,15 @@ The launcher's look: colours, pictures, fonts, and themes to share	O visual do l
 Change the launcher's look: the accent, the panels, the bars, the buttons, the background and the font. Keep a look as a theme, switch between your themes, or try one someone shared.	Mude o visual do launcher: o destaque, os painéis, as barras, os botões, o fundo e a fonte. Guarde um visual como tema, troque entre seus temas, ou teste um que alguém compartilhou.
 Open it for the Theme Editor, My Themes and the Theme Gallery.	Abra para o Editor De Tema, Meus Temas e a Galeria De Temas.
 Hub	Hub
+PokeHub Update	Atualização Do PokeHub
+A new version of PokeHub is ready.	Tem uma versão nova do PokeHub.
+What's new:	O que mudou:
+Your games, saves and settings stay as they are.	Seus jogos, saves e configurações continuam como estão.
+Update	Atualizar
+Later	Depois
+OK	OK
+You have the newest version of PokeHub.	Você já tem a versão mais nova do PokeHub.
+Could not look for an update now. Check the internet and try again later.	Não deu para procurar atualização agora. Confira a internet e tente de novo mais tarde.
 )FDXLANG";
 inline const char* LauncherLangData(const char* code)
 {

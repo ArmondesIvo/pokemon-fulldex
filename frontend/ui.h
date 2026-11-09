@@ -315,7 +315,7 @@ struct Menu
     // CLEAN text (on: Noto Sans, ui_clean_font.h, in title case) or the pixel font (the Retro look).
     // Japanese and Korean menus keep the pixel font, which has their letters.
     static inline bool Clean = true;
-    static bool UseClean() { return Clean && (UiLang::lang < 5 || CleanFont::Cjk()); }
+    static bool UseClean() { return Clean && (!UiLang::Tall() || CleanFont::Cjk()); }
     static int Px(int scale, bool big = false) { return (big ? 14 : 12) * scale; }
     static int TW(const std::string& s, int scale, bool big = false)
     {

@@ -1768,6 +1768,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (pick.rfind("#open:", 0) == 0 && SDL_OpenURL(pick.c_str() + 6) != 0) fprintf(stderr, "[launcher] could not open %s: %s\n", pick.c_str() + 6, SDL_GetError());
             dialogClose();
             if (pick == "#quit") quit = true; // (Quit Fulldex?: yes)
+#ifdef __ANDROID__
+            if (pick == "#update") JavaVoid("updateInstall"); // (PokeHub Update: yes)
+#endif
             return;
         }
         if (F.dialog == 17 || F.dialog == 18)
@@ -2688,6 +2691,19 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             any = SDL_PollEvent(&e);
         }
         if (quit) break;
+#ifdef __ANDROID__
+        // (PokeHub's update, when the Java side has found one: asked here, in the launcher's look,
+        // once nothing else is asked. Looked for twice a second.)
+        {
+            static Uint32 lastOffer = 0;
+            if (Launcher::Focus().dialog == 0 && SDL_GetTicks() - lastOffer > 500)
+            {
+                lastOffer = SDL_GetTicks();
+                const std::string offer = JavaString("updateOffer");
+                if (!offer.empty()) { Launcher::OpenUpdateAsk(offer); fprintf(stderr, "[launcher] update offer: %s\n", offer.substr(0, 40).c_str()); }
+            }
+        }
+#endif
 #ifdef SSR_UPDATER
         // The update check and install (on threads of their own): shown on CHECK FOR UPDATES, a
         // new version said under the list too, and the list closed for the new program to start.

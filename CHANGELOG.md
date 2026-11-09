@@ -3,6 +3,9 @@
 
 ## Unreleased
 
+- **The update question in PokeHub's own look,** and with every skipped version's news: several updates
+  waiting are asked about once, and the newest is installed. The settings in Portuguese use the clean
+  font again (they had fallen back to the pixel font).
 - **Origin marks, as Pokémon HOME shows them:** a Game Boy for Red to Crystal Pokémon, the pentagon for
   X / Y / Omega Ruby / Alpha Sapphire, the clover for Sun / Moon / Ultra Sun / Ultra Moon; none for
   Gens 3 to 5. A Gen 1 Pokémon no longer shows an item it does not have (that byte is its catch rate).
