@@ -1232,6 +1232,13 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         if (key && !strncmp(key, "list_", 5)) Launcher::LoadLook(fo.cfg, fo.art, theme, background);
         if(key && !strcmp(key,"list_sort"))reorderLibrary();
         if(key && !strcmp(key,"!favourite"))toggleFavourite();
+        // (This fork: Hub, ROMs and Launcher, out of the sidebar, opened from the settings.)
+        if (key && (!strcmp(key, "!open_hub") || !strcmp(key, "!open_roms") || !strcmp(key, "!open_launcher")))
+        {
+            guide = false;
+            Launcher::OpenSide(!strcmp(key, "!open_hub") ? Launcher::SIDE_HUB : !strcmp(key, "!open_roms") ? Launcher::SIDE_ROMS : Launcher::SIDE_LAUNCHER);
+            return;
+        }
         if (key && !strcmp(key, "!ra_login"))
         {
             if (raState->busy) return;
@@ -1559,8 +1566,8 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     else if (dir == 4 && panel) { F.side = -1; onTabs = true; }
                     else if (dir == 3 && tiles) { F.side = -1; if (banner) F.banner = 1; else intoGames(); }
                 }
-                else if (dir == 3) F.side = std::max(0, F.side - 1);
-                else if (dir == 4) F.side = std::min((int)Launcher::SIDES - 1, F.side + 1);
+                else if (dir == 3) F.side = Launcher::SideStep(F.side, -1);
+                else if (dir == 4) F.side = Launcher::SideStep(F.side, 1);
                 else if (dir == 2) { F.side = -1; intoGames(); }
                 return;
             }

@@ -1556,6 +1556,16 @@ inline int FirstIn(const View& v) { return v.spots.empty() ? -1 : v.spots[0].gam
 // Menu::FrostBox) and clean font over the chosen game's picture, blurred. Used on landscape
 // screens with the clean font (Glassy); otherwise the classic list (DrawClassic).
 enum Side { SIDE_HOME, SIDE_HUB, SIDE_ROMS, SIDE_SETTINGS, SIDE_LAUNCHER, SIDE_ABOUT, SIDES }; // (Library is Home: its tabs, Sort)
+// (This fork's sidebar: only Library, Settings and About; Hub, ROMs and Launcher open from Settings.)
+inline bool SideShown(int i) { return i == SIDE_HOME || i == SIDE_SETTINGS || i == SIDE_ABOUT; }
+inline int SideRow(int i) { int r = 0; for (int k = 0; k < i; k++) r += SideShown(k); return r; }
+// The shown section by places along from side (the ends kept).
+inline int SideStep(int side, int by)
+{
+    int s = side;
+    for (int t = side + by; t >= 0 && t < SIDES; t += by) if (SideShown(t)) { s = t; break; }
+    return s;
+}
 inline const char* SideName(int i)
 {
     static const char* n[] = { "Home", "Hub", "ROMs", "Settings", "Launcher", "About" };
@@ -1758,7 +1768,8 @@ inline int SideAt(const Canvas& c, int x, int y)
     if (x < s.sideX || x >= s.sideX + s.sideW) return -1;
     for (int i = 0; i < SIDES; i++)
     {
-        const int ry = s.firstRow + i * (s.rowH + s.rowGap);
+        if (!SideShown(i)) continue;
+        const int ry = s.firstRow + SideRow(i) * (s.rowH + s.rowGap);
         if (y >= ry && y < ry + s.rowH) return i;
     }
     return -1;
@@ -4919,8 +4930,8 @@ inline bool PageMove(int dir)
     if (TilesOn() && F.side >= 0) F.side = -1; // (a window over the tiles: no sidebar to move to)
     if (F.side >= 0)
     {
-        if (dir == 3) F.side = std::max(0, F.side - 1);
-        else if (dir == 4) F.side = std::min((int)SIDES - 1, F.side + 1);
+        if (dir == 3) F.side = SideStep(F.side, -1);
+        else if (dir == 4) F.side = SideStep(F.side, 1);
         else if (dir == 2) F.side = -1;
         return true;
     }
@@ -4999,6 +5010,7 @@ inline bool PageBack()
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() != 0) { HubMode() = 0; F.prow = 0; F.rScroll = 0; Hub().version++; return true; }
     if ((F.page == SIDE_ROMS || F.page == SIDE_HUB) && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
     if (TilesOn()) { const int pg = F.page; F.page = -1; F.side = pg; return true; } // (the window closed: back on the tile that opened it)
+    if (!SideShown(F.page)) { F.page = -1; F.side = -1; return true; } // (Hub, ROMs, Launcher: opened from Settings)
     if (F.side < 0) F.side = F.page;
     else { F.page = -1; F.side = SIDE_HOME; }
     return true;
@@ -7382,9 +7394,10 @@ inline void DrawGlass(Canvas& c, const std::vector<Game>& games, const View& v, 
     auto drawSideRows = [&]() {
         for (int i = 0; i < SIDES; i++)
         {
+            if (!SideShown(i)) continue;
             const bool cmp = sp.sideW < (int)(100 * u); // (a phone sideways: icons only)
             const int mg = cmp ? (int)(7 * u) : (int)(16 * u);
-            const int ry = sp.firstRow + i * (sp.rowH + sp.rowGap), rx = sp.sideX + mg, rw = sp.sideW - 2 * mg;
+            const int ry = sp.firstRow + SideRow(i) * (sp.rowH + sp.rowGap), rx = sp.sideX + mg, rw = sp.sideW - 2 * mg;
             const int fs = Focus().side;
             const bool on = fs >= 0 ? i == fs : settingsChosen ? i == SIDE_SETTINGS : i == (Focus().page >= 0 && !(Focus().page == SIDE_HUB && HubMode() == 3) ? Focus().page : (int)SIDE_HOME);
             const bool lit = fs >= 0 ? i == fs : settingsChosen && i == SIDE_SETTINGS; // (chosen with the arrows)
@@ -8468,6 +8481,10 @@ struct SettingsPage
             groupText[g] = names + ".";
             items.push_back({ sg.key, sg.name, { { "", ">" } }, "", groupText[g].c_str() });
         }
+        // (This fork: the pages that were in the sidebar, opened from here.)
+        items.push_back({ "!open_hub", "HUB", { { "", ">" } }, "", "CLOUD SAVES / MOVE POKEMON / TRADE / POKEDEX / IMPORT SAVES." });
+        items.push_back({ "!open_roms", "ROMS", { { "", ">" } }, "", "YOUR GAMES' FILES: RENAME, HIDE OR DELETE THEM." });
+        items.push_back({ "!open_launcher", "LAUNCHER", { { "", ">" } }, "", "THE LOOK OF THE LIST: THEMES, LAYOUT, FONT, MUSIC PLAYER." });
         selected = row;
         scroll = 0;
         follow = true;
