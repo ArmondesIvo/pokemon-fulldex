@@ -56,12 +56,22 @@ struct BattleState
     std::chrono::steady_clock::time_point downAt;
     // (Whom it fights: 0 a free battle, 1 the gyms, 2 the Elite Four; the region of the last two.)
     int mode = 0, region = 0;
+    // (kind: 0 a free battle's, 1 a gym leader, 2 the Elite Four, 3 Red, 4 a gym's trainer.)
     struct Opp { std::string name, sprite; int kind = 0, index = 0, level = 50; } opp;
+    // (A run, a gym's or the Elite Four's: its battles one after another.)
+    struct Step { Opp opp; std::vector<Arena::MonSpec> team; int prize = 0; };
+    std::vector<Step> steps;
+    int runKind = 0, gymSel = 0;
+    // (Choosing a famous one already beaten, for a free battle.)
+    bool oppPick = false;
+    int oppRegion = 0;
     // (Kept in pokehub-arena.txt: money, the bag, each region's badges and Elite wins.)
     bool arenaLoaded = false;
     int money = 3000;
     int bag[6] = {};
     int badges[8] = {}, champion[8] = {};
+    bool redBeaten = false;
+    int eliteBeat[8] = {}; // (each region's Elite Four and champion beaten, a bit each)
     // (The Elite Four's run: its step, the team's HP between battles; the item chosen to use.)
     bool eliteOn = false;
     int eliteStep = 0, itemSel = -1;
@@ -75,9 +85,11 @@ struct BattleState
 inline BattleState& Bat() { static BattleState s; return s; }
 enum { BT_PICK = 1, BT_REROLL, BT_DIFF, BT_FIGHT, BT_CARD, BT_BOTCARD, BT_PAUSE, BT_RESUME, BT_QUIT, BT_REMATCH, BT_MENU,
     BT_PG_TAB, BT_PG_MON, BT_PG_SLOT, BT_PG_CANCEL, BT_PG_DONE, BT_PG_CLEAR,
-    BT_MODE, BT_REGION, BT_SHOP, BT_SHOP_BACK, BT_BUY, BT_ITEM, BT_PREP_MON, BT_NEXT, BT_GIVEUP, BT_GYM_RESET };
+    BT_MODE, BT_REGION, BT_SHOP, BT_SHOP_BACK, BT_BUY, BT_ITEM, BT_PREP_MON, BT_NEXT, BT_GIVEUP, BT_GYM_RESET,
+    BT_GYM_SEL, BT_OPP_OPEN, BT_OPP_BACK, BT_OPP_REGION, BT_OPP_TAKE };
 inline std::string BattleTeamFile() { return HubDir() + "/pokehub-battle-team.txt"; }
 inline void PmdWantTeams(); // (both teams' moving pictures fetched: below)
+inline void PmdWant(const std::vector<int>& species);
 
 // ---- What the arena keeps: money, the bag, badges ------------------------------------------------
 inline std::string ArenaFile() { return HubDir() + "/pokehub-arena.txt"; }
@@ -90,6 +102,8 @@ inline void ArenaSave()
         fprintf(f, "money\t%d\n", B.money);
         for (int i = 0; i < 6; i++) fprintf(f, "item\t%d\t%d\n", i, B.bag[i]);
         for (int r = 0; r < 8; r++) fprintf(f, "region\t%d\t%d\t%d\n", r, B.badges[r], B.champion[r]);
+        fprintf(f, "red\t%d\n", B.redBeaten ? 1 : 0);
+        for (int r = 0; r < 8; r++) fprintf(f, "elite\t%d\t%d\n", r, B.eliteBeat[r]);
         fclose(f);
         std::rename(tmp.c_str(), ArenaFile().c_str());
     }
@@ -108,6 +122,8 @@ inline void ArenaLoad()
             if (sscanf(line, "money\t%d", &a) == 1) B.money = std::max(0, a);
             else if (sscanf(line, "item\t%d\t%d", &a, &b) == 2 && a >= 0 && a < 6) B.bag[a] = std::max(0, b);
             else if (sscanf(line, "region\t%d\t%d\t%d", &a, &b, &c) == 3 && a >= 0 && a < 8) { B.badges[a] = b; B.champion[a] = c; }
+            else if (sscanf(line, "red\t%d", &a) == 1) B.redBeaten = a != 0;
+            else if (sscanf(line, "elite\t%d\t%d", &a, &b) == 2 && a >= 0 && a < 8) B.eliteBeat[a] = b;
         }
         fclose(f);
     }
@@ -254,6 +270,40 @@ inline std::vector<Arena::MonSpec> BattleTeamOf(const int* species, int n, int l
 inline int TeamSize(const Arena::Trainer& t) { int n = 0; while (n < 6 && t.team[n]) n++; return n; }
 // The gym to fight now in a region: the first without its badge (-1: all eight won).
 inline int NextGym(int region) { for (int i = 0; i < 8; i++) if (!(Bat().badges[region] >> i & 1)) return i; return -1; }
+// (The way through: gyms open after the region before's Elite Four; an Elite Four with all eight
+// badges; Red with Johto's eight.)
+inline bool GymsOpen(int r) { return r == 0 || Bat().champion[r - 1] > 0; }
+inline bool EliteOpen(int r) { return GymsOpen(r) && (Bat().badges[r] & 255) == 255; }
+inline bool RedOpen() { return (Bat().badges[1] & 255) == 255; }
+// (A famous one beaten is free to fight in a free battle: k 0..7 a gym, 8..12 the Elite Four.)
+inline bool Beaten(int r, int k) { const BattleState& B = Bat(); return k < 8 ? (B.badges[r] >> k & 1) : (B.eliteBeat[r] >> (k - 8) & 1); }
+// The species of a type, for a gym's trainers: no legendaries (base stats 580 or more), all with pictures.
+inline const std::vector<int>& TypePool(int type)
+{
+    static std::map<int, std::vector<int>> cache;
+    auto it = cache.find(type);
+    if (it != cache.end()) return it->second;
+    std::vector<int> v;
+    for (int sp = 1; sp <= 649; sp++)
+    {
+        int base[6], types[2];
+        if (Arena::NoPicture(sp) || !PokemonHub::SpeciesBase(sp, base, types)) continue;
+        int total = 0;
+        for (int b : base) total += b;
+        if (total < 580 && total >= 300 && (types[0] == type || types[1] == type)) v.push_back(sp);
+    }
+    return cache[type] = v;
+}
+inline int BadgeCount(int r) { int n = 0; for (int i = 0; i < 8; i++) n += Bat().badges[r] >> i & 1; return n; }
+// (Why a fight is not open yet; "" when it is.)
+inline std::string LockReason(int mode, int r)
+{
+    const auto& regs = Arena::Regions();
+    if (mode == 0) return "";
+    if (!GymsOpen(r)) return std::string("Bloqueado: ven\xC3\xA7" "a a Elite dos 4 de ") + regs[r - 1].name + " primeiro.";
+    if (mode == 2 && !EliteOpen(r)) return std::string("Precisa das 8 ins\xC3\xADgnias de ") + regs[r].name + " (" + std::to_string(BadgeCount(r)) + "/8).";
+    return "";
+}
 // Whom the bot is, by the mode: a free battle's (drawn at random), the next gym's leader, or the
 // Elite Four's member of this step.
 inline void BattleSetOpp(bool reroll = false)
@@ -264,28 +314,37 @@ inline void BattleSetOpp(bool reroll = false)
     B.region = std::max(0, std::min(B.region, (int)regs.size() - 1));
     const Arena::Region& R = regs[B.region];
     B.botSel = -1;
-    if (B.mode == 1)
+    if (B.eliteOn && B.eliteStep < (int)B.steps.size())
     {
-        const int g = NextGym(B.region);
-        const Arena::Trainer& t = R.gyms[g < 0 ? 7 : g];
-        B.opp = { t.name, t.sprite, 1, g < 0 ? 7 : g, Arena::GymLevel(g < 0 ? 7 : g) };
-        B.bot = BattleTeamOf(t.team, TeamSize(t), B.opp.level, rng);
+        B.opp = B.steps[B.eliteStep].opp;
+        B.bot = B.steps[B.eliteStep].team;
+    }
+    else if (B.mode == 1)
+    {
+        // (The gym chosen; 8 is Red, once Johto's eight are won.)
+        const bool red = B.region == 1 && RedOpen();
+        B.gymSel = std::max(0, std::min(B.gymSel, red ? 8 : 7));
+        const Arena::Trainer& t = B.gymSel == 8 ? Arena::Red() : R.gyms[B.gymSel];
+        B.opp = { t.name, t.sprite, B.gymSel == 8 ? 3 : 1, B.gymSel, 50 };
+        B.bot = BattleTeamOf(t.team, TeamSize(t), 50, rng);
     }
     else if (B.mode == 2)
     {
-        const int e = std::max(0, std::min(4, B.eliteOn ? B.eliteStep : 0));
-        const Arena::Trainer& t = R.elite[e];
-        B.opp = { t.name, t.sprite, 2, e, Arena::EliteLevel(e) };
-        B.bot = BattleTeamOf(t.team, TeamSize(t), B.opp.level, rng);
+        const Arena::Trainer& t = R.elite[0];
+        B.opp = { t.name, t.sprite, 2, 0, 50 };
+        B.bot = BattleTeamOf(t.team, TeamSize(t), 50, rng);
     }
     else if (reroll || B.opp.kind != 0 || B.bot.empty())
     {
-        // (Three in ten a famous one, with their team; else an everyday trainer with six at random.)
-        if (rng() % 10 < 3)
+        // (Three in ten a famous one already beaten, with their team; else an everyday trainer with
+        // six at random.)
+        std::vector<const Arena::Trainer*> famous;
+        for (int r = 0; r < (int)regs.size(); r++)
+            for (int k = 0; k < 13; k++) if (Beaten(r, k)) famous.push_back(k < 8 ? &regs[r].gyms[k] : &regs[r].elite[k - 8]);
+        if (B.redBeaten) famous.push_back(&Arena::Red());
+        if (!famous.empty() && rng() % 10 < 3)
         {
-            const Arena::Region& r = regs[rng() % regs.size()];
-            const int k = (int)(rng() % 13);
-            const Arena::Trainer& t = k < 8 ? r.gyms[k] : r.elite[k - 8];
+            const Arena::Trainer& t = *famous[rng() % famous.size()];
             B.opp = { t.name, t.sprite, 0, 0, 50 };
             B.bot = BattleTeamOf(t.team, TeamSize(t), 50, rng);
         }
@@ -374,10 +433,12 @@ inline void BattleOpenPicker()
     B.msg.clear();
     Hub().version++;
 }
-inline bool BattlePicking() { return Bat().picking; }
+// (A page over the tab's, which the back button closes: the team's choosing, the shop, the opponents.)
+inline bool BattlePicking() { const BattleState& B = Bat(); return B.picking || B.shop || B.oppPick; }
 inline void BattlePickerDone(bool use)
 {
     BattleState& B = Bat();
+    if (!B.picking) { B.shop = false; B.oppPick = false; Hub().version++; return; }
     B.picking = false;
     if (use && !B.pickSel.empty())
     {
@@ -442,7 +503,7 @@ inline void BattleBegin()
         B.fightIdx.push_back(i);
     }
     if (team.empty()) { B.msg = "Todos desmaiados: use um Reviver."; return; }
-    const int diff = B.mode == 0 ? B.diff : B.mode == 1 ? (B.opp.index < 3 ? 1 : 2) : 2;
+    const int diff = B.mode == 0 ? B.diff : B.opp.kind == 4 ? 1 : 2; // (a gym's trainers Normal; leaders, the Elite and Red Hard)
     B.b.Start(team, B.bot, diff, (unsigned)std::chrono::steady_clock::now().time_since_epoch().count());
     B.on = true; B.paused = false; B.acc = 0; B.settled = false; B.delta = 0; B.endNote.clear();
     B.last = std::chrono::steady_clock::now();
@@ -452,7 +513,63 @@ inline void BattleBegin()
     for (bool& k : B.keys4) k = false;
     Hub().version++;
 }
-// A fight's end, once: money, a badge, the Elite Four's next step or its end.
+// A RUN, as the games' gyms and Elite Four: its battles one after another, the team's HP kept
+// between them (items in the preparation). A gym: two of its trainers (Pokémon of its type), then
+// its leader; the Elite Four: its four, then the champion.
+inline void BattleStartRun(int kind)
+{
+    BattleState& B = Bat();
+    std::mt19937 rng((unsigned)std::chrono::steady_clock::now().time_since_epoch().count());
+    const Arena::Region& R = Arena::Regions()[B.region];
+    B.steps.clear();
+    if (kind == 1)
+    {
+        const Arena::Trainer& L = R.gyms[std::max(0, std::min(7, B.gymSel))];
+        const std::vector<int>& pool = TypePool(L.type);
+        const auto& ev = Arena::EverydayTrainers();
+        for (int k = 0; k < 2; k++)
+        {
+            const Arena::Everyday& e = ev[rng() % ev.size()];
+            int sp[6], n = 0;
+            for (int tries = 0; n < 2 + k && tries < 100 && !pool.empty(); tries++)
+            {
+                const int x = pool[rng() % pool.size()];
+                bool dup = false;
+                for (int i = 0; i < n; i++) dup |= sp[i] == x;
+                if (!dup) sp[n++] = x;
+            }
+            BattleState::Step st;
+            st.opp = { std::string(e.title) + " " + Arena::RandomFirstName(rng()), e.sprite, 4, k, 50 };
+            st.team = BattleTeamOf(sp, n, 50, rng);
+            st.prize = Arena::GYM_TRAINER_PRIZE;
+            if (!st.team.empty()) B.steps.push_back(st);
+        }
+        BattleState::Step st;
+        st.opp = { L.name, L.sprite, 1, B.gymSel, 50 };
+        st.team = BattleTeamOf(L.team, TeamSize(L), 50, rng);
+        st.prize = Arena::GymPrize(B.gymSel);
+        B.steps.push_back(st);
+    }
+    else
+        for (int e = 0; e < 5; e++)
+        {
+            const Arena::Trainer& t = R.elite[e];
+            BattleState::Step st;
+            st.opp = { t.name, t.sprite, 2, e, 50 };
+            st.team = BattleTeamOf(t.team, TeamSize(t), 50, rng);
+            st.prize = Arena::ElitePrize(e);
+            B.steps.push_back(st);
+        }
+    B.eliteOn = true; B.runKind = kind; B.eliteStep = 0; B.itemSel = -1;
+    B.runHp.clear();
+    for (const auto& m : B.mine) B.runHp.push_back(m.stats[0]);
+    std::vector<int> want;
+    for (const auto& st : B.steps) { for (const auto& m : st.team) want.push_back(m.species); TrainerArt(st.opp.sprite); }
+    PmdWant(want);
+    BattleSetOpp();
+    BattleBegin();
+}
+// A fight's end, once: money; in a run the next step, or its end (a badge, a champion).
 inline void BattleSettle()
 {
     BattleState& B = Bat();
@@ -460,22 +577,30 @@ inline void BattleSettle()
     B.settled = true;
     const bool won = B.b.winner == 0;
     const auto& R = Arena::Regions()[B.region];
-    int prize = Arena::FREE_PRIZE;
-    if (B.opp.kind == 1) prize = Arena::GymPrize(B.opp.index);
-    if (B.opp.kind == 2) prize = Arena::ElitePrize(B.opp.index);
+    const bool run = B.eliteOn && B.eliteStep < (int)B.steps.size();
+    const int prize = run ? B.steps[B.eliteStep].prize : B.opp.kind == 3 ? Arena::RED_PRIZE : Arena::FREE_PRIZE;
     B.delta = won ? prize : -std::min(B.money, prize / 2);
     B.money += B.delta;
-    if (B.opp.kind == 1 && won)
-    {
-        B.badges[B.region] |= 1 << B.opp.index;
-        B.endNote = NextGym(B.region) < 0 ? std::string("Todas as ins\xC3\xADgnias de ") + R.name + "!" : std::string("Ins\xC3\xADgnia de ") + B.opp.name + " conquistada!";
-    }
-    if (B.opp.kind == 2)
+    if (B.opp.kind == 3 && won) { B.redBeaten = true; B.endNote = "Voc\xC3\xAA venceu o Red no Monte Prateado!"; }
+    if (run)
     {
         for (size_t k = 0; k < B.fightIdx.size() && B.fightIdx[k] < (int)B.runHp.size(); k++) B.runHp[B.fightIdx[k]] = B.b.HpAfter(0, (int)k);
-        if (!won) { B.eliteOn = false; B.endNote = "O desafio da Elite dos 4 acabou."; }
-        else if (B.eliteStep >= 4) { B.eliteOn = false; B.champion[B.region]++; B.endNote = std::string("Voc\xC3\xAA \xC3\xA9 o campe\xC3\xA3o de ") + R.name + "!"; }
-        else { B.eliteStep++; B.endNote = std::string("Pr\xC3\xB3ximo: ") + R.elite[B.eliteStep].name + ". Use itens na prepara\xC3\xA7\xC3\xA3o."; }
+        if (!won) { B.eliteOn = false; B.endNote = B.runKind == 1 ? "O desafio do gin\xC3\xA1sio acabou." : "O desafio da Elite dos 4 acabou."; }
+        else
+        {
+            if (B.opp.kind == 2) B.eliteBeat[B.region] |= 1 << B.opp.index;
+            if (B.eliteStep + 1 >= (int)B.steps.size())
+            {
+                B.eliteOn = false;
+                if (B.runKind == 1)
+                {
+                    B.badges[B.region] |= 1 << B.gymSel;
+                    B.endNote = (B.badges[B.region] & 255) == 255 ? std::string("Todas as ins\xC3\xADgnias de ") + R.name + "! A Elite dos 4 est\xC3\xA1 liberada." : std::string("Ins\xC3\xADgnia de ") + B.opp.name + " conquistada!";
+                }
+                else { B.champion[B.region]++; B.endNote = std::string("Voc\xC3\xAA \xC3\xA9 o campe\xC3\xA3o de ") + R.name + "!"; }
+            }
+            else { B.eliteStep++; B.endNote = std::string("Pr\xC3\xB3ximo: ") + B.steps[B.eliteStep].opp.name + ". Use itens na prepara\xC3\xA7\xC3\xA3o."; }
+        }
     }
     ArenaSave();
 }
@@ -1365,7 +1490,7 @@ inline void DrawBattle(Canvas& c, float u)
             BGfx::Text(c, cx0, ry + 50 * u, std::to_string(b.hits[0]), 14 * u, 0xFFFFFFFFu);
             BGfx::Text(c, cx1, ry + 50 * u, std::to_string(b.hits[1]), 14 * u, 0xFFFFFFFFu);
             if (B.opp.kind == 0) { button("Revanche", BT_REMATCH, c.w / 2.0f - 90 * u, true); button("Menu", BT_MENU, c.w / 2.0f + 90 * u, false); }
-            else if (B.opp.kind == 1 && !won) { button("Tentar de novo", BT_REMATCH, c.w / 2.0f - 100 * u, true); button("Menu", BT_MENU, c.w / 2.0f + 100 * u, false); }
+            else if (B.opp.kind == 3 && !won) { button("Tentar de novo", BT_REMATCH, c.w / 2.0f - 100 * u, true); button("Menu", BT_MENU, c.w / 2.0f + 100 * u, false); }
             else button("Continuar", BT_MENU, c.w / 2.0f, true);
         }
     }
@@ -1623,37 +1748,38 @@ inline void BattleOppPanel(Canvas& c, float u, int x, int top, int pw, int ph)
         {
             const std::string l = regs[r].name;
             const int w = GW(l, 11 * u, true) + (int)(18 * u), h = (int)(26 * u);
-            PcButton(c, cx, y, w, h, 7 * u, r == B.region, u);
-            GT(c, cx + (int)(9 * u), y + h / 2.0f, l, 11 * u, r == B.region ? PcPal::OnPrimary : PcPal::Ink, true);
+            const bool open = B.mode == 1 ? GymsOpen(r) : EliteOpen(r);
+            if (open || r == B.region) PcButton(c, cx, y, w, h, 7 * u, r == B.region, u);
+            else Glass::Round(c, cx, y, w, h, 7 * u, PcPal::Slot, PcPal::Line, 1.0f * u);
+            GT(c, cx + (int)(9 * u), y + h / 2.0f, l, 11 * u, r == B.region ? PcPal::OnPrimary : open ? PcPal::Ink : PcPal::Hint, true);
             if (!B.eliteOn) B.hits.push_back({ cx, y, w, h, BT_REGION, 0, r });
             cx += w + (int)(5 * u);
         }
         y += (int)(34 * u);
         const Arena::Region& R = regs[B.region];
-        const int n = B.mode == 1 ? 8 : 5, per = B.mode == 1 ? 8 : 5;
+        // (The gyms: any of the eight to choose, Red too once Johto's are won; the Elite Four's five.)
+        const bool red = B.mode == 1 && B.region == 1 && RedOpen();
+        const int n = B.mode == 1 ? (red ? 9 : 8) : 5, per = n;
         const int gw = pw - (int)(20 * u), tw = (gw - (per - 1) * (int)(5 * u)) / per, th = std::min((int)(tw * 1.55f), (int)(ph * 0.42f));
-        const int next = B.mode == 1 ? NextGym(B.region) : (B.eliteOn ? B.eliteStep : 0);
         for (int i = 0; i < n; i++)
         {
-            const Arena::Trainer& t = B.mode == 1 ? R.gyms[i] : R.elite[i];
-            const bool done = B.mode == 1 ? (B.badges[B.region] >> i & 1) : (B.eliteOn && i < B.eliteStep);
-            BattleTrainerTile(c, u, x + (int)(10 * u) + i * (tw + (int)(5 * u)), y, tw, th, t, done, i == next, i == 4 && B.mode == 2 ? "Campe\xC3\xA3o" : "");
+            const Arena::Trainer& t = B.mode == 1 ? (i == 8 ? Arena::Red() : R.gyms[i]) : R.elite[i];
+            const bool done = B.mode == 1 ? (i == 8 ? B.redBeaten : (B.badges[B.region] >> i & 1) != 0) : (B.eliteBeat[B.region] >> i & 1) != 0;
+            const int tx = x + (int)(10 * u) + i * (tw + (int)(5 * u));
+            BattleTrainerTile(c, u, tx, y, tw, th, t, done, B.mode == 1 ? i == B.gymSel : i == 0, i == 8 ? "Monte Prateado" : i == 4 && B.mode == 2 ? "Campe\xC3\xA3o" : "");
+            if (B.mode == 1) B.hits.push_back({ tx, y, tw, th, BT_GYM_SEL, 0, i });
         }
         y += th + (int)(8 * u);
         std::string line;
-        if (B.mode == 1)
-            line = next < 0 ? std::string("Voc\xC3\xAA tem as 8 ins\xC3\xADgnias de ") + R.name + "!" : std::string("Pr\xC3\xB3ximo: ") + R.gyms[next].name + "  \xC2\xB7  Lv." + std::to_string(Arena::GymLevel(next)) + "  \xC2\xB7  " + Money(Arena::GymPrize(next));
+        const std::string lock = LockReason(B.mode, B.region);
+        if (!lock.empty()) line = lock;
+        else if (B.mode == 1 && B.gymSel == 8)
+            line = std::string(B.redBeaten ? "Revanche: " : "Liberado: ") + "Red, no Monte Prateado  \xC2\xB7  " + Money(Arena::RED_PRIZE);
+        else if (B.mode == 1)
+            line = std::string("Gin\xC3\xA1sio de ") + R.gyms[B.gymSel].name + ": 2 treinadores e o l\xC3\xAD" "der, sem curar  \xC2\xB7  " + Money(Arena::GymPrize(B.gymSel)) + "  \xC2\xB7  " + std::to_string(BadgeCount(B.region)) + "/8 ins\xC3\xADgnias";
         else
             line = std::string("5 batalhas seguidas, sem curar entre elas  \xC2\xB7  ") + (B.champion[B.region] ? "Campe\xC3\xA3o " + std::to_string(B.champion[B.region]) + "x" : std::string("Itens na prepara\xC3\xA7\xC3\xA3o"));
-        GTFit(c, x + (int)(12 * u), y + 8 * u, line, 11.5f * u, pw - (int)(24 * u) - (B.mode == 1 && next < 0 ? (int)(110 * u) : 0), PcPal::Ink, true);
-        if (B.mode == 1 && next < 0)
-        {
-            const std::string l = "Recome\xC3\xA7" "ar";
-            const int w = GW(l, 11 * u, true) + (int)(20 * u), h = (int)(24 * u), bx = x + pw - w - (int)(10 * u);
-            PcButton(c, bx, (int)(y - 4 * u), w, h, 6 * u, false, u);
-            GT(c, bx + (int)(10 * u), y + 8 * u, l, 11 * u, PcPal::Ink, true);
-            B.hits.push_back({ bx, (int)(y - 4 * u), w, h, BT_GYM_RESET, 0, 0 });
-        }
+        GTFit(c, x + (int)(12 * u), y + 8 * u, line, 11.5f * u, pw - (int)(24 * u), lock.empty() ? PcPal::Ink : 0xFFB04040u, true);
         y += (int)(20 * u);
     }
     else
@@ -1668,6 +1794,11 @@ inline void BattleOppPanel(Canvas& c, float u, int x, int top, int pw, int ph)
         PcButton(c, bxx, y + (int)(60 * u), bw, bh, 7 * u, false, u);
         GT(c, bxx + (int)(11 * u), y + 60 * u + bh / 2.0f, bl, 11.5f * u, PcPal::Ink, true);
         B.hits.push_back({ bxx, y + (int)(60 * u), bw, bh, BT_REROLL, 1, 0 });
+        const std::string pl = "Escolher advers\xC3\xA1rio";
+        const int pw2 = GW(pl, 11.5f * u, true) + (int)(22 * u), px2 = bxx + bw + (int)(8 * u);
+        PcButton(c, px2, y + (int)(60 * u), pw2, bh, 7 * u, true, u);
+        GT(c, px2 + (int)(11 * u), y + 60 * u + bh / 2.0f, pl, 11.5f * u, PcPal::OnPrimary, true);
+        B.hits.push_back({ px2, y + (int)(60 * u), pw2, bh, BT_OPP_OPEN, 1, 0 });
         y += ts + (int)(8 * u);
     }
     // (Its team: six places, the one tapped's sheet under them.)
@@ -1723,9 +1854,11 @@ inline void DrawBattlePrep(Canvas& c, float u, int L, int R, int top, int bottom
     BattleState& B = Bat();
     const Arena::Region& Rg = Arena::Regions()[B.region];
     PcCard(c, L, top, R - L, bottom - top, 10 * u, u);
-    const Arena::Trainer& nx = Rg.elite[std::min(4, B.eliteStep)];
-    GT(c, L + (int)(16 * u), top + 22 * u, std::string("Elite dos 4 de ") + Rg.name + "  \xC2\xB7  " + std::to_string(B.eliteStep + 1) + "/5", 16 * u, PcPal::Ink, true);
-    GT(c, L + (int)(16 * u), top + 44 * u, std::string("Pr\xC3\xB3ximo: ") + nx.name + (B.eliteStep == 4 ? " (campe\xC3\xA3o)" : "") + "  \xC2\xB7  " + Money(B.money), 12 * u, PcPal::Hint, true);
+    if (B.eliteStep >= (int)B.steps.size()) return;
+    const BattleState::Opp& nx = B.steps[B.eliteStep].opp;
+    const std::string what = B.runKind == 1 ? std::string("Gin\xC3\xA1sio de ") + Rg.gyms[B.gymSel].name : std::string("Elite dos 4 de ") + Rg.name;
+    GT(c, L + (int)(16 * u), top + 22 * u, what + "  \xC2\xB7  " + std::to_string(B.eliteStep + 1) + "/" + std::to_string(B.steps.size()), 16 * u, PcPal::Ink, true);
+    GT(c, L + (int)(16 * u), top + 44 * u, std::string("Pr\xC3\xB3ximo: ") + nx.name + (nx.kind == 1 ? " (l\xC3\xAD" "der)" : nx.kind == 2 && nx.index == 4 ? " (campe\xC3\xA3o)" : "") + "  \xC2\xB7  " + Money(B.money), 12 * u, PcPal::Hint, true);
     if (const ArtImg* a = TrainerArt(nx.sprite)) DrawArt(c, *a, R - (int)(130 * u), top + (int)(6 * u), (int)(110 * u), (int)(110 * u));
     // (The team: a card each with its HP; tap one to use the chosen item on it.)
     const int gx = L + (int)(14 * u), gy = top + (int)(64 * u), gw = R - L - (int)(150 * u);
@@ -1774,6 +1907,48 @@ inline void DrawBattlePrep(Canvas& c, float u, int L, int R, int top, int bottom
     button("Desistir", BT_GIVEUP, false);
     GTFit(c, gx, fy + fh / 2.0f, !B.msg.empty() ? B.msg : "Os desmaiados s\xC3\xB3 voltam com Reviver.", 11.5f * u, bx - gx - (int)(10 * u), PcPal::Hint, false);
 }
+// Choosing a famous opponent for a free battle: a tab a region, its leaders, Elite Four and
+// champion (Red under Johto); those not beaten yet faded.
+inline void DrawOppPicker(Canvas& c, float u, int L, int R, int top, int bottom)
+{
+    BattleState& B = Bat();
+    const auto& regs = Arena::Regions();
+    PcCard(c, L, top, R - L, bottom - top, 10 * u, u);
+    GT(c, L + (int)(16 * u), top + 22 * u, "Escolher advers\xC3\xA1rio", 17 * u, PcPal::Ink, true);
+    {
+        const std::string l = "Voltar";
+        const int w = GW(l, 12 * u, true) + (int)(26 * u), h = (int)(32 * u), bx = R - w - (int)(12 * u);
+        PcButton(c, bx, top + (int)(8 * u), w, h, 7 * u, false, u);
+        GT(c, bx + (int)(13 * u), top + 8 * u + h / 2.0f, l, 12 * u, PcPal::Ink, true);
+        B.hits.push_back({ bx, top + (int)(8 * u), w, h, BT_OPP_BACK, 0, 0 });
+    }
+    int cx = L + (int)(16 * u);
+    const int ty = top + (int)(48 * u);
+    for (int r = 0; r < (int)regs.size(); r++)
+    {
+        const std::string l = regs[r].name;
+        const int w = GW(l, 12 * u, true) + (int)(22 * u), h = (int)(30 * u);
+        PcButton(c, cx, ty, w, h, 7 * u, r == B.oppRegion, u);
+        GT(c, cx + (int)(11 * u), ty + h / 2.0f, l, 12 * u, r == B.oppRegion ? PcPal::OnPrimary : PcPal::Ink, true);
+        B.hits.push_back({ cx, ty, w, h, BT_OPP_REGION, 0, r });
+        cx += w + (int)(6 * u);
+    }
+    const Arena::Region& Rg = regs[std::max(0, std::min(B.oppRegion, (int)regs.size() - 1))];
+    const int n = B.oppRegion == 1 ? 14 : 13, cols = 7;
+    const int gx = L + (int)(16 * u), gy = ty + (int)(42 * u), gw = R - L - (int)(32 * u), gh = bottom - gy - (int)(36 * u);
+    const int tw = (gw - (cols - 1) * (int)(6 * u)) / cols, th = std::min((int)(tw * 1.3f), (gh - (int)(6 * u)) / 2);
+    for (int i = 0; i < n; i++)
+    {
+        const int k = i == 13 ? 99 : i;
+        const Arena::Trainer& t = k == 99 ? Arena::Red() : k < 8 ? Rg.gyms[k] : Rg.elite[k - 8];
+        const bool open = k == 99 ? B.redBeaten : Beaten(B.oppRegion, k);
+        const int x0 = gx + (i % cols) * (tw + (int)(6 * u)), y0 = gy + (i / cols) * (th + (int)(6 * u));
+        BattleTrainerTile(c, u, x0, y0, tw, th, t, false, false, k == 99 ? "Monte Prateado" : k == 12 ? "Campe\xC3\xA3o" : "");
+        if (!open) { BGfx::Rect(c, x0, y0, tw, th, 0xB8EAF1E2u); GTFit(c, x0 + (int)(6 * u), y0 + th * 0.45f, "N\xC3\xA3o derrotado", 9.5f * u, tw - (int)(12 * u), PcPal::Hint, true); }
+        B.hits.push_back({ x0, y0, tw, th, BT_OPP_TAKE, 0, B.oppRegion * 100 + k });
+    }
+    GTFit(c, gx, bottom - 20 * u, !B.msg.empty() ? B.msg : "Quem voc\xC3\xAA derrota nos Gin\xC3\xA1sios e na Elite dos 4 fica liberado aqui, com o time dos jogos.", 11 * u, gw, PcPal::Hint, false);
+}
 inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom)
 {
     BattleState& B = Bat();
@@ -1786,6 +1961,7 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
     { const int in = (int)(10 * u); L += in; R -= in; top += in; bottom -= in; }
     if (B.picking) { DrawBattlePicker(c, u, L, R, top, bottom); return; }
     if (B.shop) { DrawBattleShop(c, u, L, R, top, bottom); return; }
+    if (B.oppPick) { DrawOppPicker(c, u, L, R, top, bottom); return; }
     if (B.eliteOn) { DrawBattlePrep(c, u, L, R, top, bottom); return; }
     const int gap = (int)(10 * u), footH = (int)(52 * u);
     const int pw = (R - L - gap) / 2, ph = bottom - top - footH - gap;
@@ -1862,8 +2038,8 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
         }
         x += (int)(10 * u);
     }
-    const std::string go = B.mode == 2 ? "Come\xC3\xA7" "ar desafio" : "Lutar!";
-    const bool canGo = !B.mine.empty() && !(B.mode == 1 && NextGym(B.region) < 0);
+    const std::string go = B.mode == 2 || (B.mode == 1 && B.gymSel < 8) ? "Come\xC3\xA7" "ar desafio" : "Lutar!";
+    const bool canGo = !B.mine.empty() && LockReason(B.mode, B.region).empty();
     const int gw2 = GW(go, 15 * u, true) + (int)(40 * u), gh = footH - (int)(12 * u), gx2 = R - gw2 - (int)(8 * u);
     PcButton(c, gx2, fy + (int)(6 * u), gw2, gh, 9 * u, canGo, u);
     GT(c, gx2 + (int)(20 * u), fy + footH / 2.0f, go, 15 * u, canGo ? PcPal::OnPrimary : PcPal::Hint, true);
@@ -1940,14 +2116,9 @@ inline void BattlePagePointer(int phase, int x, int y)
         case BT_DIFF: B.diff = h.value; break;
         case BT_FIGHT:
             if (B.mine.empty()) { B.msg = "Escolha seu time primeiro."; break; }
-            if (B.mode == 2)
-            {
-                // (The Elite Four: a run of five, everyone's HP full at its start.)
-                B.eliteOn = true; B.eliteStep = 0; B.itemSel = -1;
-                B.runHp.clear();
-                for (const auto& m : B.mine) B.runHp.push_back(m.stats[0]);
-                BattleSetOpp();
-            }
+            if (!LockReason(B.mode, B.region).empty()) { B.msg = LockReason(B.mode, B.region); break; }
+            if (B.mode == 1 && B.gymSel < 8) { BattleStartRun(1); break; }
+            if (B.mode == 2) { BattleStartRun(2); break; }
             BattleBegin();
             break;
         case BT_MODE: B.mode = h.value; BattleSetOpp(false); break;
@@ -1980,6 +2151,23 @@ inline void BattlePagePointer(int phase, int x, int y)
             break;
         }
         case BT_NEXT: BattleSetOpp(); BattleBegin(); break;
+        case BT_GYM_SEL: B.gymSel = h.value; BattleSetOpp(false); break;
+        case BT_OPP_OPEN: B.oppPick = true; break;
+        case BT_OPP_BACK: B.oppPick = false; break;
+        case BT_OPP_REGION: B.oppRegion = h.value; break;
+        case BT_OPP_TAKE:
+        {
+            // (A famous one beaten: chosen for the free battle, with their team.)
+            const int r = h.value / 100, k = h.value % 100;
+            if (!(k == 99 ? B.redBeaten : Beaten(r, k))) { B.msg = "Derrote esse primeiro no modo Gin\xC3\xA1sios ou na Elite dos 4."; break; }
+            const Arena::Trainer& t = k == 99 ? Arena::Red() : k < 8 ? Arena::Regions()[r].gyms[k] : Arena::Regions()[r].elite[k - 8];
+            std::mt19937 rng((unsigned)std::chrono::steady_clock::now().time_since_epoch().count());
+            B.opp = { t.name, t.sprite, 0, 0, 50 };
+            B.bot = BattleTeamOf(t.team, TeamSize(t), 50, rng);
+            B.botSel = -1; B.oppPick = false;
+            PmdWantTeams();
+            break;
+        }
         case BT_GIVEUP: B.eliteOn = false; B.itemSel = -1; B.msg = "Desafio abandonado."; BattleSetOpp(false); break;
         case BT_CARD: B.sel = h.value; break;
         case BT_BOTCARD: B.botSel = h.value; break;

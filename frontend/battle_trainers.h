@@ -97,6 +97,11 @@ inline const std::vector<Region>& Regions()
     };
     return r;
 }
+// RED, on Mt. Silver as in HeartGold and SoulSilver: open with Johto's eight badges.
+inline const Trainer& Red() { static const Trainer r = { "Red", "red", -1, { 25, 196, 143, 3, 6, 9 } }; return r; }
+constexpr int RED_LEVEL = 50, RED_PRIZE = 10000;
+// The way through, as the games go: a region's gyms open once the one before's Elite Four is beaten
+// (Kanto's from the start), its Elite Four with all its eight badges.
 // Everyday trainers (a free battle's): their class, as the Portuguese games name it, and picture.
 struct Everyday { const char* title; const char* sprite; };
 inline const std::vector<Everyday>& EverydayTrainers()
@@ -119,14 +124,13 @@ inline const char* RandomFirstName(unsigned n)
         "Gustavo", "Beatriz", "Rodrigo", "Fernanda", "Vin\xC3\xAD" "cius", "Carla", "Mateus", "Aline", "Pedro", "Let\xC3\xAD" "cia" };
     return names[n % (sizeof names / sizeof *names)];
 }
-// The level a gym (0..7) or the Elite (0..3, 4 the champion) fights at: harder along the way. The
-// player's own fight at 50.
-inline int GymLevel(int i) { return 38 + i * 3; }
-inline int EliteLevel(int i) { return i < 4 ? 58 + i : 64; }
+// Everyone fights at level 50, the trainers as the player's (as the player asked).
+inline int GymLevel(int) { return 50; }
+inline int EliteLevel(int) { return 50; }
 // Money: what a win pays, and what a loss costs (half of it), as the games' prize money.
 inline int GymPrize(int i) { return 600 + 300 * i; }
 inline int ElitePrize(int i) { return i < 4 ? 2500 : 6000; }
-constexpr int FREE_PRIZE = 300;
+constexpr int FREE_PRIZE = 300, GYM_TRAINER_PRIZE = 300;
 // The shop: what it sells, at what price, and what each does (heal: points, -1 all; revive: 0
 // none, 1 half, 2 all).
 struct ShopItem { const char* name; int price, heal, revive; const char* what; };
