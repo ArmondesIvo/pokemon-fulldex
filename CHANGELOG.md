@@ -6,7 +6,7 @@
 - **Origin marks, as Pokémon HOME shows them:** a Game Boy for Red to Crystal Pokémon, the pentagon for
   X / Y / Omega Ruby / Alpha Sapphire, the clover for Sun / Moon / Ultra Sun / Ultra Moon; none for
   Gens 3 to 5. A Gen 1 Pokémon no longer shows an item it does not have (that byte is its catch rate).
-- **Updates looked for again** when the app comes back from the background (at most every half hour).
+- **Updates looked for again** each time the app comes back from the background.
 - **The Hub is back, with three things only:** Cloud Saves, Trade and Themes (Theme Editor, My Themes,
   Theme Gallery, and the font in the editor). The Discord link is gone.
 - **PokeHub's own updates.** At each start the app reads a small file of PokeHub's own (built in with
