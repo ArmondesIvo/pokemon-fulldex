@@ -67,11 +67,19 @@ inline SaveHealth SaveHealthOfData(const std::vector<unsigned char>& d, bool ds,
         else h.label = "No Save Yet";
         return h;
     }
-    const size_t want = ds ? 524288 : 131072;
-    if (d.size() != want && !(!ds && d.size() == want + 16))
+    // (The sizes a save of its kind comes in: a DS game's 512 KB; a GBA game's 128 KB flash (64 KB,
+    // 32 KB, 8 KB and 512 bytes for others), with 16 bytes of clock after it as mGBA writes; a Game
+    // Boy game's 32 KB (Red to Crystal, 8 KB for some), with its clock's 44 or 48 bytes after it.)
+    size_t want = 0;
+    if (ds) { if (d.size() == 524288) want = 524288; }
+    else
+        for (size_t base : { (size_t)131072, (size_t)65536, (size_t)32768, (size_t)8192, (size_t)512 })
+            for (size_t extra : { (size_t)0, (size_t)16, (size_t)44, (size_t)48 })
+                if (!want && d.size() == base + extra) want = base;
+    if (!want)
     {
         h.state = 2; h.label = "Problem";
-        h.why = "It is " + SvKB((long long)d.size()) + ", but this game's saves are " + SvKB((long long)want) + ".";
+        h.why = "It is " + SvKB((long long)d.size()) + ", which is not a size this game's saves come in.";
         return h;
     }
     bool ff = true, zero = true;

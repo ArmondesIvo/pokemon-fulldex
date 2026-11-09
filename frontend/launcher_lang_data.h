@@ -4405,6 +4405,7 @@ Sign in first (the figure at the top).	Entre primeiro (o bonequinho no topo).
 Save or Undo All in My PC first.	Salve ou desfaça tudo no My PC antes.
 No connection to PokeHub's server.	Sem conexão com o servidor do PokeHub.
 Origin	Origem
+It is {}, which is not a size this game's saves come in.	Tem {}, que não é um tamanho de save deste jogo.
 )FDXLANG";
 inline const char* LauncherLangData(const char* code)
 {
