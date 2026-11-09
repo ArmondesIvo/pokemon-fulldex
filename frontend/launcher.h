@@ -2318,7 +2318,7 @@ inline int ToolAt(int x, int y)
     return 0;
 }
 // The keyboard's title, line and done key for what it is for (GlassFocus::kbFor).
-inline const char* KbTitle() { const int k = Focus().kbFor; return k == 6 ? "THEME CODE" : k == 5 ? "THEME NAME" : k == 4 ? "TRADE CODE" : k == 1 ? "NEW TAB" : k == 2 ? "SEARCH" : k == 3 ? "RENAME TAB" : "RENAME"; }
+inline const char* KbTitle() { const int k = Focus().kbFor; return k == 7 ? "NICKNAME" : k == 6 ? "THEME CODE" : k == 5 ? "THEME NAME" : k == 4 ? "TRADE CODE" : k == 1 ? "NEW TAB" : k == 2 ? "SEARCH" : k == 3 ? "RENAME TAB" : "RENAME"; }
 inline const char* KbPrompt() { const int k = Focus().kbFor; return k == 6 ? "A Theme Code" : k == 5 ? "Your Theme's Name" : k == 4 ? "The Other Player's Code" : k == 1 || k == 3 ? "Tab Name" : k == 2 ? "Part Of A Game's Name" : "The Game's Own Name"; }
 inline const char* KbDone() { const int k = Focus().kbFor; return k == 6 ? "Get It" : k == 4 ? "Join" : k == 1 ? "Make Tab" : k == 2 ? "Search" : "Save"; }
 // Add To Tab (the game's menu): the player's tabs, each marked if the game is in it, New Tab and Close.
@@ -2488,6 +2488,8 @@ inline int TabDialogPick(const std::string& pick, int& tab, std::string& note)
 // the search ("" clears it), a tab's name. tab: the tab shown after.
 inline void TradeEnterCode(const std::string& code); // (the Hub's Trade page, below)
 inline void ThemeSaveStart(const std::string& name); // (My Themes, below)
+inline void PcRenameDone(const std::string& t); // (My PC, below)
+inline bool PcBack(); // (My PC, below)
 inline void KeyboardDone(int& tab, std::string& note)
 {
     GlassFocus& F = Focus();
@@ -2510,6 +2512,7 @@ inline void KeyboardDone(int& tab, std::string& note)
         note = t.empty() ? "SEARCH CLEARED" : "";
     }
     else if (F.kbFor == 4) TradeEnterCode(t);
+    else if (F.kbFor == 7) PcRenameDone(t);
     else if (F.kbFor == 5) ThemeSaveStart(t);
     else if (F.kbFor == 6) GalleryEnterCode(t);
     else if (F.kbFor == 3 && !t.empty() && F.kbTab >= 0 && F.kbTab < (int)tabs.size())
@@ -4639,12 +4642,13 @@ inline int ThemePick(const std::string& pick)
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
 static const char* const kReleasesUrl = "https://github.com/mamesj/pokemon-fulldex/releases";
-inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 6 : HubMode() == 4 ? DexRows() : HubMode() == 5 ? ImportRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
+inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 6 : HubMode() == 6 ? 1 : HubMode() == 4 ? DexRows() : HubMode() == 5 ? ImportRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
     if (Mover().open) return MoverActions(row);
     if (HubMode() == 2) return TradeActions(row);
     if (HubMode() == 4) return DexActions(row);
+    if (HubMode() == 6) return {};
     if (HubMode() == 5) return ImportActions(row);
     if (HubMode() == 3) return SavesDs() ? std::vector<std::string>(10, "Slot") : std::vector<std::string>(); // (Manage Saves: its slots)
     if (HubMode() == 0) return {};
@@ -4763,6 +4767,7 @@ inline std::string HubDo(int row, int act)
     if (Mover().open) return MoverDo(row, act);
     if (HubMode() == 2) return TradeDo(row, act);
     if (HubMode() == 4) return DexDo(row, act);
+    if (HubMode() == 6) return "";
     if (HubMode() == 5) return ImportDo(row, act);
     if (HubMode() == 3) return SavesSlotDo(act);
     const std::vector<std::string> acts = HubActions(row);
@@ -5003,6 +5008,7 @@ inline bool PageBack()
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMode() == 1 ? 1 : 2; LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
     if (F.page == SIDE_HUB && F.side < 0 && HubMode() == 3 && !Mover().open) return SavesBack(); // (Manage Saves: off a slot, then the games)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
+    if (F.page == SIDE_HUB && HubMode() == 6) { if (PcBack()) return true; HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().fromTab) { MoverShow(false); Mover().fromTab = false; F.page = -1; F.side = -1; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
@@ -5030,11 +5036,9 @@ inline void OpenMyPc()
 {
     GlassFocus& F = Focus();
     OpenSide(SIDE_HUB);
-    MoverState& m = Mover();
-    if (MoverGames().size() > 1 && (m.from == m.to || !m.fromTab)) { m.from = 1; m.to = 0; }
-    MoverShow(true);
-    m.fromTab = true;
-    F.prow = MOVER_FIRST; F.pact = -1; F.rScroll = 0;
+    HubMode() = 6; // (My PC: DrawPcPage)
+    F.prow = 0; F.pact = -1; F.rScroll = 0;
+    Hub().version++;
 }
 inline int PageRowAt(int x, int y)
 {
@@ -5192,6 +5196,689 @@ inline bool SameMonName(const std::string& v, const std::string& spn)
 #endif
 }
 // (A page's detail panel upright: what is drawn in it stays inside it, the pixels above and below put back after.)
+// ---------------------------------------------------------------------------------------------
+// MY PC (the tab after 3DS, HubMode 6): the Pokémon PC as PKVault lays it out. Two box panels side
+// by side (each: its game's tabs, its box tabs, a grid of 6 x 5), the chosen Pokémon's details
+// between them, and along the foot the changes waiting to be saved. A Pokémon is moved by
+// dragging it to a free place, or by choosing it and then the place; nothing is written until
+// SAVE (both saves backed up first, pokemon_hub.h's Commit), and UNDO ALL reads them again.
+#ifdef SSR_BOX_SPRITES
+} // (out of Launcher: box_sprites.cpp's)
+bool BoxSprite(int species, bool shiny, const unsigned char*& data, size_t& size);
+namespace Launcher {
+#endif
+struct PcHit { int x, y, w, h, kind, side, value; };
+enum { PC_GAME = 1, PC_PREV_GAMES, PC_NEXT_GAMES, PC_BOX_PREV, PC_BOX_NEXT, PC_PARTY, PC_CELL, PC_TAB, PC_EV, PC_EVOLVE, PC_SAVE, PC_UNDO, PC_RENAME, PC_CLOSE };
+struct PcSide
+{
+    int game = 0, box = 0, firstChip = 0;
+#ifdef SSR_POKEMON_HUB
+    std::unique_ptr<PokemonHub::Save> save;
+#endif
+    std::string path, err;
+};
+struct PcState
+{
+    bool ready = false;
+    PcSide s[2];
+    int selSide = -1, selBox = 0, selSlot = -1;
+    int tab = 0;          // the details: 0 summary, 1 stats, 2 moves
+    bool evolve = true;   // a trade evolution taken on the way
+    int pending = 0;      // changes made, not saved yet
+    std::string msg;
+    std::vector<PcHit> hits;
+    float u = 1;
+    // (A finger: pressed on a Pokémon, dragged far enough to carry it.)
+    bool down = false, drag = false;
+    int downX = 0, downY = 0, dragX = 0, dragY = 0, dSide = -1, dBox = 0, dSlot = -1;
+};
+inline PcState& Pc() { static PcState p; return p; }
+inline std::string PcShortName(const std::string& n) { const size_t d = n.find("  \xC2\xB7"); return d == std::string::npos ? n : n.substr(0, d); }
+#ifdef SSR_POKEMON_HUB
+inline void PcOpenSide(int i, bool again = false)
+{
+    PcState& P = Pc();
+    PcSide& S = P.s[i];
+    const std::vector<MoverGame> gs = MoverGames();
+    if (gs.empty()) { S.save.reset(); S.path.clear(); return; }
+    S.game = std::max(0, std::min(S.game, (int)gs.size() - 1));
+    if (again || !S.save || S.path != gs[S.game].path)
+    {
+        S.path = gs[S.game].path;
+        S.err.clear();
+        S.save = OpenMoverGame(gs[S.game], S.err);
+    }
+    if (S.save) S.box = S.box == PokemonHub::PARTY && !S.save->IsBank() ? S.box : std::max(0, std::min(S.box, S.save->Boxes() - 1));
+}
+inline void PcReopen() { PcOpenSide(0, true); PcOpenSide(1, true); Pc().pending = 0; Hub().version++; }
+// (The first time: the Bank on the left, the first game on the right.)
+inline void PcEnsure()
+{
+    PcState& P = Pc();
+    if (!P.ready)
+    {
+        P.ready = true;
+        P.s[0].game = 0;
+        P.s[1].game = MoverGames().size() > 1 ? 1 : 0;
+    }
+    PcOpenSide(0);
+    PcOpenSide(1);
+}
+inline std::vector<PokemonHub::Mon> PcMons(int i)
+{
+    const PcSide& S = Pc().s[i];
+    if (!S.save) return {};
+    return S.box == PokemonHub::PARTY ? PokemonHub::Party(*S.save) : S.save->Box(S.box);
+}
+inline bool PcMonAt(int i, int slot, PokemonHub::Mon& out)
+{
+    for (const PokemonHub::Mon& m : PcMons(i)) if (m.slot == slot) { out = m; return true; }
+    return false;
+}
+inline std::string PcMonName(const PokemonHub::Mon& m)
+{
+    const std::string sp = MonName(m.speciesName), n = Shown(m.nickname, sp);
+    return MonName(n) == sp ? sp : n;
+}
+inline bool PcSave()
+{
+    PcState& P = Pc();
+    if (!P.pending) return true;
+    std::string err;
+    std::vector<std::string> backups;
+    bool ok = P.s[0].save && P.s[1].save && PokemonHub::Commit(*P.s[0].save, *P.s[1].save, err, &backups);
+    P.msg = ok ? std::to_string(P.pending) + (P.pending == 1 ? " change" : " changes") + " saved. Both saves were backed up first." : "Could not save: " + err;
+    PcReopen();
+    return ok;
+}
+// A Pokémon from one place to a free one: in the same game, or to the other panel's game.
+inline void PcMove(int fs, int fbox, int fslot, int ts, int tbox, int tslot)
+{
+    PcState& P = Pc();
+    PcSide &F = P.s[fs], &T = P.s[ts];
+    if (!F.save || !T.save) return;
+    PokemonHub::Mon m;
+    if (!PcMonAt(fs, fslot, m) || F.box != fbox) { P.msg = "Choose a Pok\xC3\xA9mon first."; return; }
+    const std::string name = PcMonName(m);
+    std::string err;
+    bool ok;
+    if (fs == ts) ok = PokemonHub::Relocate(*F.save, fbox, fslot, tbox, tslot, err);
+    else
+    {
+        const int toBox = tbox == PokemonHub::PARTY ? PokemonHub::TO_PARTY : tbox, toSlot = tbox == PokemonHub::PARTY ? -1 : tslot;
+        const PokemonHub::Check ck = PokemonHub::CanMoveTo(*F.save, fbox, fslot, *T.save, toBox, toSlot);
+        ok = ck.verdict == PokemonHub::Verdict::Ok && PokemonHub::Move(*F.save, fbox, fslot, *T.save, P.evolve && ck.evolvesTo, err, toBox, toSlot);
+        if (ck.verdict != PokemonHub::Verdict::Ok) err = ck.reason;
+        else if (ok && !ck.losses.empty())
+        {
+            std::string l;
+            for (const std::string& x : ck.losses) l += (l.empty() ? "" : ", ") + x;
+            err = l;
+        }
+    }
+    if (!ok) { P.msg = "Could not move " + name + ": " + SettingSentence(err) + "."; return; }
+    P.pending++;
+    P.msg = name + " moved" + (fs == ts ? std::string(".") : " to " + PcShortName(T.save->GameName()) + ".") + (err.empty() ? "" : " On the way: " + SettingSentence(err) + ".");
+    P.selSide = ts; P.selBox = tbox; P.selSlot = tbox == PokemonHub::PARTY ? (int)PokemonHub::Party(*T.save).size() - 1 : tslot;
+    Hub().version++;
+}
+#endif
+// The box sprites (pokesprite's, built in), each turned into pixels once.
+inline const std::vector<uint32_t>* PcSprite(int species, bool shiny, int& w, int& h, int* box = nullptr)
+{
+#ifdef SSR_BOX_SPRITES
+    struct Pic { std::vector<uint32_t> px; int w = 0, h = 0; int bx[4] = { 0, 0, 0, 0 }; };
+    static std::map<int, Pic> cache;
+    const int key = species * 2 + (shiny ? 1 : 0);
+    auto it = cache.find(key);
+    if (it == cache.end())
+    {
+        Pic p;
+        const unsigned char* data = nullptr;
+        size_t size = 0;
+        if (BoxSprite(species, shiny, data, size) || (shiny && BoxSprite(species, false, data, size)))
+        {
+            int n = 0;
+            if (unsigned char* px = stbi_load_from_memory(data, (int)size, &p.w, &p.h, &n, 4))
+            {
+                p.px.resize((size_t)p.w * p.h);
+                for (int i = 0; i < p.w * p.h; i++)
+                    p.px[i] = (uint32_t)px[i * 4 + 3] << 24 | (uint32_t)px[i * 4] << 16 | (uint32_t)px[i * 4 + 1] << 8 | px[i * 4 + 2];
+                stbi_image_free(px);
+                // (Where it is drawn in its 68 x 56: the room round it left out when it is shown.)
+                int x0 = p.w, y0 = p.h, x1 = -1, y1 = -1;
+                for (int yy = 0; yy < p.h; yy++)
+                    for (int xx = 0; xx < p.w; xx++)
+                        if ((p.px[(size_t)yy * p.w + xx] >> 24) >= 128) { x0 = std::min(x0, xx); y0 = std::min(y0, yy); x1 = std::max(x1, xx); y1 = std::max(y1, yy); }
+                if (x1 < 0) { x0 = y0 = 0; x1 = p.w - 1; y1 = p.h - 1; }
+                p.bx[0] = x0; p.bx[1] = y0; p.bx[2] = x1 - x0 + 1; p.bx[3] = y1 - y0 + 1;
+            }
+        }
+        it = cache.emplace(key, std::move(p)).first;
+    }
+    w = it->second.w; h = it->second.h;
+    if (box) for (int i = 0; i < 4; i++) box[i] = it->second.bx[i];
+    return it->second.px.empty() ? nullptr : &it->second.px;
+#else
+    (void)species; (void)shiny; (void)box; w = h = 0;
+    return nullptr;
+#endif
+}
+// A sprite drawn whole in a box (centred, its pixels square), or the DS icon, or a Poké Ball.
+inline void PcDrawMon(Canvas& c, int species, bool shiny, bool egg, int x, int y, int bw, int bh)
+{
+    int w = 0, h = 0, bb[4] = { 0, 0, 0, 0 };
+    const std::vector<uint32_t>* px = egg ? nullptr : PcSprite(species, shiny, w, h, bb);
+    if (px && w > 0 && h > 0)
+    {
+        // (pokesprite's leave room round each one: only the part drawn, as large as fits, in whole
+        // steps of a quarter so the pixels keep their shapes; never past 4 times.)
+        const int cx0 = bb[0], cy0 = bb[1], cw = std::max(1, bb[2]), ch = std::max(1, bb[3]);
+        float sc = std::min((float)bw / cw, (float)bh / ch);
+        sc = std::min(sc, std::min((float)bw, (float)bh) / 20.0f); // (small ones not blown up past the box's)
+        if (sc > 1) sc = std::floor(sc * 4) / 4;
+        const int dw = (int)(cw * sc), dh = (int)(ch * sc), ox = x + (bw - dw) / 2, oy = y + (bh - dh) / 2;
+        for (int j = 0; j < dh; j++)
+        {
+            const int yy = oy + j;
+            if (yy < 0 || yy >= c.h) continue;
+            const int sy = cy0 + std::min(ch - 1, (int)(j / sc));
+            for (int i = 0; i < dw; i++)
+            {
+                const int xx = ox + i;
+                if (xx < 0 || xx >= c.w) continue;
+                const uint32_t p = (*px)[(size_t)sy * w + cx0 + std::min(cw - 1, (int)(i / sc))];
+                if ((p >> 24) >= 128) c.px[(size_t)yy * c.w + xx] = p | 0xFF000000u;
+            }
+        }
+        return;
+    }
+#ifdef SSR_POKEMON_HUB
+    std::vector<uint32_t> ic;
+    if (MonIcon(species, egg, ic)) { const int s = std::min(bw, bh); DrawMonIcon(c, ic, x + (bw - s) / 2, y + (bh - s) / 2, s); return; }
+#endif
+    Glass::DrawIcon(c, Glass::I_POKEBALL, x + bw * 0.5f, y + bh * 0.5f, std::min(bw, bh) * 0.25f, Menu::GlassHint);
+}
+inline uint32_t PcTypeColour(const std::string& t)
+{
+    static const std::pair<const char*, uint32_t> k[] = { { "NORMAL", 0xFF9FA19F }, { "FIRE", 0xFFE62829 }, { "WATER", 0xFF2980EF }, { "GRASS", 0xFF3FA129 },
+        { "ELECTRIC", 0xFFFAC000 }, { "ICE", 0xFF3DCEF3 }, { "FIGHTING", 0xFFFF8000 }, { "POISON", 0xFF9141CB }, { "GROUND", 0xFF915121 },
+        { "FLYING", 0xFF81B9EF }, { "PSYCHIC", 0xFFEF4179 }, { "BUG", 0xFF91A119 }, { "ROCK", 0xFFAFA981 }, { "GHOST", 0xFF704170 },
+        { "DRAGON", 0xFF5060E1 }, { "DARK", 0xFF624D4E }, { "STEEL", 0xFF60A1B8 }, { "FAIRY", 0xFFEF70EF } };
+    for (const auto& e : k) if (t == e.first) return e.second;
+    return 0xFF707070;
+}
+inline void PcHitAdd(int x, int y, int w, int h, int kind, int side, int value) { Pc().hits.push_back({ x, y, w, h, kind, side, value }); }
+// One panel: its games along the top, its box below them, then the grid.
+inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, int w, int h)
+{
+    PcState& P = Pc();
+    PcSide& S = P.s[side];
+    const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
+    Menu::FrostBox(c, solid, x, y, w, h, 14 * u);
+    const int pad = (int)(8 * u);
+    const std::vector<MoverGame> gs = MoverGames();
+    // The games: chips from firstChip, arrows when they do not all fit.
+    {
+        const int cy = y + pad, chH = (int)(26 * u);
+        int cx = x + pad;
+        const int right = x + w - pad - (int)(26 * u);
+        if (S.firstChip > 0)
+        {
+            Glass::Round(c, cx, cy, (int)(22 * u), chH, 8 * u, 0x24FFFFFFu);
+            GT(c, cx + (int)(7 * u), cy + chH * 0.5f, "<", 14 * u, text, true);
+            PcHitAdd(cx, cy, (int)(22 * u), chH, PC_PREV_GAMES, side, 0);
+            cx += (int)(26 * u);
+        }
+        int i = S.firstChip;
+        for (; i < (int)gs.size(); i++)
+        {
+            const std::string n = PcShortName(gs[i].name);
+            const int cw = GW(n, 12 * u, true) + (int)(18 * u);
+            if (cx + cw > right && i > S.firstChip) break;
+            const bool on = i == S.game, other = i == P.s[1 - side].game;
+            if (on) Glass::Round(c, cx, cy, cw, chH, 8 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.2f * u);
+            else Glass::Round(c, cx, cy, cw, chH, 8 * u, other ? 0x10FFFFFFu : 0x24FFFFFFu);
+            GT(c, cx + (int)(9 * u), cy + chH * 0.5f, n, 12 * u, other && !on ? hint : text, true);
+            PcHitAdd(cx, cy, cw, chH, PC_GAME, side, i);
+            cx += cw + (int)(5 * u);
+        }
+        if (i < (int)gs.size())
+        {
+            Glass::Round(c, right + (int)(4 * u), cy, (int)(22 * u), chH, 8 * u, 0x24FFFFFFu);
+            GT(c, right + (int)(11 * u), cy + chH * 0.5f, ">", 14 * u, text, true);
+            PcHitAdd(right + (int)(4 * u), cy, (int)(22 * u), chH, PC_NEXT_GAMES, side, 0);
+        }
+    }
+#ifdef SSR_POKEMON_HUB
+    // The box: Party, then < Box N >, and how full it is.
+    const int by = y + pad + (int)(32 * u), bh = (int)(26 * u);
+    int bx = x + pad;
+    const bool bank = S.save && S.save->IsBank();
+    if (S.save && !bank)
+    {
+        const bool on = S.box == PokemonHub::PARTY;
+        const int pw = GW("Party", 12 * u, true) + (int)(18 * u);
+        if (on) Glass::Round(c, bx, by, pw, bh, 8 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.2f * u);
+        else Glass::Round(c, bx, by, pw, bh, 8 * u, 0x24FFFFFFu);
+        GT(c, bx + (int)(9 * u), by + bh * 0.5f, "Party", 12 * u, text, true);
+        PcHitAdd(bx, by, pw, bh, PC_PARTY, side, 0);
+        bx += pw + (int)(8 * u);
+    }
+    const std::vector<PokemonHub::Mon> mons = PcMons(side);
+    if (S.save)
+    {
+        const int aw = (int)(26 * u);
+        Glass::Round(c, bx, by, aw, bh, 8 * u, 0x24FFFFFFu);
+        GT(c, bx + (int)(9 * u), by + bh * 0.5f, "<", 14 * u, text, true);
+        PcHitAdd(bx, by, aw, bh, PC_BOX_PREV, side, 0);
+        const std::string label = S.box == PokemonHub::PARTY ? std::string("Party") : BoxLabel(S.save.get(), S.box);
+        const int lw = std::max((int)(70 * u), GW(label, 13 * u, true) + (int)(16 * u));
+        GT(c, bx + aw + (lw - GW(label, 13 * u, true)) / 2, by + bh * 0.5f, label, 13 * u, text, true);
+        Glass::Round(c, bx + aw + lw, by, aw, bh, 8 * u, 0x24FFFFFFu);
+        GT(c, bx + aw + lw + (int)(9 * u), by + bh * 0.5f, ">", 14 * u, text, true);
+        PcHitAdd(bx + aw + lw, by, aw, bh, PC_BOX_NEXT, side, 0);
+        const std::string cnt = std::to_string(mons.size()) + "/" + (S.box == PokemonHub::PARTY ? "6" : "30");
+        GT(c, x + w - pad - GW(cnt, 12 * u, true), by + bh * 0.5f, cnt, 12 * u, hint, true);
+    }
+    // The grid: 6 x 5 (the party: its 6 in the first row).
+    const int gy = by + bh + (int)(8 * u), gap = (int)(4 * u);
+    const int cs = std::max(8, std::min((w - 2 * pad - 5 * gap) / 6, (y + h - pad - gy - 4 * gap) / 5));
+    const int gx = x + (w - (6 * cs + 5 * gap)) / 2;
+    if (!S.save)
+    {
+        GTFit(c, x + pad, gy + 20 * u, "This save could not be read. " + S.err, 13 * u, w - 2 * pad, Menu::GlassHint, false);
+        return;
+    }
+    const int cells = S.box == PokemonHub::PARTY ? 6 : 30;
+    std::vector<const PokemonHub::Mon*> at((size_t)cells, nullptr);
+    for (const PokemonHub::Mon& m : mons) if (m.slot >= 0 && m.slot < cells) at[(size_t)m.slot] = &m;
+    // (Where a carried Pokémon would go: the cell under the finger.)
+    int hover = -1;
+    for (int k = 0; k < cells; k++)
+    {
+        const int cx = gx + (k % 6) * (cs + gap), cy = gy + (k / 6) * (cs + gap);
+        if (P.drag && P.dragX >= cx && P.dragX < cx + cs && P.dragY >= cy && P.dragY < cy + cs) hover = k;
+    }
+    for (int k = 0; k < cells; k++)
+    {
+        const int cx = gx + (k % 6) * (cs + gap), cy = gy + (k / 6) * (cs + gap);
+        const PokemonHub::Mon* m = at[(size_t)k];
+        const bool sel = P.selSide == side && P.selBox == S.box && P.selSlot == k;
+        const bool carried = P.drag && P.dSide == side && P.dBox == S.box && P.dSlot == k;
+        if (sel) Glass::Round(c, cx, cy, cs, cs, 8 * u, 0x40FFFFFFu, 0xFFFFFFFFu, 2 * u);
+        else if (k == hover) Glass::Round(c, cx, cy, cs, cs, 8 * u, 0x308FE3A2u, 0xFF8FE3A2u, 2 * u);
+        else Glass::Round(c, cx, cy, cs, cs, 8 * u, m ? 0x22FFFFFFu : 0x10FFFFFFu);
+        PcHitAdd(cx, cy, cs, cs, PC_CELL, side, k);
+        if (!m || carried) continue;
+        PcDrawMon(c, m->species, m->shiny, m->egg, cx + (int)(2 * u), cy + (int)(2 * u), cs - (int)(4 * u), cs - (int)(14 * u));
+        if (m->shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, cx + cs - 8 * u, cy + 8 * u, 5 * u, 0xFFF2C46Bu);
+        if (!m->egg)
+        {
+            const std::string lv = "Lv." + std::to_string(m->level);
+            GT(c, cx + cs - (int)(4 * u) - GW(lv, 10 * u, true), cy + cs - 7 * u, lv, 10 * u, text, true);
+        }
+        if (bank && m->generation) { const std::string g = "G" + std::to_string(m->generation); GT(c, cx + (int)(4 * u), cy + cs - 7 * u, g, 9 * u, hint, true); }
+    }
+#endif
+}
+// Between the panels: the chosen Pokémon (PKVault's details), or what to do.
+inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, int h)
+{
+    PcState& P = Pc();
+    const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
+    Menu::FrostBox(c, solid, x, y, w, h, 14 * u);
+    const int pad = (int)(12 * u), iw = w - 2 * pad;
+    int ty = y + pad;
+    auto line = [&](const std::string& k, const std::string& v) {
+        GT(c, x + pad, ty + 8 * u, k, 11 * u, hint, true);
+        GTFit(c, x + pad + (int)(70 * u), ty + 8 * u, v.empty() ? std::string("-") : v, 12 * u, iw - (int)(70 * u), text, true);
+        ty += (int)(19 * u);
+    };
+    auto para = [&](const std::string& s, uint32_t col, float px) {
+        for (const std::string& l : WrapLines(s, px, iw)) { GT(c, x + pad, ty + px * 0.6f, l, px, col, false); ty += (int)(px * 1.4f); }
+        ty += (int)(6 * u);
+    };
+#ifdef SSR_POKEMON_HUB
+    const PcSide* S = P.selSide >= 0 ? &P.s[P.selSide] : nullptr;
+    PokemonHub::MonDetail d;
+    const bool have = S && S->save && S->box == P.selBox && PokemonHub::Detail(*S->save, P.selBox, P.selSlot, d);
+    if (!have)
+    {
+        GT(c, x + pad, ty + 12 * u, "My PC", 20 * u, text, true);
+        ty += (int)(34 * u);
+        para("Drag a Pok\xC3\xA9mon to a free place to move it: within a game, to the other side's game, or into the Bank.", text, 13 * u);
+        para("Or tap one to see it here, then tap a free place. Nothing is written until Save; Undo All puts everything back.", hint, 12 * u);
+        para("Pok\xC3\xA9mon go to games of their generation or newer, as in the real games. The Bank keeps any.", hint, 12 * u);
+        return;
+    }
+    const PokemonHub::Mon& m = d.mon;
+    // Its picture, name and level; its number, species and kinds.
+    const int ps = std::min(iw, (int)(h * (P.tab == 1 ? 0.15f : 0.28f))); // (Stats: a smaller picture, room for its table)
+    PcDrawMon(c, m.species, m.shiny, m.egg, x + (w - ps) / 2, ty, ps, (int)(ps * 0.82f));
+    if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - pad - 8 * u, ty + 10 * u, 7 * u, 0xFFF2C46Bu);
+    ty += (int)(ps * 0.82f) + (int)(6 * u);
+    const std::string nm = PcMonName(m);
+    GTFit(c, x + pad, ty + 10 * u, nm, 17 * u, iw - (int)(76 * u), text, true);
+    if (!d.gender.empty()) GT(c, x + pad + std::min(GW(nm, 17 * u, true), iw - (int)(76 * u)) + (int)(8 * u), ty + 10 * u, d.gender, 14 * u, d.gender == "M" ? 0xFF6FA8FFu : 0xFFFF8FB8u, true);
+    const std::string lv = m.egg ? std::string("Egg") : "Lv." + std::to_string(m.level);
+    GT(c, x + w - pad - GW(lv, 14 * u, true), ty + 10 * u, lv, 14 * u, text, true);
+    ty += (int)(24 * u);
+    char num[16];
+    snprintf(num, sizeof num, "#%03d", m.species);
+    GT(c, x + pad, ty + 7 * u, std::string(num) + "  " + m.speciesName, 11 * u, hint, true);
+    ty += (int)(18 * u);
+    int tx = x + pad;
+    for (const std::string& t : { d.type1, d.type2 })
+    {
+        if (t.empty()) continue;
+        const int tw = GW(t, 10 * u, true) + (int)(14 * u);
+        Glass::Round(c, tx, ty, tw, (int)(18 * u), 6 * u, PcTypeColour(t));
+        GT(c, tx + (int)(7 * u), ty + 9 * u, t, 10 * u, 0xFFFFFFFFu, true);
+        tx += tw + (int)(6 * u);
+    }
+    ty += (int)(26 * u);
+    // The tabs: Summary, Stats, Moves.
+    {
+        static const char* names[] = { "Summary", "Stats", "Moves" };
+        int cx = x + pad;
+        for (int i = 0; i < 3; i++)
+        {
+            const int cw = GW(names[i], 11 * u, true) + (int)(14 * u), ch = (int)(22 * u);
+            if (P.tab == i) Glass::Round(c, cx, ty, cw, ch, 7 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.2f * u);
+            else Glass::Round(c, cx, ty, cw, ch, 7 * u, 0x24FFFFFFu);
+            GT(c, cx + (int)(7 * u), ty + ch * 0.5f, names[i], 11 * u, text, true);
+            PcHitAdd(cx, ty, cw, ch, PC_TAB, P.selSide, i);
+            cx += cw + (int)(5 * u);
+        }
+        ty += (int)(30 * u);
+    }
+    const int bottomButtons = y + h - pad - (int)(26 * u);
+    if (P.tab == 0)
+    {
+        line("Item", d.item);
+        if (!d.nature.empty()) line("Nature", d.nature);
+        if (!d.ability.empty()) line("Ability", d.ability);
+        if (!d.ball.empty()) line("Ball", d.ball);
+        char ot[64];
+        snprintf(ot, sizeof ot, "%s  %05d", Shown(d.ot, "-").c_str(), d.tid);
+        line("OT", ot);
+        line("Format", "Gen " + std::to_string(m.generation));
+    }
+    else if (P.tab == 1)
+    {
+        static const char* sn[] = { "HP", "Atk", "Def", "Spe", "SpA", "SpD" };
+        static const int order[] = { 0, 1, 2, 4, 5, 3 }; // (as the games list them: speed last)
+        GT(c, x + pad + (int)(44 * u), ty + 6 * u, "Stat", 10 * u, hint, true);
+        GT(c, x + pad + (int)(88 * u), ty + 6 * u, "IV", 10 * u, hint, true);
+        GT(c, x + pad + (int)(118 * u), ty + 6 * u, "EV", 10 * u, hint, true);
+        ty += (int)(16 * u);
+        int total = 0;
+        for (int k = 0; k < 6; k++) total += d.evs[k];
+        const bool canEdit = m.generation >= 3 && S->save && !S->save->ReadOnly();
+        for (int r = 0; r < 6; r++)
+        {
+            const int k = order[r], ry = ty + r * (int)(19 * u), mid = ry + (int)(9 * u);
+            GT(c, x + pad, mid, sn[k], 11 * u, hint, true);
+            GT(c, x + pad + (int)(44 * u), mid, std::to_string(d.stats[k]), 12 * u, text, true);
+            GT(c, x + pad + (int)(88 * u), mid, std::to_string(d.ivs[k]), 12 * u, text, true);
+            GT(c, x + pad + (int)(118 * u), mid, std::to_string(d.evs[k]), 12 * u, text, true);
+            if (canEdit)
+            {
+                const int bw = (int)(22 * u), bx2 = x + w - pad - bw, bx1 = bx2 - bw - (int)(4 * u);
+                Glass::Round(c, bx1, ry, bw, (int)(18 * u), 6 * u, 0x24FFFFFFu);
+                GT(c, bx1 + (int)(8 * u), mid, "-", 13 * u, text, true);
+                PcHitAdd(bx1, ry, bw, (int)(18 * u), PC_EV, P.selSide, k * 2);
+                Glass::Round(c, bx2, ry, bw, (int)(18 * u), 6 * u, 0x24FFFFFFu);
+                GT(c, bx2 + (int)(7 * u), mid, "+", 13 * u, text, true);
+                PcHitAdd(bx2, ry, bw, (int)(18 * u), PC_EV, P.selSide, k * 2 + 1);
+            }
+        }
+        ty += 6 * (int)(19 * u) + (int)(2 * u);
+        GT(c, x + pad, ty + 6 * u, "EVs " + std::to_string(total) + " / 510" + (canEdit ? "   (- and + change them by 4)" : ""), 10 * u, hint, false);
+        ty += (int)(16 * u);
+    }
+    else
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            const std::string mv = d.moves[i].empty() ? std::string("-") : MonName(d.moves[i]);
+            Glass::Round(c, x + pad, ty, iw, (int)(24 * u), 7 * u, 0x1CFFFFFFu);
+            GTFit(c, x + pad + (int)(10 * u), ty + 12 * u, mv, 13 * u, iw - (int)(20 * u), text, true);
+            ty += (int)(29 * u);
+        }
+    }
+    // Along its foot: evolve on the way (when moving to another game), rename, close.
+    {
+        int bx = x + pad;
+        auto button = [&](const std::string& label, int kind, bool on) {
+            const int bw = GW(label, 11 * u, true) + (int)(16 * u), bh2 = (int)(24 * u);
+            if (on) Glass::Round(c, bx, bottomButtons, bw, bh2, 7 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.2f * u);
+            else Glass::Round(c, bx, bottomButtons, bw, bh2, 7 * u, 0x24FFFFFFu);
+            GT(c, bx + (int)(8 * u), bottomButtons + bh2 * 0.5f, label, 11 * u, text, true);
+            PcHitAdd(bx, bottomButtons, bw, bh2, kind, P.selSide, 0);
+            bx += bw + (int)(5 * u);
+        };
+        button(P.evolve ? "Trade Evolve: On" : "Trade Evolve: Off", PC_EVOLVE, P.evolve);
+        if (!m.egg) button("Rename", PC_RENAME, false);
+        button("Close", PC_CLOSE, false);
+    }
+#else
+    (void)ty; (void)line; (void)para; (void)text; (void)hint;
+#endif
+}
+inline void DrawPcPage(Canvas& c, bool solid, float u, int L, int R, int top, int bottom)
+{
+    PcState& P = Pc();
+    P.u = u;
+    P.hits.clear();
+    GlassFocus& F = Focus();
+    F.rVis = 0; F.pdY = c.h; F.prow = 0; F.pact = -1;
+#ifdef SSR_POKEMON_HUB
+    PcEnsure();
+#endif
+    const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
+    const int gap = (int)(10 * u), barH = (int)(40 * u);
+    const int midW = std::min((int)(250 * u), (R - L) / 4);
+    const int pw = (R - L - midW - 2 * gap) / 2, ph = bottom - top - barH - gap;
+    PcDrawSide(c, solid, u, 0, L, top, pw, ph);
+    PcDrawDetail(c, solid, u, L + pw + gap, top, midW, ph);
+    PcDrawSide(c, solid, u, 1, R - pw, top, pw, ph);
+    // The foot: the changes waiting, and Save / Undo All.
+    const int fy = bottom - barH;
+    Menu::FrostBox(c, solid, L, fy, R - L, barH, 12 * u);
+    int bx = R - (int)(10 * u);
+    if (P.pending)
+    {
+        auto button = [&](const std::string& label, int kind, bool strong) {
+            const int bw = GW(label, 13 * u, true) + (int)(26 * u), bh = barH - (int)(12 * u);
+            bx -= bw;
+            if (strong) Glass::Surface(c, 3, bx, fy + (int)(6 * u), bw, bh, 9 * u, Glass::Button());
+            else Glass::Round(c, bx, fy + (int)(6 * u), bw, bh, 9 * u, 0x24FFFFFFu);
+            GT(c, bx + (int)(13 * u), fy + barH * 0.5f, label, 13 * u, strong ? Glass::ButtonInk() : text, true);
+            PcHitAdd(bx, fy + (int)(6 * u), bw, bh, kind, 0, 0);
+            bx -= (int)(8 * u);
+        };
+        button("Save", PC_SAVE, true);
+        button("Undo All", PC_UNDO, false);
+    }
+    const std::string left = P.pending ? std::to_string(P.pending) + (P.pending == 1 ? " change to save" : " changes to save") + (P.msg.empty() ? "" : "   \xC2\xB7   " + P.msg) : P.msg.empty() ? std::string("Drag or tap to move Pok\xC3\xA9mon between your games and the Bank.") : P.msg;
+    GTFit(c, L + (int)(14 * u), fy + barH * 0.5f, left, 12 * u, bx - L - (int)(24 * u), P.pending ? text : hint, P.pending != 0);
+    // A Pokémon carried by a finger, over everything.
+#ifdef SSR_POKEMON_HUB
+    if (P.drag && P.dSide >= 0)
+    {
+        PokemonHub::Mon m;
+        if (P.s[P.dSide].box == P.dBox && PcMonAt(P.dSide, P.dSlot, m))
+        {
+            const int s = (int)(64 * u);
+            PcDrawMon(c, m.species, m.shiny, m.egg, P.dragX - s / 2, P.dragY - s / 2, s, s);
+        }
+    }
+#endif
+}
+inline const PcHit* PcHitAt(int x, int y)
+{
+    const std::vector<PcHit>& hs = Pc().hits;
+    for (size_t i = hs.size(); i-- > 0;) // (the last drawn on top)
+        if (x >= hs[i].x && x < hs[i].x + hs[i].w && y >= hs[i].y && y < hs[i].y + hs[i].h) return &hs[i];
+    return nullptr;
+}
+// The nickname typed (the keyboard's done, kbFor 7).
+inline void PcRenameDone(const std::string& t)
+{
+#ifdef SSR_POKEMON_HUB
+    PcState& P = Pc();
+    if (P.selSide < 0 || t.empty()) return;
+    PcSide& S = P.s[P.selSide];
+    std::string err;
+    if (S.save && PokemonHub::SetNickname(*S.save, P.selBox, P.selSlot, t, err)) { P.pending++; P.msg = "Renamed " + t + "."; }
+    else P.msg = "Could not rename it: " + SettingSentence(err) + ".";
+    Hub().version++;
+#else
+    (void)t;
+#endif
+}
+inline void PcTap(const PcHit& h)
+{
+#ifdef SSR_POKEMON_HUB
+    PcState& P = Pc();
+    PcSide& S = P.s[h.side];
+    const int ng = (int)MoverGames().size();
+    switch (h.kind)
+    {
+    case PC_GAME:
+        if (h.value == S.game) break;
+        if (P.pending) PcSave(); // (another game: what was changed is saved first)
+        if (h.value == P.s[1 - h.side].game) std::swap(P.s[0].game, P.s[1].game), std::swap(P.s[0].box, P.s[1].box); // (the same game on both sides: they change places)
+        else { S.game = h.value; S.box = 0; }
+        P.selSide = -1;
+        PcOpenSide(0, true); PcOpenSide(1, true);
+        break;
+    case PC_PREV_GAMES: S.firstChip = std::max(0, S.firstChip - 1); break;
+    case PC_NEXT_GAMES: S.firstChip = std::min(ng - 1, S.firstChip + 1); break;
+    case PC_PARTY: S.box = PokemonHub::PARTY; break;
+    case PC_BOX_PREV: case PC_BOX_NEXT:
+        if (S.save)
+        {
+            const int n = S.save->Boxes();
+            const int b = S.box == PokemonHub::PARTY ? 0 : S.box;
+            S.box = S.box == PokemonHub::PARTY ? (h.kind == PC_BOX_NEXT ? 0 : n - 1) : (b + (h.kind == PC_BOX_NEXT ? 1 : n - 1)) % n;
+        }
+        break;
+    case PC_CELL:
+    {
+        PokemonHub::Mon m;
+        const bool full = PcMonAt(h.side, h.value, m);
+        if (full) { P.selSide = h.side; P.selBox = S.box; P.selSlot = h.value; P.msg.clear(); break; }
+        // A free place: the chosen Pokémon goes there (the party: at its end).
+        if (P.selSide >= 0 && P.s[P.selSide].box == P.selBox)
+        {
+            const int slot = S.box == PokemonHub::PARTY ? (int)PokemonHub::Party(*S.save).size() : h.value;
+            PcMove(P.selSide, P.selBox, P.selSlot, h.side, S.box, slot);
+        }
+        else P.selSide = -1;
+        break;
+    }
+    case PC_TAB: P.tab = h.value; break;
+    case PC_EVOLVE: P.evolve = !P.evolve; break;
+    case PC_CLOSE: P.selSide = -1; break;
+    case PC_RENAME:
+    {
+        PokemonHub::Mon m;
+        if (P.selSide >= 0 && PcMonAt(P.selSide, P.selSlot, m))
+        {
+            GlassFocus& K = Focus();
+            K.kbFor = 7; K.text = Shown(m.nickname, MonName(m.speciesName)); K.dialog = 3; K.drow = 0;
+        }
+        break;
+    }
+    case PC_EV:
+    {
+        PokemonHub::MonDetail d;
+        if (P.selSide < 0 || !P.s[P.selSide].save || !PokemonHub::Detail(*P.s[P.selSide].save, P.selBox, P.selSlot, d)) break;
+        int ev[6];
+        for (int i = 0; i < 6; i++) ev[i] = d.evs[i];
+        const int k = h.value / 2, by = h.value % 2 ? 4 : -4;
+        int total = 0;
+        for (int i = 0; i < 6; i++) total += ev[i];
+        ev[k] = std::max(0, std::min(252, ev[k] + by));
+        int sum = 0;
+        for (int i = 0; i < 6; i++) sum += ev[i];
+        if (sum > 510) ev[k] -= sum - 510;
+        if (ev[k] == d.evs[k]) break;
+        std::string err;
+        if (PokemonHub::SetEvs(*P.s[P.selSide].save, P.selBox, P.selSlot, ev, err)) { P.pending++; P.msg.clear(); }
+        else P.msg = SettingSentence(err) + ".";
+        (void)total;
+        break;
+    }
+    case PC_SAVE: PcSave(); break;
+    case PC_UNDO: PcReopen(); P.msg = "Everything put back as it was saved."; P.selSide = -1; break;
+    }
+    Hub().version++;
+#else
+    (void)h;
+#endif
+}
+// A finger or the mouse on the page: 0 pressed, 1 moved, 2 lifted. A Pokémon pressed and moved
+// far enough is carried, and put where it is lifted; else a tap.
+inline void PcPointer(int phase, int x, int y)
+{
+    PcState& P = Pc();
+    if (phase == 0)
+    {
+        P.down = true; P.drag = false; P.downX = x; P.downY = y; P.dSide = -1;
+#ifdef SSR_POKEMON_HUB
+        const PcHit* h = PcHitAt(x, y);
+        PokemonHub::Mon m;
+        if (h && h->kind == PC_CELL && PcMonAt(h->side, h->value, m)) { P.dSide = h->side; P.dBox = P.s[h->side].box; P.dSlot = h->value; }
+#endif
+        return;
+    }
+    if (phase == 1)
+    {
+        if (!P.down) return;
+        if (!P.drag && P.dSide >= 0 && std::abs(x - P.downX) + std::abs(y - P.downY) > (int)(14 * P.u)) P.drag = true;
+        if (P.drag) { P.dragX = x; P.dragY = y; Hub().version++; }
+        return;
+    }
+    const bool was = P.drag;
+    P.down = P.drag = false;
+    const PcHit* h = PcHitAt(x, y);
+    if (was)
+    {
+#ifdef SSR_POKEMON_HUB
+        PokemonHub::Mon m;
+        if (h && h->kind == PC_CELL && !PcMonAt(h->side, h->value, m))
+        {
+            PcSide& T = P.s[h->side];
+            const int slot = T.box == PokemonHub::PARTY && T.save ? (int)PokemonHub::Party(*T.save).size() : h->value;
+            PcMove(P.dSide, P.dBox, P.dSlot, h->side, T.box, slot);
+        }
+        else if (h && h->kind == PC_CELL) P.msg = "That place is taken: drop it on a free one.";
+#endif
+        P.dSide = -1;
+        Hub().version++;
+        return;
+    }
+    if (h) PcTap(*h);
+}
+// B on the page: the chosen Pokémon let go first; with changes not saved, a word and stay.
+inline bool PcBack()
+{
+    PcState& P = Pc();
+    if (P.selSide >= 0) { P.selSide = -1; Hub().version++; return true; }
+    if (P.pending)
+    {
+        if (P.msg.rfind("Not saved", 0) == 0) { PcReopen(); P.msg.clear(); return false; } // (twice: let go of them)
+        P.msg = "Not saved yet: Save, or Undo All (or back again to leave them).";
+        Hub().version++;
+        return true;
+    }
+    return false;
+}
+
 struct ClipGuard
 {
     Canvas& c; GlassFocus& F; int y0, y1, pad;
@@ -5216,7 +5903,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const int barH = portP ? (int)(44 * u) : sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)((portP ? 10 : 18) * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : PhoneLook() && c.h > c.w && sp.navY > 0 ? sp.navY - (int)(12 * u) : c.h - (int)((ShortNow() ? 14 : 64) * u); // (a phone sideways: the panels run to the foot of the screen, the back button is in the bar)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
-    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 5 ? std::string("Import Saves") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 5 ? std::string("Import Saves") : HubMode() == 6 ? std::string("My PC") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     if (!ShortNow() && !portP) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -6181,6 +6868,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         return;
     }
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 3) { DrawSavesPage(c, solid, u, L, R, top, bottom); return; } // (Manage Saves)
+    if (F.page == SIDE_HUB && !Mover().open && HubMode() == 6) { DrawPcPage(c, solid, u, L, R, top, bottom); return; } // (My PC)
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 5)
     {
         // Import Saves: the emulator, where to look, import all, then the saves found.

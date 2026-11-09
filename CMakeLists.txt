@@ -408,6 +408,20 @@ if((SSR_PC_ALL_GAMES OR SSR_ALL_GAMES) AND SSR_PC_ART AND IS_DIRECTORY "${SSR_PC
     target_sources(ssrecomp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/pc_art.cpp")
     target_compile_definitions(ssrecomp PRIVATE SSR_PC_ART)
 endif()
+# The MY PC tab's Pokémon box sprites (SSR_BOX_SPRITES, a folder with regular/001.png ... and
+# shiny/001.png ...: pokesprite's Generation 8 ones; none come with the source), built in; without
+# them it shows the box icons taken from a DS ROM, or a Poké Ball.
+set(SSR_BOX_SPRITES "" CACHE PATH "a folder of Pokemon box sprites for MY PC")
+if((SSR_PC_ALL_GAMES OR SSR_ALL_GAMES) AND SSR_BOX_SPRITES AND IS_DIRECTORY "${SSR_BOX_SPRITES}")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    file(GLOB _box_sprite_files "${SSR_BOX_SPRITES}/regular/*.png" "${SSR_BOX_SPRITES}/shiny/*.png")
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/box_sprites.cpp"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/boxsprites/embed_sprites.py" "${SSR_BOX_SPRITES}"
+                "${CMAKE_CURRENT_BINARY_DIR}/box_sprites.cpp"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/boxsprites/embed_sprites.py" ${_box_sprite_files} VERBATIM)
+    target_sources(ssrecomp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/box_sprites.cpp")
+    target_compile_definitions(ssrecomp PRIVATE SSR_BOX_SPRITES)
+endif()
 # GBA games too, in the all-games program: Pokemon GBA Widescreen built in (mGBA with its wide
 # renderer, and the widescreen patches for Emerald, FireRed, LeafGreen and Ultra Violet).
 # SSR_GBA_DIR is that project's folder, after its setup.sh has made what it needs (in

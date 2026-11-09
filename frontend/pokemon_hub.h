@@ -108,6 +108,24 @@ void AddToDex(const Save& save, std::vector<DexMark>& dex);
 std::string SpeciesNameOf(int species);  // "BULBASAUR"
 int GenerationOfSpecies(int species);    // 1 to 7
 
+// One Pokémon as the MY PC tab's details show it (PKVault's): its kinds, nature, ability, moves,
+// stats and where it comes from, in English. Gen 1 and 2 have no nature or ability ("").
+struct MonDetail
+{
+    Mon mon;
+    std::string type1, type2, nature, ability, item, ball, ot, gender; // gender "M", "F" or ""
+    int tid = 0, metLevel = 0;
+    std::string moves[4];
+    int stats[6] = {}, ivs[6] = {}, evs[6] = {}; // HP, Attack, Defense, Speed, Sp. Atk, Sp. Def
+};
+bool Detail(const Save& save, int box, int slot, MonDetail& out);
+// PKVault's Edit: a Pokémon's effort values (each 0 to 252, 510 in all) and its nickname (in memory,
+// until Commit). Not in the first two generations (their stat experience is another thing).
+bool SetEvs(Save& save, int box, int slot, const int evs[6], std::string& error);
+// Within one game (or the Bank): a Pokémon to a free place of its own boxes or party.
+bool Relocate(Save& save, int box, int slot, int toBox, int toSlot, std::string& error);
+bool SetNickname(Save& save, int box, int slot, const std::string& name, std::string& error);
+
 // What would happen if the Pokémon at from's box/slot went to `to`.
 Check CanMove(const Save& from, int box, int slot, const Save& to);
 

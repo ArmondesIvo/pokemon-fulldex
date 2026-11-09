@@ -2394,6 +2394,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     }
                     else if (e.type == SDL_MOUSEBUTTONUP && dOn) { dOn = false; if (dDrag) { dDrag = false; dragging = pressed = false; break; } }
                 }
+                // MY PC: its own taps and drags (a Pokémon carried to a free place); the back arrow still Esc.
+                if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_HUB && Launcher::HubMode() == 6 && Launcher::Focus().dialog == 0
+                    && (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONUP) && !(e.type == SDL_MOUSEBUTTONUP && Launcher::BackAt(mx, my)))
+                {
+                    if (e.type != SDL_MOUSEMOTION || Launcher::Pc().down) Launcher::PcPointer(e.type == SDL_MOUSEBUTTONDOWN ? 0 : e.type == SDL_MOUSEMOTION ? 1 : 2, mx, my);
+                    dragging = pressed = false;
+                    break;
+                }
                 // The ROMs, Hub and Launcher lists: a finger dragged up or down scrolls them (the chosen row stays where the list was put).
                 if (Launcher::Glassy(canvas) && !guide && (Launcher::Focus().page == Launcher::SIDE_ROMS || Launcher::Focus().page == Launcher::SIDE_HUB || Launcher::Focus().page == Launcher::SIDE_LAUNCHER || Launcher::Focus().page == Launcher::SIDE_ABOUT) && Launcher::Focus().rVis > 0)
                 {

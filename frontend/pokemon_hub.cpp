@@ -799,6 +799,96 @@ bool Swap(Save& a, int boxA, int slotA, Save& b, int boxB, int slotB, bool evolv
     return true;
 }
 
+bool Detail(const Save& save, int box, int slot, MonDetail& out)
+{
+    auto pk = save.d->At(box, slot);
+    if (!pk) return false;
+    out = MonDetail();
+    out.mon = MonOf(*pk, box, slot);
+    const int g = GenNumber(pk->generation());
+    auto type = [](pksm::Type t) { return Upper(i18n::type(pksm::Language::ENG, t)); };
+    out.type1 = type(pk->type1());
+    out.type2 = pk->type2() == pk->type1() ? std::string() : type(pk->type2());
+    if (g >= 3)
+    {
+        out.nature = Upper(i18n::nature(pksm::Language::ENG, pk->nature()));
+        out.ability = Upper(i18n::ability(pksm::Language::ENG, pk->ability()));
+        out.ball = Upper(i18n::ball(pksm::Language::ENG, pk->ball()));
+        out.metLevel = pk->metLevel();
+    }
+    if (pk->heldItem()) out.item = ItemName(pk->heldItem());
+    out.ot = pk->otName();
+    out.tid = pk->TID();
+    if (g >= 2) out.gender = pk->gender() == pksm::Gender::Male ? "M" : pk->gender() == pksm::Gender::Female ? "F" : "";
+    for (int i = 0; i < 4; i++)
+    {
+        const int m = (int)pk->move((u8)i);
+        out.moves[i] = m ? MoveName(m) : std::string();
+    }
+    const pksm::Stat st[6] = { pksm::Stat::HP, pksm::Stat::ATK, pksm::Stat::DEF, pksm::Stat::SPD, pksm::Stat::SPATK, pksm::Stat::SPDEF };
+    for (int i = 0; i < 6; i++)
+    {
+        out.stats[i] = pk->stat(st[i]);
+        out.ivs[i] = pk->iv(st[i]);
+        out.evs[i] = pk->ev(st[i]);
+    }
+    return true;
+}
+
+bool SetEvs(Save& save, int box, int slot, const int evs[6], std::string& error)
+{
+    auto pk = save.d->At(box, slot);
+    if (!pk) { error = "THERE IS NO POKEMON THERE"; return false; }
+    if (save.ReadOnly()) { error = "THE HUB CANNOT CHANGE THIS GAME'S SAVE YET"; return false; }
+    if (GenNumber(pk->generation()) < 3) { error = "GEN 1 AND 2 POKEMON HAVE NO EFFORT VALUES TO SET"; return false; }
+    int total = 0;
+    for (int i = 0; i < 6; i++)
+    {
+        if (evs[i] < 0 || evs[i] > 252) { error = "EACH IS 0 TO 252"; return false; }
+        total += evs[i];
+    }
+    if (total > 510) { error = "510 IN ALL AT MOST"; return false; }
+    const pksm::Stat st[6] = { pksm::Stat::HP, pksm::Stat::ATK, pksm::Stat::DEF, pksm::Stat::SPD, pksm::Stat::SPATK, pksm::Stat::SPDEF };
+    for (int i = 0; i < 6; i++) pk->ev(st[i], (u16)evs[i]);
+    if (box == PARTY) pk->updatePartyData();
+    pk->refreshChecksum();
+    Put(save, *pk, box, slot);
+    return true;
+}
+
+bool Relocate(Save& save, int box, int slot, int toBox, int toSlot, std::string& error)
+{
+    auto pk = save.d->At(box, slot);
+    if (!pk) { error = "THERE IS NO POKEMON THERE"; return false; }
+    if (save.ReadOnly()) { error = "THE HUB CANNOT CHANGE THIS GAME'S SAVE YET"; return false; }
+    if (box == toBox && slot == toSlot) return true;
+    if (toBox == PARTY && (save.IsBank() || toSlot != (int)save.d->sav->partyCount())) { error = "A PARTY FILLS FROM THE FIRST PLACE"; return false; }
+    if (toBox != PARTY && save.d->At(toBox, toSlot)) { error = "THAT PLACE IS TAKEN"; return false; }
+    if (toBox != PARTY && (toBox < 0 || toBox >= save.Boxes() || toSlot < 0 || toSlot >= 30)) { error = "NO SUCH PLACE"; return false; }
+    if (box == PARTY && toBox != PARTY && LastInParty(save, box, slot)) { error = "IT IS THE LAST POKEMON IN YOUR PARTY: A GAME NEEDS ONE"; return false; }
+    auto kept = box == PARTY ? BoxForm(*pk) : pk->clone();
+    if (!kept) { error = "IT CANNOT BE MOVED"; return false; }
+    Take(save, box, slot);
+    if (box == PARTY && toBox == PARTY && toSlot > slot) toSlot--; // (the party closed up)
+    Put(save, *kept, toBox, toSlot);
+    return true;
+}
+
+bool SetNickname(Save& save, int box, int slot, const std::string& name, std::string& error)
+{
+    auto pk = save.d->At(box, slot);
+    if (!pk) { error = "THERE IS NO POKEMON THERE"; return false; }
+    if (save.ReadOnly()) { error = "THE HUB CANNOT CHANGE THIS GAME'S SAVE YET"; return false; }
+    const int g = GenNumber(pk->generation());
+    const size_t most = g <= 2 ? 10 : g == 3 ? 10 : 10;
+    if (name.empty() || name.size() > most) { error = "1 TO 10 LETTERS"; return false; }
+    pk->nickname(name);
+    pk->nicknamed(Upper(name) != SpeciesName((int)pk->species()));
+    pk->refreshChecksum();
+    Put(save, *pk, box, slot);
+    return true;
+}
+
 std::string SpeciesNameOf(int species) { return species > 0 ? SpeciesName(species) : std::string(); }
 int GenerationOfSpecies(int n)
 {
