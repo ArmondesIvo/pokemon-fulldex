@@ -759,3 +759,4 @@ It is in your Bank.	Ele está no seu Banco.
 Sign in first (the figure at the top).	Entre primeiro (o bonequinho no topo).
 Save or Undo All in My PC first.	Salve ou desfaça tudo no My PC antes.
 No connection to PokeHub's server.	Sem conexão com o servidor do PokeHub.
+Origin	Origem

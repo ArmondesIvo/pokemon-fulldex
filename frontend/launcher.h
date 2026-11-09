@@ -6043,7 +6043,8 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
         char ot[64];
         snprintf(ot, sizeof ot, "%s  %05d", Shown(d.ot, "-").c_str(), d.tid);
         line("OT", ot);
-        line("Format", "Gen " + std::to_string(m.generation));
+        // (Where it came from, as HOME keeps it, and the form it is kept in: one line, so the page fits.)
+        line("Origin", (d.origin.empty() ? std::string(m.generation <= 2 ? "Game Boy" : "-") : d.origin) + "  (Gen " + std::to_string(m.generation) + ")");
     }
     else if (P.tab == 1)
     {
