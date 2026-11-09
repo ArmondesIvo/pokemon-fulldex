@@ -36,6 +36,10 @@ struct Mon
     bool shiny = false, egg = false;
     int heldItem = 0;
     int generation = 0;                  // the format it is kept in (1 to 7)
+    // Its origin mark, as Pokémon HOME shows it, from the game it came from: 0 none (Gens 3 to 5
+    // have none), 1 Game Boy (Red, Blue, Yellow, Gold, Silver, Crystal), 2 the pentagon (X, Y,
+    // Omega Ruby, Alpha Sapphire), 3 the clover (Sun, Moon, Ultra Sun, Ultra Moon), 4 GO.
+    int originMark = 0;
 };
 
 class Save

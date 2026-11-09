@@ -5639,6 +5639,62 @@ inline uint32_t PcTypeColour(const std::string& t)
     return 0xFF707070;
 }
 inline void PcHitAdd(int x, int y, int w, int h, int kind, int side, int value) { Pc().hits.push_back({ x, y, w, h, kind, side, value }); }
+// A Pokémon's origin mark, as Pokémon HOME draws it (PokemonHub::Mon::originMark), centred on
+// cx, cy, s tall: 1 a Game Boy, 2 the pentagon (Gen 6), 3 the clover (Gen 7), 4 GO's.
+inline void PcDrawOriginMark(Canvas& c, int mark, float cx, float cy, float s, uint32_t col, uint32_t bg)
+{
+    if (mark == 1)
+    {
+        // (The Game Boy: its body, the screen in it, a cross and two buttons below.)
+        const int w = (int)(s * 0.7f), h = (int)s, x = (int)(cx - w / 2.0f), y = (int)(cy - h / 2.0f);
+        Glass::Round(c, x, y, w, h, s * 0.12f, col);
+        Glass::Round(c, x + (int)(w * 0.16f), y + (int)(h * 0.1f), (int)(w * 0.68f), (int)(h * 0.38f), s * 0.04f, bg);
+        const float by = y + h * 0.72f;
+        Glass::Round(c, (int)(x + w * 0.16f), (int)(by - s * 0.03f), (int)(s * 0.2f), std::max(1, (int)(s * 0.07f)), 0, bg);
+        Glass::Round(c, (int)(x + w * 0.16f + s * 0.065f), (int)(by - s * 0.1f), std::max(1, (int)(s * 0.07f)), (int)(s * 0.2f), 0, bg);
+        Glass::Round(c, (int)(x + w * 0.62f), (int)(by - s * 0.06f), (int)(s * 0.1f), (int)(s * 0.1f), s * 0.05f, bg);
+        return;
+    }
+    if (mark == 2)
+    {
+        // (The pentagon: a ring of five sides, point up.)
+        const float R = s * 0.5f, r = R * 0.58f;
+        auto inside = [&](float px, float py, float rad) {
+            // (Inside a regular pentagon: on the inner side of each of its five edges.)
+            for (int k = 0; k < 5; k++)
+            {
+                const float a0 = -1.5707963f + k * 1.2566371f, a1 = a0 + 1.2566371f;
+                const float x0 = cx + rad * std::cos(a0), y0 = cy + rad * std::sin(a0), x1 = cx + rad * std::cos(a1), y1 = cy + rad * std::sin(a1);
+                if ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0) < 0) return false;
+            }
+            return true;
+        };
+        for (int y = (int)(cy - R) - 1; y <= (int)(cy + R) + 1; y++)
+            for (int x = (int)(cx - R) - 1; x <= (int)(cx + R) + 1; x++)
+                if (x >= 0 && y >= 0 && x < c.w && y < c.h && inside(x + 0.5f, y + 0.5f, R) && !inside(x + 0.5f, y + 0.5f, r))
+                    c.px[(size_t)y * c.w + x] = col;
+        return;
+    }
+    if (mark == 3)
+    {
+        // (The clover: four round leaves round a middle.)
+        const float lr = s * 0.24f, off = s * 0.22f;
+        for (int k = 0; k < 4; k++)
+        {
+            const float lx = cx + (k == 1 ? off : k == 3 ? -off : 0), ly = cy + (k == 0 ? -off : k == 2 ? off : 0);
+            Glass::Round(c, (int)(lx - lr), (int)(ly - lr), (int)(2 * lr), (int)(2 * lr), lr, col);
+        }
+        return;
+    }
+    if (mark == 4)
+    {
+        // (GO's: a ring with a line across it.)
+        const int d = (int)s, x = (int)(cx - s / 2), y = (int)(cy - s / 2);
+        Glass::Round(c, x, y, d, d, s * 0.5f, col);
+        Glass::Round(c, x + (int)(s * 0.2f), y + (int)(s * 0.2f), (int)(s * 0.6f), (int)(s * 0.6f), s * 0.3f, bg);
+        Glass::Round(c, x, (int)(cy - s * 0.06f), d, std::max(1, (int)(s * 0.12f)), 0, col);
+    }
+}
 // One panel: its games along the top, its box below them, then the grid.
 inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, int w, int h)
 {
@@ -5744,6 +5800,7 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
         if (!m || carried) continue;
         PcDrawMon(c, m->species, m->shiny, m->egg, cx + (int)(2 * u), cy + (int)(2 * u), cs - (int)(4 * u), cs - (int)(14 * u));
         if (m->shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, cx + cs - 8 * u, cy + 8 * u, 5 * u, PcPal::Shiny);
+        if (m->originMark) PcDrawOriginMark(c, m->originMark, cx + 8 * u, cy + 9 * u, 9 * u, PcPal::Hint, sel ? PcPal::Body : PcPal::Body);
         if (!m->egg)
         {
             const std::string lv = "Lv." + std::to_string(m->level);
@@ -5812,6 +5869,8 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
         GT(c, tx + (int)(7 * u), ty + 9 * u, t, 10 * u, 0xFFFFFFFFu, true);
         tx += tw + (int)(6 * u);
     }
+    // (Its origin mark beside its types, as HOME shows it.)
+    if (m.originMark) PcDrawOriginMark(c, m.originMark, tx + 9 * u, ty + 9 * u, 15 * u, text, PcPal::Card);
     ty += (int)(26 * u);
     // The tabs: Summary, Stats, Moves.
     {

@@ -1921,7 +1921,16 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
         while (any)
         {
             if (e.type == SDL_APP_WILLENTERBACKGROUND) appBackgrounded = true;
-            if (e.type == SDL_APP_DIDENTERFOREGROUND) appBackgrounded = false;
+            if (e.type == SDL_APP_DIDENTERFOREGROUND)
+            {
+                appBackgrounded = false;
+#ifdef __ANDROID__
+                // (Back to the list from the background, as a phone's apps mostly are: PokeHub's
+                // updates looked for again, at most every half an hour; the start's own look aside.)
+                static Uint32 lastLook = 0; // (the start looked already: SDL_GetTicks counts from it)
+                if (SDL_GetTicks() - lastLook > 30u * 60u * 1000u) { lastLook = SDL_GetTicks(); JavaVoid("checkUpdatesQuiet"); }
+#endif
+            }
             if (e.type == SDL_RENDER_DEVICE_RESET || e.type == SDL_RENDER_TARGETS_RESET || e.type == SDL_APP_DIDENTERFOREGROUND)
             {
                 // Android can replace its GL surface while choosing a folder or resuming.

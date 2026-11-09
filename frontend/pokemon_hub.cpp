@@ -276,8 +276,17 @@ Mon MonOf(const pksm::PKX& pk, int box, int slot)
     m.trainer = pk.otName();
     m.shiny = pk.shiny();
     m.egg = pk.egg();
-    m.heldItem = pk.heldItem();
+    m.heldItem = GenNumber(pk.generation()) == 1 ? 0 : pk.heldItem(); // (Gen 1: a catch rate, not an item)
     m.generation = GenNumber(pk.generation());
+    // (As HOME: a Game Boy one is one still in a Game Boy game's form, or one Poké Transporter sent
+    // on, its origin game written as Red to Crystal (35 to 41); then by the game it came from.
+    // A Gen 3 to 5 game gives none, and so does one brought into a Gen 3 game here: its origin is
+    // that game, as no Gen 3 Pokémon can say it came from a Game Boy.)
+    const int v = (int)(u8)pk.version();
+    if (m.generation <= 2 || (v >= 35 && v <= 41)) m.originMark = 1;
+    else if (v >= 24 && v <= 27) m.originMark = 2;
+    else if (v >= 30 && v <= 33) m.originMark = 3;
+    else if (v == 34) m.originMark = 4;
     return m;
 }
 }
@@ -932,7 +941,8 @@ bool Detail(const Save& save, int box, int slot, MonDetail& out)
         out.ball = Upper(i18n::ball(pksm::Language::ENG, pk->ball()));
         out.metLevel = pk->metLevel();
     }
-    if (pk->heldItem()) out.item = ItemName(pk->heldItem());
+    // (A Gen 1 one has no item: that byte is its catch rate, which the Time Capsule took for one.)
+    if (pk->heldItem() && g != 1) out.item = ItemName(pk->heldItem());
     out.ot = pk->otName();
     out.tid = pk->TID();
     if (g >= 2) out.gender = pk->gender() == pksm::Gender::Male ? "M" : pk->gender() == pksm::Gender::Female ? "F" : "";
