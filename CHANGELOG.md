@@ -3,6 +3,8 @@
 
 ## Unreleased
 
+- **Bigger, finer pictures for a chosen Pokémon.** My PC's details and the Pokédex's card show the larger
+  pictures PKVault uses (96 x 96) instead of the small box sprites, which stay on the grids.
 - **A Pokédex tab, laid out as PKVault's.** Beside My PC, a tab opens the Pokédex straight from the
   game list: every species as a card (a silhouette until seen; a ball when caught, a box when you have
   one now, a sparkle for a shiny), a generation at a time with its region and counts, and the chosen

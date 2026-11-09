@@ -409,12 +409,13 @@ if((SSR_PC_ALL_GAMES OR SSR_ALL_GAMES) AND SSR_PC_ART AND IS_DIRECTORY "${SSR_PC
     target_compile_definitions(ssrecomp PRIVATE SSR_PC_ART)
 endif()
 # The MY PC tab's Pokémon box sprites (SSR_BOX_SPRITES, a folder with regular/001.png ... and
-# shiny/001.png ...: pokesprite's Generation 8 ones; none come with the source), built in; without
+# shiny/001.png ...: pokesprite's Generation 8 ones; big/regular and big/shiny: the larger pictures
+# for a chosen Pokémon; none come with the source), built in; without
 # them it shows the box icons taken from a DS ROM, or a Poké Ball.
 set(SSR_BOX_SPRITES "" CACHE PATH "a folder of Pokemon box sprites for MY PC")
 if((SSR_PC_ALL_GAMES OR SSR_ALL_GAMES) AND SSR_BOX_SPRITES AND IS_DIRECTORY "${SSR_BOX_SPRITES}")
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    file(GLOB _box_sprite_files "${SSR_BOX_SPRITES}/regular/*.png" "${SSR_BOX_SPRITES}/shiny/*.png")
+    file(GLOB _box_sprite_files "${SSR_BOX_SPRITES}/regular/*.png" "${SSR_BOX_SPRITES}/shiny/*.png" "${SSR_BOX_SPRITES}/big/regular/*.png" "${SSR_BOX_SPRITES}/big/shiny/*.png")
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/box_sprites.cpp"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/boxsprites/embed_sprites.py" "${SSR_BOX_SPRITES}"
                 "${CMAKE_CURRENT_BINARY_DIR}/box_sprites.cpp"

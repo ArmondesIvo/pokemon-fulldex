@@ -5315,6 +5315,7 @@ inline bool SameMonName(const std::string& v, const std::string& spn)
 #ifdef SSR_BOX_SPRITES
 } // (out of Launcher: box_sprites.cpp's)
 bool BoxSprite(int species, bool shiny, const unsigned char*& data, size_t& size);
+bool BigSprite(int species, bool shiny, const unsigned char*& data, size_t& size);
 namespace Launcher {
 #endif
 struct PcHit { int x, y, w, h, kind, side, value; };
@@ -5435,20 +5436,22 @@ inline void PcMove(int fs, int fbox, int fslot, int ts, int tbox, int tslot)
     Hub().version++;
 }
 #endif
-// The box sprites (pokesprite's, built in), each turned into pixels once.
-inline const std::vector<uint32_t>* PcSprite(int species, bool shiny, int& w, int& h, int* box = nullptr)
+// The box sprites (pokesprite's, built in), each turned into pixels once; big: the larger picture
+// (PKVault's), for the chosen one's details, or the box sprite when there is none.
+inline const std::vector<uint32_t>* PcSprite(int species, bool shiny, int& w, int& h, int* box = nullptr, bool big = false)
 {
 #ifdef SSR_BOX_SPRITES
     struct Pic { std::vector<uint32_t> px; int w = 0, h = 0; int bx[4] = { 0, 0, 0, 0 }; };
     static std::map<int, Pic> cache;
-    const int key = species * 2 + (shiny ? 1 : 0);
+    const int key = species * 4 + (shiny ? 1 : 0) + (big ? 2 : 0);
     auto it = cache.find(key);
     if (it == cache.end())
     {
         Pic p;
         const unsigned char* data = nullptr;
         size_t size = 0;
-        if (BoxSprite(species, shiny, data, size) || (shiny && BoxSprite(species, false, data, size)))
+        if ((big && (BigSprite(species, shiny, data, size) || (shiny && BigSprite(species, false, data, size))))
+            || BoxSprite(species, shiny, data, size) || (shiny && BoxSprite(species, false, data, size)))
         {
             int n = 0;
             if (unsigned char* px = stbi_load_from_memory(data, (int)size, &p.w, &p.h, &n, 4))
@@ -5472,23 +5475,25 @@ inline const std::vector<uint32_t>* PcSprite(int species, bool shiny, int& w, in
     if (box) for (int i = 0; i < 4; i++) box[i] = it->second.bx[i];
     return it->second.px.empty() ? nullptr : &it->second.px;
 #else
-    (void)species; (void)shiny; (void)box; w = h = 0;
+    (void)species; (void)shiny; (void)box; (void)big; w = h = 0;
     return nullptr;
 #endif
 }
 // A sprite drawn whole in a box (centred, its pixels square), or the DS icon, or a Poké Ball.
 // (shade: not 0, every pixel of it that colour: a silhouette, as the Pokédex shows those not seen.)
-inline void PcDrawMon(Canvas& c, int species, bool shiny, bool egg, int x, int y, int bw, int bh, uint32_t shade = 0)
+inline void PcDrawMon(Canvas& c, int species, bool shiny, bool egg, int x, int y, int bw, int bh, uint32_t shade = 0, bool big = false)
 {
     int w = 0, h = 0, bb[4] = { 0, 0, 0, 0 };
-    const std::vector<uint32_t>* px = egg ? nullptr : PcSprite(species, shiny, w, h, bb);
+    const std::vector<uint32_t>* px = egg ? nullptr : PcSprite(species, shiny, w, h, bb, big);
     if (px && w > 0 && h > 0)
     {
         // (pokesprite's leave room round each one: only the part drawn, as large as fits, in whole
         // steps of a quarter so the pixels keep their shapes; never past 4 times.)
         const int cx0 = bb[0], cy0 = bb[1], cw = std::max(1, bb[2]), ch = std::max(1, bb[3]);
         float sc = std::min((float)bw / cw, (float)bh / ch);
-        sc = std::min(sc, std::min((float)bw, (float)bh) / 20.0f); // (small ones not blown up past the box's)
+        // (Small ones not blown up past the big ones: a box sprite as one 20 pixels high would be, a
+        // larger picture as one 64 high, so a Bulbasaur stays smaller than a Charizard.)
+        sc = std::min(sc, std::min((float)bw, (float)bh) / (big && w >= 90 ? 44.0f : 20.0f));
         if (sc > 1) sc = std::floor(sc * 4) / 4;
         const int dw = (int)(cw * sc), dh = (int)(ch * sc), ox = x + (bw - dw) / 2, oy = y + (bh - dh) / 2;
         for (int j = 0; j < dh; j++)
@@ -5686,7 +5691,7 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
     // tab's rows and the buttons at the foot.)
     const int below = (int)((24 + 18 + 26 + 30 + 6) * u) + (P.tab == 0 ? 6 * (int)(19 * u) : P.tab == 1 ? (int)(34 * u) + 6 * (int)(19 * u) : 4 * (int)(29 * u)) + (int)(26 * u) + 2 * pad + (int)(6 * u);
     const int ps = std::max((int)(28 * u), std::min({ iw, (int)(h * 0.28f), (int)((h - below) / 0.82f) }));
-    PcDrawMon(c, m.species, m.shiny, m.egg, x + (w - ps) / 2, ty, ps, (int)(ps * 0.82f));
+    PcDrawMon(c, m.species, m.shiny, m.egg, x + (w - ps) / 2, ty, ps, (int)(ps * 0.82f), 0, true);
     if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - pad - 8 * u, ty + 10 * u, 7 * u, PcPal::Shiny);
     ty += (int)(ps * 0.82f) + (int)(6 * u);
     const std::string nm = PcMonName(m);
@@ -6170,7 +6175,7 @@ inline void DrawDexPage(Canvas& c, float u, int L, int R, int top, int bottom)
             // Its picture.
             const int ps = std::min(dw - 2 * pad, (int)(gh * 0.36f));
             Glass::Round(c, dx + pad, ty, dw - 2 * pad, ps, 10 * u, PcPal::Slot, PcPal::Line, 1.0f * u);
-            PcDrawMon(c, d.sel, m.shiny, false, dx + pad + (int)(8 * u), ty + (int)(8 * u), dw - 2 * pad - (int)(16 * u), ps - (int)(16 * u), m.state ? 0 : 0xFFB9AEA2u);
+            PcDrawMon(c, d.sel, m.shiny, false, dx + pad + (int)(8 * u), ty + (int)(8 * u), dw - 2 * pad - (int)(16 * u), ps - (int)(16 * u), m.state ? 0 : 0xFFB9AEA2u, true);
             ty += ps + (int)(14 * u);
             // How the player stands with it.
             auto line = [&](int icon, uint32_t ic, const std::string& s, uint32_t col) {
