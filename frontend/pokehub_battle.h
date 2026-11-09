@@ -31,7 +31,7 @@ struct BattleState
     std::chrono::steady_clock::time_point last;
     // (Fingers: the stick's and the buttons'; -1 none. The mouse is finger -2.)
     long long stickId = -1; float stickX = 0, stickY = 0, stickDX = 0, stickDY = 0;
-    long long held[Arena::SLOTS] = { -1, -1, -1, -1, -1 };
+    long long held[Arena::SLOTS] = { -1, -1, -1, -1, -1, -1 };
     bool pressed[Arena::SLOTS] = {};
     bool keys4[4] = {}; // (W A S D, on a PC)
     // (Where the buttons were drawn: x, y, r; and the pause, rematch and menu buttons.)
@@ -72,6 +72,11 @@ struct BattleState
     int badges[8] = {}, champion[8] = {};
     bool redBeaten = false;
     int eliteBeat[8] = {}; // (each region's Elite Four and champion beaten, a bit each)
+    // (Mega Stones: how many in the bag, each Megas() one; and which of the team holds one here, by
+    // "path|box|slot". The arena's only: nothing goes into a save.)
+    int stones[64] = {};
+    std::map<std::string, int> equip;
+    int shopTab = 0;
     // (The Elite Four's run: its step, the team's HP between battles; the item chosen to use.)
     bool eliteOn = false;
     int eliteStep = 0, itemSel = -1;
@@ -86,7 +91,7 @@ inline BattleState& Bat() { static BattleState s; return s; }
 enum { BT_PICK = 1, BT_REROLL, BT_DIFF, BT_FIGHT, BT_CARD, BT_BOTCARD, BT_PAUSE, BT_RESUME, BT_QUIT, BT_REMATCH, BT_MENU,
     BT_PG_TAB, BT_PG_MON, BT_PG_SLOT, BT_PG_CANCEL, BT_PG_DONE, BT_PG_CLEAR,
     BT_MODE, BT_REGION, BT_SHOP, BT_SHOP_BACK, BT_BUY, BT_ITEM, BT_PREP_MON, BT_NEXT, BT_GIVEUP, BT_GYM_RESET,
-    BT_GYM_SEL, BT_OPP_OPEN, BT_OPP_BACK, BT_OPP_REGION, BT_OPP_TAKE };
+    BT_GYM_SEL, BT_OPP_OPEN, BT_OPP_BACK, BT_OPP_REGION, BT_OPP_TAKE, BT_EQUIP, BT_SHOP_TAB, BT_BUY_STONE };
 inline std::string BattleTeamFile() { return HubDir() + "/pokehub-battle-team.txt"; }
 inline void PmdWantTeams(); // (both teams' moving pictures fetched: below)
 inline void PmdWant(const std::vector<int>& species);
@@ -104,6 +109,8 @@ inline void ArenaSave()
         for (int r = 0; r < 8; r++) fprintf(f, "region\t%d\t%d\t%d\n", r, B.badges[r], B.champion[r]);
         fprintf(f, "red\t%d\n", B.redBeaten ? 1 : 0);
         for (int r = 0; r < 8; r++) fprintf(f, "elite\t%d\t%d\n", r, B.eliteBeat[r]);
+        for (int i = 0; i < 64; i++) if (B.stones[i]) fprintf(f, "stone\t%d\t%d\n", i, B.stones[i]);
+        for (const auto& e : B.equip) fprintf(f, "equip\t%d\t%s\n", e.second, e.first.c_str());
         fclose(f);
         std::rename(tmp.c_str(), ArenaFile().c_str());
     }
@@ -124,6 +131,14 @@ inline void ArenaLoad()
             else if (sscanf(line, "region\t%d\t%d\t%d", &a, &b, &c) == 3 && a >= 0 && a < 8) { B.badges[a] = b; B.champion[a] = c; }
             else if (sscanf(line, "red\t%d", &a) == 1) B.redBeaten = a != 0;
             else if (sscanf(line, "elite\t%d\t%d", &a, &b) == 2 && a >= 0 && a < 8) B.eliteBeat[a] = b;
+            else if (sscanf(line, "stone\t%d\t%d", &a, &b) == 2 && a >= 0 && a < 64) B.stones[a] = std::max(0, b);
+            else if (sscanf(line, "equip\t%d\t", &a) == 1 && a >= 0)
+            {
+                std::string l = line;
+                while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+                const size_t t2 = l.find('\t', 6);
+                if (t2 != std::string::npos) B.equip[l.substr(t2 + 1)] = a;
+            }
         }
         fclose(f);
     }
@@ -146,13 +161,15 @@ inline void ArtWork()
     {
         std::string key;
         { std::lock_guard<std::mutex> l(S.m); if (S.queue.empty()) { S.busy = false; return; } key = S.queue.back(); S.queue.pop_back(); }
-        const std::string dir = HubDir() + "/arena-art", path = dir + "/" + key + ".png";
+        std::string flat = key;
+        std::replace(flat.begin(), flat.end(), '/', '_');
+        const std::string dir = HubDir() + "/arena-art", path = dir + "/" + flat + ".png";
         std::string data;
         if (FILE* f = fopen(path.c_str(), "rb")) { char buf[65536]; size_t n; while ((n = fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, n); fclose(f); }
         if (data.empty())
         {
             Achievements::HttpCall c;
-            c.url = std::string(SSR_PMD_URL).substr(0, std::string(SSR_PMD_URL).rfind('/')) + "/trainers/" + key + ".png";
+            c.url = std::string(SSR_PMD_URL).substr(0, std::string(SSR_PMD_URL).rfind('/')) + "/" + key + ".png";
             c.userAgent = "PokeHub"; c.timeout = 20;
             int status = 0; std::string err;
             if (Achievements::HttpRequest(c, status, data, err) && status == 200)
@@ -177,8 +194,9 @@ inline void ArtWork()
         Hub().version++;
     }
 }
-// A trainer's picture, or null while it is fetched (asked for then).
-inline const ArtImg* TrainerArt(const std::string& key)
+// A picture of the bucket's ("trainers/brock", "items/potion"), or null while it is fetched (asked
+// for then).
+inline const ArtImg* ArenaArt(const std::string& key)
 {
     if (key.empty()) return nullptr;
     ArtStore& S = TArt();
@@ -190,6 +208,8 @@ inline const ArtImg* TrainerArt(const std::string& key)
     if (!S.busy) { S.busy = true; std::thread(ArtWork).detach(); }
     return nullptr;
 }
+inline const ArtImg* TrainerArt(const std::string& key) { return key.empty() ? nullptr : ArenaArt("trainers/" + key); }
+inline const ArtImg* ItemArt(const std::string& key) { return key.empty() ? nullptr : ArenaArt("items/" + key); }
 // Drawn as large as fits in the box, its pixels square, standing on the box's foot.
 inline void DrawArt(Canvas& c, const ArtImg& a, int x, int y, int w, int h, float alpha = 1)
 {
@@ -218,7 +238,7 @@ inline void DrawArt(Canvas& c, const ArtImg& a, int x, int y, int w, int h, floa
 }
 
 // ---- The Pokémon: read from their saves -------------------------------------------------------
-inline bool BattleSpec(PokemonHub::Save& s, int box, int slot, Arena::MonSpec& out)
+inline bool BattleSpec(PokemonHub::Save& s, int box, int slot, Arena::MonSpec& out, std::string* item = nullptr)
 {
     PokemonHub::MonDetail d;
     if (!PokemonHub::Detail(s, box, slot, d) || d.mon.egg || !d.mon.species || Arena::NoPicture(d.mon.species)) return false;
@@ -228,6 +248,23 @@ inline bool BattleSpec(PokemonHub::Save& s, int box, int slot, Arena::MonSpec& o
     out.types[0] = d.typeIds[0]; out.types[1] = d.typeIds[1];
     for (int i = 0; i < 6; i++) out.stats[i] = std::max(1, d.stats50[i]);
     for (int i = 0; i < 4; i++) out.moves[i] = d.moveIds[i];
+    if (item) *item = d.item;
+    return true;
+}
+inline std::string EquipKey(const BattleKey& k) { return k.path + "|" + std::to_string(k.box) + "|" + std::to_string(k.slot); }
+// Its Mega (Megas()[idx]) given: stats as its Mega's (each the difference of the base stats on, at
+// level 50; HP as it is), types, name and moving picture.
+inline bool ApplyMega(Arena::MonSpec& m, int idx)
+{
+    if (idx < 0 || idx >= (int)Arena::Megas().size()) return false;
+    const Arena::MegaInfo& mg = Arena::Megas()[idx];
+    int b0[6], t0[2], b1[6], t1[2];
+    if (mg.species != m.species || !PokemonHub::SpeciesFormBase(m.species, 0, b0, t0) || !PokemonHub::SpeciesFormBase(m.species, mg.form, b1, t1)) return false;
+    m.mega = idx;
+    for (int i = 0; i < 6; i++) m.megaStats[i] = i == 0 ? m.stats[0] : std::max(1, m.stats[i] + b1[i] - b0[i]);
+    m.megaTypes[0] = t1[0]; m.megaTypes[1] = t1[1];
+    m.megaName = "Mega " + MonName(PokemonHub::SpeciesNameOf(m.species)) + mg.suffix;
+    m.megaKey = m.species + 10000 * mg.sprite;
     return true;
 }
 // (Each key's Pokémon, a save opened once for all of its; those gone since are left out.)
@@ -241,7 +278,17 @@ inline std::vector<Arena::MonSpec> BattleRead(std::vector<BattleKey>& keys)
         auto it = open.find(k.path);
         if (it == open.end()) { std::string err; it = open.emplace(k.path, TradeOpen(k.path, err)).first; }
         Arena::MonSpec m;
-        if (it->second && BattleSpec(*it->second, k.box, k.slot, m)) { out.push_back(m); kept.push_back(k); }
+        std::string item;
+        if (it->second && BattleSpec(*it->second, k.box, k.slot, m, &item))
+        {
+            // (Its Mega: by a stone given here, or one it holds in its save.)
+            const auto eq = Bat().equip.find(EquipKey(k));
+            if (eq != Bat().equip.end()) ApplyMega(m, eq->second);
+            else
+                for (int i = 0; i < (int)Arena::Megas().size(); i++)
+                    if (item == Arena::Megas()[i].held) ApplyMega(m, i);
+            out.push_back(m); kept.push_back(k);
+        }
     }
     keys = kept;
     return out;
@@ -408,9 +455,9 @@ inline void BattleLoad(bool again = false)
         }
         fclose(f);
     }
+    ArenaLoad();
     B.mine = BattleRead(B.keys);
     B.sel = B.mine.empty() ? -1 : 0;
-    ArenaLoad();
     if (!B.eliteOn) BattleSetOpp(B.bot.empty());
     PmdWantTeams();
 }
@@ -462,6 +509,14 @@ inline void BattlePickerDone(bool use)
     B.picking = false;
     if (use && !B.pickSel.empty())
     {
+        // (A stone given to one that leaves the team: back to the bag.)
+        for (auto it = B.equip.begin(); it != B.equip.end();)
+        {
+            bool kept = false;
+            for (const BattleKey& k : B.pickSel) kept |= EquipKey(k) == it->first;
+            if (!kept) { B.stones[it->second]++; it = B.equip.erase(it); } else ++it;
+        }
+        ArenaSave();
         B.keys = B.pickSel;
         B.mine = BattleRead(B.keys);
         B.sel = B.mine.empty() ? -1 : 0;
@@ -698,8 +753,10 @@ inline void PmdWork()
             sp = S.queue.back();
             S.queue.pop_back();
         }
-        char file[16];
-        snprintf(file, sizeof file, "%04d.pmd", sp);
+        char file[24];
+        // (A form's key: species + 10000 x its folder, as Mega Charizard X 6 + 10000: 0006_0001.pmd.)
+        if (sp >= 10000) snprintf(file, sizeof file, "%04d_%04d.pmd", sp % 10000, sp / 10000);
+        else snprintf(file, sizeof file, "%04d.pmd", sp);
         const std::string dir = HubDir() + "/pmd", path = dir + "/" + file;
         std::string data;
         if (FILE* f = fopen(path.c_str(), "rb")) { char buf[65536]; size_t n; while ((n = fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, n); fclose(f); }
@@ -752,7 +809,7 @@ inline const PmdMon* PmdGet(int sp)
 inline void PmdWantTeams()
 {
     std::vector<int> sp;
-    for (const Arena::MonSpec& m : Bat().mine) sp.push_back(m.species);
+    for (const Arena::MonSpec& m : Bat().mine) { sp.push_back(m.species); if (m.mega >= 0) sp.push_back(m.megaKey); }
     for (const Arena::MonSpec& m : Bat().bot) sp.push_back(m.species);
     PmdWant(sp);
 }
@@ -1248,7 +1305,7 @@ inline void BattleButton(Canvas& c, float u, int k, float x, float y, float r)
     else if (k == Arena::S_ULT) { frac = 1 - F.ult / 100; }
     else if (k < 4) { wait = F.sk[k].cd; frac = F.sk[k].cdMax > 0 ? F.sk[k].cd / F.sk[k].cdMax : 0; }
     const bool ready = !none && (k == Arena::S_ULT ? F.ult >= 100 : wait <= 0);
-    const uint32_t ring = k == Arena::S_DASH ? 0xFFB0B8C8u : none ? 0xFF606060u : Arena::TypeColour(mi.type);
+    const uint32_t ring = k == Arena::S_EVO ? BGfx::Mix(0xFFFF60D0u, 0xFF60D0FFu, 0.5f + 0.5f * std::sin(B.b.time * 4)) : k == Arena::S_DASH ? 0xFFB0B8C8u : none ? 0xFF606060u : Arena::TypeColour(mi.type);
     const bool down = B.held[k] != -1;
     BGfx::Disc(c, x, y, r, down ? 0xA0FFFFFFu : ready ? 0x70203020u : 0x90101418u);
     BGfx::Ring(c, x, y, r, r, std::max(2.0f, 3 * u), ready ? ring : BGfx::Alpha(ring, 0.45f));
@@ -1268,7 +1325,7 @@ inline void BattleButton(Canvas& c, float u, int k, float x, float y, float r)
             }
     }
     const char* label = Arena::SlotLabel(k);
-    const float fs = k == Arena::S_ATQ ? 15 * u : k == Arena::S_DASH ? 8.5f * u : 11 * u;
+    const float fs = k == Arena::S_ATQ ? 15 * u : k == Arena::S_DASH ? 8.5f * u : k == Arena::S_EVO ? 10 * u : 11 * u;
     if (!ready && k != Arena::S_ULT && wait > 0) BGfx::Text(c, x, y, std::to_string((int)std::ceil(wait)), 15 * u, 0xFFFFFFFFu);
     else if (k == Arena::S_ULT && !ready) BGfx::Text(c, x, y, std::to_string((int)F.ult) + "%", 10 * u, 0xFFFFFFFFu);
     else BGfx::Text(c, x, y, label, fs, none ? 0xFF909090u : 0xFFFFFFFFu);
@@ -1344,7 +1401,7 @@ inline void DrawBattle(Canvas& c, float u)
         float alpha = F.dashT > 0 ? 0.45f : 1;
         if (F.fainted) { const float t = std::min(1.0f, b.phaseT / 0.8f); alpha = 1 - t; squash = 1 - 0.5f * t; }
         if ((F.status == Arena::SLP || F.status == Arena::FRZ) && !F.fainted) hop = 0;
-        if (const PmdMon* pm = PmdGet(F.spec.species))
+        if (const PmdMon* pm = PmdGet(F.mega ? F.spec.megaKey : F.spec.species))
         {
             // (Its moving picture: hurt, attacking, walking or standing, facing where it looks.)
             const int row = PmdRow(F.dirX, F.dirY);
@@ -1441,6 +1498,8 @@ inline void DrawBattle(Canvas& c, float u)
         BGfx::Disc(c, scx + B.stickDX * sr * 0.6f, scy + B.stickDY * sr * 0.6f, 24 * u, 0xB0FFFFFFu);
         // (The buttons, as the site lays them: ATQ big in the corner, the rest round it.)
         const float ax = c.w - 82 * u, ay = c.h - 88 * u;
+        for (float& r : B.br) r = 0; // (only those drawn this frame are touched)
+        if (b.f[0].spec.mega >= 0 && !b.megaUsed[0] && !b.f[0].mega) BattleButton(c, u, Arena::S_EVO, ax - 172 * u, ay - 62 * u, 25 * u);
         BattleButton(c, u, Arena::S_ATQ, ax, ay, 44 * u);
         BattleButton(c, u, Arena::S_HAB, ax - 98 * u, ay + 28 * u, 29 * u);
         BattleButton(c, u, Arena::S_Q, ax - 84 * u, ay - 74 * u, 29 * u);
@@ -1595,7 +1654,7 @@ inline void BattleCard(Canvas& c, float u, int x, int y, int w, int h, const Are
     if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - 9 * u, y + 9 * u, 5 * u, PcPal::Shiny);
 }
 // The chosen one's sheet: types, its stats at 50, and what each button does.
-inline void BattleSheet(Canvas& c, float u, int x, int y, int w, int h, const Arena::MonSpec& m)
+inline void BattleSheet(Canvas& c, float u, int x, int y, int w, int h, const Arena::MonSpec& m, int mine = -1)
 {
     const std::string lvl = "  Lv." + std::to_string(m.level);
     PcCard(c, x, y, w, h, 8 * u, u);
@@ -1634,6 +1693,28 @@ inline void BattleSheet(Canvas& c, float u, int x, int y, int w, int h, const Ar
         const std::string line = mv ? std::string(mi.name) + "  \xC2\xB7  " + Arena::TypeNamePt(mi.type) + ", " + kind + (mi.power ? ", " + std::to_string(mi.power) : std::string()) : std::string("-");
         GTFit(c, tx + (int)(40 * u), ty + 6 * u, line, 10.5f * u, w - 2 * pad - (int)(40 * u), PcPal::Ink, false);
         ty += (int)(15 * u);
+    }
+    // (Its Mega Stone: here, in your bag, or held in its save.)
+    const int mi = Arena::MegaFor(m.species);
+    if (mine >= 0 && mi >= 0 && ty + 30 * u <= y + h)
+    {
+        BattleState& B = Bat();
+        const Arena::MegaInfo& mg = Arena::Megas()[mi];
+        const bool here = mine < (int)B.keys.size() && B.equip.count(EquipKey(B.keys[mine]));
+        const bool held = m.mega >= 0 && !here;
+        const int iy = ty + (int)(4 * u), is = (int)(24 * u);
+        if (const ArtImg* a = ItemArt(mg.icon)) DrawArt(c, *a, tx, iy, is, is);
+        const std::string what = std::string(mg.stone) + (held ? "  \xC2\xB7  segura no save" : here ? "  \xC2\xB7  equipada" : "  \xC2\xB7  voc\xC3\xAA tem " + std::to_string(B.stones[mi]));
+        GTFit(c, tx + is + (int)(8 * u), iy + is / 2.0f, what, 10.5f * u, w - 2 * pad - is - (int)(110 * u), PcPal::Ink, true);
+        if (!held)
+        {
+            const std::string l = here ? "Tirar" : "Equipar";
+            const bool can = here || B.stones[mi] > 0;
+            const int bw = GW(l, 10.5f * u, true) + (int)(20 * u), bh = (int)(24 * u), bx = x + w - pad - bw;
+            PcButton(c, bx, iy, bw, bh, 6 * u, can && !here, u);
+            GT(c, bx + (int)(10 * u), iy + bh / 2.0f, l, 10.5f * u, can && !here ? PcPal::OnPrimary : can ? PcPal::Ink : PcPal::Hint, true);
+            B.hits.push_back({ bx, iy, bw, bh, BT_EQUIP, 0, mine });
+        }
     }
 }
 // (A Pokémon of the choosing's: as chosen it is the green frame and its number in the team.)
@@ -1833,13 +1914,25 @@ inline void BattleOppPanel(Canvas& c, float u, int x, int top, int pw, int ph)
     const int sy = y + ch + (int)(8 * u), sh = top + ph - (int)(10 * u) - sy;
     if (B.botSel >= 0 && B.botSel < (int)B.bot.size() && sh > 60 * u) BattleSheet(c, u, gx, sy, gw, sh, B.bot[B.botSel]);
 }
-// THE SHOP: what it sells, its price, how many you have; your money.
+// THE SHOP: what it sells, its price, how many you have; your money. Two tabs: the items (for the
+// runs' preparation) and the Mega Stones (given to one of the team in its sheet).
 inline void DrawBattleShop(Canvas& c, float u, int L, int R, int top, int bottom)
 {
     BattleState& B = Bat();
     PcCard(c, L, top, R - L, bottom - top, 10 * u, u);
     GT(c, L + (int)(16 * u), top + 24 * u, "Loja", 20 * u, PcPal::Ink, true);
-    GT(c, L + (int)(16 * u) + GW("Loja", 20 * u, true) + (int)(20 * u), top + 24 * u, Money(B.money), 15 * u, PcPal::Primary, true);
+    int tx = L + (int)(16 * u) + GW("Loja", 20 * u, true) + (int)(20 * u);
+    GT(c, tx, top + 24 * u, Money(B.money), 15 * u, PcPal::Primary, true);
+    tx += GW(Money(B.money), 15 * u, true) + (int)(24 * u);
+    static const char* tabs[2] = { "Itens", "Mega Pedras" };
+    for (int t = 0; t < 2; t++)
+    {
+        const int w = GW(tabs[t], 12 * u, true) + (int)(24 * u), h = (int)(30 * u);
+        PcButton(c, tx, top + (int)(9 * u), w, h, 7 * u, B.shopTab == t, u);
+        GT(c, tx + (int)(12 * u), top + 9 * u + h / 2.0f, tabs[t], 12 * u, B.shopTab == t ? PcPal::OnPrimary : PcPal::Ink, true);
+        B.hits.push_back({ tx, top + (int)(9 * u), w, h, BT_SHOP_TAB, 0, t });
+        tx += w + (int)(6 * u);
+    }
     {
         const std::string l = "Voltar";
         const int w = GW(l, 12 * u, true) + (int)(26 * u), h = (int)(32 * u), bx = R - w - (int)(12 * u);
@@ -1847,25 +1940,52 @@ inline void DrawBattleShop(Canvas& c, float u, int L, int R, int top, int bottom
         GT(c, bx + (int)(13 * u), top + 8 * u + h / 2.0f, l, 12 * u, PcPal::Ink, true);
         B.hits.push_back({ bx, top + (int)(8 * u), w, h, BT_SHOP_BACK, 0, 0 });
     }
-    const auto& shop = Arena::Shop();
-    const int rows = 3, cols = 2, gap = (int)(10 * u);
+    const int gap = (int)(10 * u);
     const int gx = L + (int)(14 * u), gy = top + (int)(52 * u), gw = R - L - (int)(28 * u), gh = bottom - gy - (int)(40 * u);
-    const int cw = (gw - gap) / cols, ch = (gh - (rows - 1) * gap) / rows;
-    for (int i = 0; i < (int)shop.size(); i++)
+    if (B.shopTab == 0)
     {
-        const int x0 = gx + (i % cols) * (cw + gap), y0 = gy + (i / cols) * (ch + gap);
-        Glass::Round(c, x0, y0, cw, ch, 8 * u, PcPal::Btn, PcPal::Line, 1.0f * u);
-        GT(c, x0 + (int)(14 * u), y0 + ch * 0.32f, shop[i].name, 14 * u, PcPal::Ink, true);
-        GT(c, x0 + (int)(14 * u), y0 + ch * 0.62f, shop[i].what, 11 * u, PcPal::Hint, false);
-        GT(c, x0 + (int)(14 * u), y0 + ch * 0.85f, "Voc\xC3\xAA tem " + std::to_string(B.bag[i]), 10.5f * u, PcPal::Ink, false);
-        const std::string l = Money(shop[i].price);
-        const bool can = B.money >= shop[i].price;
-        const int w = GW(l, 12 * u, true) + (int)(26 * u), h = std::min((int)(36 * u), ch - (int)(16 * u)), bx = x0 + cw - w - (int)(12 * u);
-        PcButton(c, bx, y0 + (ch - h) / 2, w, h, 7 * u, can, u);
-        GT(c, bx + (int)(13 * u), y0 + ch / 2.0f, l, 12 * u, can ? PcPal::OnPrimary : PcPal::Hint, true);
-        B.hits.push_back({ bx, y0 + (ch - h) / 2, w, h, BT_BUY, 0, i });
+        const auto& shop = Arena::Shop();
+        const int rows = 3, cols = 2;
+        const int cw = (gw - gap) / cols, ch = (gh - (rows - 1) * gap) / rows;
+        for (int i = 0; i < (int)shop.size(); i++)
+        {
+            const int x0 = gx + (i % cols) * (cw + gap), y0 = gy + (i / cols) * (ch + gap);
+            Glass::Round(c, x0, y0, cw, ch, 8 * u, PcPal::Btn, PcPal::Line, 1.0f * u);
+            const int is = std::min(ch - (int)(16 * u), (int)(64 * u));
+            if (const ArtImg* a = ItemArt(shop[i].icon)) DrawArt(c, *a, x0 + (int)(10 * u), y0 + (ch - is) / 2, is, is);
+            const int tx0 = x0 + is + (int)(22 * u);
+            GT(c, tx0, y0 + ch * 0.32f, shop[i].name, 14 * u, PcPal::Ink, true);
+            GT(c, tx0, y0 + ch * 0.62f, shop[i].what, 11 * u, PcPal::Hint, false);
+            GT(c, tx0, y0 + ch * 0.85f, "Voc\xC3\xAA tem " + std::to_string(B.bag[i]), 10.5f * u, PcPal::Ink, false);
+            const std::string l = Money(shop[i].price);
+            const bool can = B.money >= shop[i].price;
+            const int w = GW(l, 12 * u, true) + (int)(26 * u), h = std::min((int)(36 * u), ch - (int)(16 * u)), bx = x0 + cw - w - (int)(12 * u);
+            PcButton(c, bx, y0 + (ch - h) / 2, w, h, 7 * u, can, u);
+            GT(c, bx + (int)(13 * u), y0 + ch / 2.0f, l, 12 * u, can ? PcPal::OnPrimary : PcPal::Hint, true);
+            B.hits.push_back({ bx, y0 + (ch - h) / 2, w, h, BT_BUY, 0, i });
+        }
     }
-    GTFit(c, gx, bottom - 18 * u, !B.msg.empty() ? B.msg : "Os itens servem entre as batalhas da Elite dos 4, na prepara\xC3\xA7\xC3\xA3o.", 11 * u, gw, PcPal::Hint, false);
+    else
+    {
+        // (The Mega Stones: a tile each, its picture, its Pokémon, how many you have; a tap buys one.)
+        const auto& megas = Arena::Megas();
+        const int cols = 6, rows = ((int)megas.size() + cols - 1) / cols, g2 = (int)(6 * u);
+        const int cw = (gw - (cols - 1) * g2) / cols, ch = (gh - (rows - 1) * g2) / rows;
+        for (int i = 0; i < (int)megas.size(); i++)
+        {
+            const int x0 = gx + (i % cols) * (cw + g2), y0 = gy + (i / cols) * (ch + g2);
+            const bool can = B.money >= Arena::MEGA_PRICE;
+            Glass::Round(c, x0, y0, cw, ch, 7 * u, PcPal::Btn, PcPal::Line, 1.0f * u);
+            const int is = std::min(ch - (int)(10 * u), (int)(40 * u));
+            if (const ArtImg* a = ItemArt(megas[i].icon)) DrawArt(c, *a, x0 + (int)(5 * u), y0 + (ch - is) / 2, is, is);
+            const int tx0 = x0 + is + (int)(12 * u), tw = cw - is - (int)(16 * u);
+            GTFit(c, tx0, y0 + ch * 0.28f, megas[i].stone, 10.5f * u, tw, PcPal::Ink, true);
+            GTFit(c, tx0, y0 + ch * 0.55f, Money(Arena::MEGA_PRICE), 9.5f * u, tw, can ? PcPal::Primary : PcPal::Hint, true);
+            GTFit(c, tx0, y0 + ch * 0.8f, "tem " + std::to_string(B.stones[i]), 9.5f * u, tw, PcPal::Hint, false);
+            B.hits.push_back({ x0, y0, cw, ch, BT_BUY_STONE, 0, i });
+        }
+    }
+    GTFit(c, gx, bottom - 18 * u, !B.msg.empty() ? B.msg : B.shopTab == 0 ? std::string("Os itens servem entre as batalhas dos Gin\xC3\xA1sios e da Elite dos 4, na prepara\xC3\xA7\xC3\xA3o.") : std::string("Toque numa pedra para comprar. Equipe na ficha do Pok\xC3\xA9mon (aba Batalha). S\xC3\xB3 vale na arena."), 11 * u, gw, PcPal::Hint, false);
 }
 // BETWEEN THE ELITE FOUR's battles: your team as it is (HP), the bag; an item, then a Pokémon, to
 // use it; then the next one, or give up.
@@ -1904,11 +2024,12 @@ inline void DrawBattlePrep(Canvas& c, float u, int L, int R, int top, int bottom
     for (int i = 0; i < (int)shop.size(); i++)
     {
         const std::string l = std::string(shop[i].name) + "  x" + std::to_string(B.bag[i]);
-        const int w = GW(l, 11.5f * u, true) + (int)(22 * u);
+        const int w = GW(l, 11.5f * u, true) + (int)(52 * u);
         if (ix + w > R - (int)(14 * u)) break;
         const bool on = B.itemSel == i;
         Glass::Round(c, ix, iy, w, ih, 8 * u, on ? PcPal::Primary : B.bag[i] ? PcPal::Btn : PcPal::Slot, on ? PcPal::PrimaryDark : PcPal::Line, 1.2f * u);
-        GT(c, ix + (int)(11 * u), iy + ih / 2.0f, l, 11.5f * u, on ? PcPal::OnPrimary : B.bag[i] ? PcPal::Ink : PcPal::Hint, true);
+        if (const ArtImg* a = ItemArt(shop[i].icon)) DrawArt(c, *a, ix + (int)(6 * u), iy + (int)(5 * u), (int)(30 * u), ih - (int)(10 * u));
+        GT(c, ix + (int)(41 * u), iy + ih / 2.0f, l, 11.5f * u, on ? PcPal::OnPrimary : B.bag[i] ? PcPal::Ink : PcPal::Hint, true);
         B.hits.push_back({ ix, iy, w, ih, BT_ITEM, 0, i });
         ix += w + (int)(6 * u);
     }
@@ -2012,7 +2133,7 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
             else Glass::Round(c, x0, gy, cw, ch, 8 * u, PcPal::Slot, PcPal::Line, 1.0f * u);
         }
         const int sy = gy + ch + (int)(8 * u), sh = top + ph - (int)(10 * u) - sy;
-        if (sel >= 0 && sel < (int)team.size()) BattleSheet(c, u, gx, sy, gw, sh, team[sel]);
+        if (sel >= 0 && sel < (int)team.size()) BattleSheet(c, u, gx, sy, gw, sh, team[sel], me ? sel : -1);
         else if (team.empty() && me)
             GTFit(c, gx, sy + 20 * u, "Toque em \"Escolher time\" e marque de 1 a 6 Pok\xC3\xA9mon dos seus saves ou do Banco.", 11.5f * u, gw, PcPal::Hint, false);
         else GTFit(c, gx, sy + 20 * u, "Toque num Pok\xC3\xA9mon para ver os golpes de cada bot\xC3\xA3o.", 11.5f * u, gw, PcPal::Hint, false);
@@ -2185,6 +2306,31 @@ inline void BattlePagePointer(int phase, int x, int y)
             B.opp = { t.name, t.sprite, 0, 0, 50 };
             B.bot = TrainerTeam(k == 99 ? 1 : r, t, rng);
             B.botSel = -1; B.oppPick = false;
+            PmdWantTeams();
+            break;
+        }
+        case BT_SHOP_TAB: B.shopTab = h.value; break;
+        case BT_BUY_STONE:
+        {
+            if (B.money < Arena::MEGA_PRICE) { B.msg = "Dinheiro insuficiente."; break; }
+            B.money -= Arena::MEGA_PRICE; B.stones[h.value]++; ArenaSave();
+            B.msg = std::string("Comprou ") + Arena::Megas()[h.value].stone + ".";
+            break;
+        }
+        case BT_EQUIP:
+        {
+            if (h.value < 0 || h.value >= (int)B.keys.size() || h.value >= (int)B.mine.size()) break;
+            const std::string key = EquipKey(B.keys[h.value]);
+            const int mi = Arena::MegaFor(B.mine[h.value].species);
+            auto it = B.equip.find(key);
+            if (it != B.equip.end()) { B.stones[it->second]++; B.equip.erase(it); }
+            else if (mi < 0) break;
+            else if (!B.stones[mi]) { B.msg = std::string("Voc\xC3\xAA n\xC3\xA3o tem ") + Arena::Megas()[mi].stone + ": compre na Loja."; break; }
+            else { B.stones[mi]--; B.equip[key] = mi; }
+            ArenaSave();
+            const int sel = B.sel;
+            B.mine = BattleRead(B.keys);
+            B.sel = sel;
             PmdWantTeams();
             break;
         }

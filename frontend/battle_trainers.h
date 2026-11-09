@@ -133,16 +133,43 @@ inline int ElitePrize(int i) { return i < 4 ? 2500 : 6000; }
 constexpr int FREE_PRIZE = 300, GYM_TRAINER_PRIZE = 300;
 // The shop: what it sells, at what price, and what each does (heal: points, -1 all; revive: 0
 // none, 1 half, 2 all).
-struct ShopItem { const char* name; int price, heal, revive; const char* what; };
+struct ShopItem { const char* name; int price, heal, revive; const char* what; const char* icon; }; // icon: items/<icon>.png
 inline const std::vector<ShopItem>& Shop()
 {
     static const std::vector<ShopItem> s = {
-        { "Po\xC3\xA7\xC3\xA3o", 300, 20, 0, "Recupera 20 PS." },
-        { "Super Po\xC3\xA7\xC3\xA3o", 700, 60, 0, "Recupera 60 PS." },
-        { "Hiper Po\xC3\xA7\xC3\xA3o", 1200, 120, 0, "Recupera 120 PS." },
-        { "Po\xC3\xA7\xC3\xA3o M\xC3\xA1xima", 2500, -1, 0, "Recupera todos os PS." },
-        { "Reviver", 1500, 0, 1, "Revive um desmaiado com metade dos PS." },
-        { "Reviver M\xC3\xA1ximo", 4000, 0, 2, "Revive um desmaiado com todos os PS." } };
+        { "Po\xC3\xA7\xC3\xA3o", 300, 20, 0, "Recupera 20 PS.", "potion" },
+        { "Super Po\xC3\xA7\xC3\xA3o", 700, 60, 0, "Recupera 60 PS.", "super-potion" },
+        { "Hiper Po\xC3\xA7\xC3\xA3o", 1200, 120, 0, "Recupera 120 PS.", "hyper-potion" },
+        { "Po\xC3\xA7\xC3\xA3o M\xC3\xA1xima", 2500, -1, 0, "Recupera todos os PS.", "max-potion" },
+        { "Reviver", 1500, 0, 1, "Revive um desmaiado com metade dos PS.", "revive" },
+        { "Reviver M\xC3\xA1ximo", 4000, 0, 2, "Revive um desmaiado com todos os PS.", "max-revive" } };
     return s;
 }
+// MEGA EVOLUTION: those with a moving picture in SpriteCollab (29 of the 48), each by its stone.
+// form: the Mega's form as Sun and Moon number it (its stats: SpeciesFormBase); sprite: its folder
+// in SpriteCollab (the moving picture NNNN_FFFF.pmd); held: the stone's English name, as a 6th or
+// 7th generation save holds it; icon: items/<icon>.png.
+struct MegaInfo { int species, form, sprite; const char* stone; const char* held; const char* icon; const char* suffix; };
+inline const std::vector<MegaInfo>& Megas()
+{
+    static const std::vector<MegaInfo> m = {
+        { 6, 1, 1, "Charizardita X", "CHARIZARDITE X", "charizardite-x", " X" }, { 65, 1, 1, "Alakazita", "ALAKAZITE", "alakazite", "" },
+        { 80, 1, 2, "Slowbronita", "SLOWBRONITE", "slowbronite", "" }, { 94, 1, 1, "Gengarita", "GENGARITE", "gengarite", "" },
+        { 115, 1, 1, "Kangaskhanita", "KANGASKHANITE", "kangaskhanite", "" }, { 142, 1, 1, "Aerodactylita", "AERODACTYLITE", "aerodactylite", "" },
+        { 150, 2, 2, "Mewtwonita Y", "MEWTWONITE Y", "mewtwonite-y", " Y" }, { 208, 1, 1, "Steelixita", "STEELIXITE", "steelixite", "" },
+        { 229, 1, 1, "Houndoominita", "HOUNDOOMINITE", "houndoominite", "" }, { 248, 1, 1, "Tyranitarita", "TYRANITARITE", "tyranitarite", "" },
+        { 254, 1, 1, "Sceptilita", "SCEPTILITE", "sceptilite", "" }, { 282, 1, 1, "Gardevoirita", "GARDEVOIRITE", "gardevoirite", "" },
+        { 302, 1, 1, "Sablenita", "SABLENITE", "sablenite", "" }, { 303, 1, 1, "Mawilita", "MAWILITE", "mawilite", "" },
+        { 308, 1, 1, "Medichamita", "MEDICHAMITE", "medichamite", "" }, { 310, 1, 1, "Manectita", "MANECTITE", "manectite", "" },
+        { 319, 1, 1, "Sharpedonita", "SHARPEDONITE", "sharpedonite", "" }, { 323, 1, 1, "Cameruptita", "CAMERUPTITE", "cameruptite", "" },
+        { 334, 1, 1, "Altarianita", "ALTARIANITE", "altarianite", "" }, { 354, 1, 1, "Banettita", "BANETTITE", "banettite", "" },
+        { 359, 1, 1, "Absolita", "ABSOLITE", "absolite", "" }, { 362, 1, 1, "Glalitita", "GLALITITE", "glalitite", "" },
+        { 380, 1, 1, "Latiasita", "LATIASITE", "latiasite", "" }, { 381, 1, 1, "Latiosita", "LATIOSITE", "latiosite", "" },
+        { 384, 1, 1, "Meteorito", "METEORITE", "meteorite", "" }, { 428, 1, 1, "Lopunnita", "LOPUNNITE", "lopunnite", "" },
+        { 448, 1, 1, "Lucarionita", "LUCARIONITE", "lucarionite", "" }, { 475, 1, 1, "Galladita", "GALLADITE", "galladite", "" },
+        { 719, 1, 1, "Diancita", "DIANCITE", "diancite", "" } };
+    return m;
+}
+constexpr int MEGA_PRICE = 8000;
+inline int MegaFor(int species) { const auto& m = Megas(); for (int i = 0; i < (int)m.size(); i++) if (m[i].species == species) return i; return -1; }
 }

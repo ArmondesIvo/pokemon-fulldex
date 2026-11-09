@@ -65,10 +65,13 @@ struct MonSpec
     int stats[6] = { 100, 50, 50, 50, 50, 50 };
     int moves[4] = {};
     int level = 50;
+    // (Its Mega, when it holds the stone: -1 none; what it becomes; its moving picture's key.)
+    int mega = -1, megaStats[6] = {}, megaTypes[2] = { 0, -1 }, megaKey = 0;
+    std::string megaName;
     int hp = -1;                       // the HP it starts with (-1 all: the Elite Four's keep theirs)
 };
-enum { S_ATQ, S_HAB, S_Q, S_ULT, S_DASH, SLOTS };
-inline const char* SlotLabel(int s) { static const char* n[SLOTS] = { "Atq", "Hab", "Q", "ULT", "Disparada" }; return s >= 0 && s < SLOTS ? n[s] : ""; }
+enum { S_ATQ, S_HAB, S_Q, S_ULT, S_DASH, S_EVO, SLOTS };
+inline const char* SlotLabel(int s) { static const char* n[SLOTS] = { "Atq", "Hab", "Q", "ULT", "Disparada", "Mega" }; return s >= 0 && s < SLOTS ? n[s] : ""; }
 // (Stat stages: as the games' -6 to +6.)
 enum { ST_ATK, ST_DEF, ST_SPA, ST_SPD, ST_SPE, ST_ACC, ST_EVA, STAGES };
 enum { NONE, BRN, PSN, TOX, PAR, SLP, FRZ };
@@ -94,7 +97,7 @@ struct Fighter
     float dirX = 1, dirY = 0;                // where it looks (its picture's eight ways)
     float atkT = 0, atkDur = 0.45f, hurtT = 0; // attacking (time left of it), hurt (time left)
     int castType = 0;
-    bool fainted = false;
+    bool fainted = false, mega = false;
     float boomT = 0;                         // Self-Destruct, Explosion: when it faints
 };
 struct Proj { int owner = 0, move = 0, type = 0; float x = 0, y = 0, vx = 0, vy = 0, life = 0, r = 16, scale = 1; bool ult = false; };
@@ -172,6 +175,7 @@ public:
     static constexpr float DUEL_TIME = 99;
     int winner = -1, difficulty = 1; // 0 easy, 1 normal, 2 hard
     int dealt[2] = {}, hits[2] = {}, kos[2] = {};
+    bool megaUsed[2] = {};           // (one Mega Evolution a side a battle, as the games)
     std::string intro;                // "Vai, Charizard!"
     std::mt19937 rng{ 12345 };
 
@@ -409,6 +413,7 @@ private:
             if (F.atkT <= 0) { F.dirX = O.x - F.x; F.dirY = O.y - F.y; }
         }
         // Its buttons.
+        if (in.press[S_EVO]) MegaEvolve(s);
         if (in.press[S_DASH] && F.dashCd <= 0)
         {
             float dx = mx, dy = my;
@@ -421,6 +426,22 @@ private:
         if (F.busy > 0) return;
         for (int k : { S_ULT, S_HAB, S_Q, S_ATQ })
             if (in.press[k] && Use(s, k)) break;
+    }
+    // MEGA EVOLUTION: its Mega's stats and types from now on (its HP as it is), once a battle a side.
+    void MegaEvolve(int s)
+    {
+        Fighter& F = f[s];
+        if (F.spec.mega < 0 || megaUsed[s] || F.mega || F.busy > 0 || F.fainted) return;
+        megaUsed[s] = true;
+        F.mega = true;
+        for (int i = 1; i < 6; i++) F.spec.stats[i] = F.spec.megaStats[i];
+        F.spec.types[0] = F.spec.megaTypes[0]; F.spec.types[1] = F.spec.megaTypes[1];
+        F.spec.name = F.spec.megaName;
+        F.busy = 0.8f; F.protectT = std::max(F.protectT, 0.8f);
+        banner.text = "Mega Evolu\xC3\xA7\xC3\xA3o!"; banner.type = F.spec.types[0]; banner.t = 0; banner.life = 1.2f;
+        static const uint32_t rainbow[] = { 0xFFFF6060u, 0xFFFFB040u, 0xFFFFF060u, 0xFF60F080u, 0xFF60B0FFu, 0xFFC070FFu };
+        for (uint32_t col : rainbow) Burst(F.x, F.y, col, 8, 300, 9, 0.7f);
+        shake = std::max(shake, 0.6f);
     }
     static float Dist(const Fighter& a, const Fighter& b) { return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)); }
     bool Use(int s, int k)

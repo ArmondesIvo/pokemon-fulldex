@@ -116,6 +116,8 @@ void SpeciesTypes(int species, std::string& type1, std::string& type2); // "GRAS
 // A species' base stats (HP, Atk, Def, Spe, SpA, SpD) and types (0 Normal .. 17 Fairy; -1 none), as Sun
 // and Moon have them: the arena's bot builds any species from them.
 bool SpeciesBase(int species, int base[6], int types[2]);
+// The same for one of its forms (form 0 the species itself; a Mega: its form, as Sun and Moon number them).
+bool SpeciesFormBase(int species, int form, int base[6], int types[2]);
 
 // One Pokémon as the MY PC tab's details show it (PKVault's): its kinds, nature, ability, moves,
 // stats and where it comes from, in English. Gen 1 and 2 have no nature or ability ("").

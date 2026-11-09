@@ -1070,11 +1070,15 @@ void SpeciesTypes(int species, std::string& type1, std::string& type2)
     if (b != a) type2 = Upper(i18n::type(pksm::Language::ENG, b));
 }
 
-bool SpeciesBase(int species, int base[6], int types[2])
+bool SpeciesBase(int species, int base[6], int types[2]) { return SpeciesFormBase(species, 0, base, types); }
+
+bool SpeciesFormBase(int species, int form, int base[6], int types[2])
 {
     if (species <= 0 || species > DEX_SPECIES) return false;
     namespace P = pksm::PersonalSMUSUM;
-    const u16 sp = (u16)species;
+    // (A form's entry: after the species' own, from its form-stats index on, as PKHeX reads them.)
+    if (form > 0 && (form >= P::formCount((u16)species) || !P::formStatIndex((u16)species))) return false;
+    const u16 sp = form > 0 ? (u16)(P::formStatIndex((u16)species) + form - 1) : (u16)species;
     base[0] = P::baseHP(sp); base[1] = P::baseAtk(sp); base[2] = P::baseDef(sp);
     base[3] = P::baseSpe(sp); base[4] = P::baseSpa(sp); base[5] = P::baseSpd(sp);
     const pksm::Type a = P::type1(sp), b = P::type2(sp);

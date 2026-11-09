@@ -3,6 +3,7 @@
 four animations of each species, packed one file a species for the app to fetch when it needs one.
 
 Usage: fetch_pmd.py <out folder> [first] [last]      (species 1 to 809 by default)
+       fetch_pmd.py <out folder> --forms NNNN/FFFF ...  (forms, as Mega Charizard X 0006/0001: NNNN_FFFF.pmd)
 
 Each <out>/NNNN.pmd:
     PMD1
@@ -37,11 +38,12 @@ def png_size(data):
     return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
 
 
-def one(sp, out):
-    path = os.path.join(out, "%04d.pmd" % sp)
+def one(sp, out, form=None):
+    path = os.path.join(out, ("%04d_%s.pmd" % (sp, form)) if form else "%04d.pmd" % sp)
+    base = BASE % sp + (form + "/" if form else "")
     if os.path.exists(path):
         return sp, "kept"
-    xml = get(BASE % sp + "AnimData.xml")
+    xml = get(base + "AnimData.xml")
     if not xml:
         return sp, "none"
     anims = {}
@@ -64,7 +66,7 @@ def one(sp, out):
             name, a = resolve(fallback[want])
         if a is None:
             return sp, "missing " + want
-        png = get(BASE % sp + name + "-Anim.png")
+        png = get(base + name + "-Anim.png")
         if not png:
             return sp, "no png " + name
         fw, fh = int(a.findtext("FrameWidth")), int(a.findtext("FrameHeight"))
@@ -82,6 +84,12 @@ def one(sp, out):
 
 def main():
     out = sys.argv[1]
+    if len(sys.argv) > 2 and sys.argv[2] == "--forms":
+        os.makedirs(out, exist_ok=True)
+        for f in sys.argv[3:]:
+            sp, form = f.split("/")
+            print(f, one(int(sp), out, form)[1], flush=True)
+        return
     first = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     last = int(sys.argv[3]) if len(sys.argv) > 3 else 809
     os.makedirs(out, exist_ok=True)

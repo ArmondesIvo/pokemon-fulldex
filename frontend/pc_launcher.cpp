@@ -1982,6 +1982,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             case SDL_SCANCODE_L: w = 12; break;
             case SDL_SCANCODE_U: w = 13; break;
             case SDL_SCANCODE_SPACE: w = 14; break;
+            case SDL_SCANCODE_E: w = 15; break;
             case SDL_SCANCODE_ESCAPE: case SDL_SCANCODE_AC_BACK: case SDL_SCANCODE_P: w = 20; break;
             default: break;
             }
