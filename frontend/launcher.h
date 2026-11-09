@@ -457,7 +457,7 @@ inline bool IsHack(const Game& g)
     if (g.hack) return true; // (a DS hack: told apart from its clean game by romhacks.h)
     if (!g.known || g.comingSoon || g.platform != GBA) return false;
     const std::string c = g.code.substr(0, 3);
-    return c != "AXV" && c != "AXP" && c != "BPE" && c != "BPR" && c != "BPG";
+    return c != "AXV" && c != "AXP" && c != "BPE" && c != "BPR" && c != "BPG" && c != "GBC";
 }
 // The search's words in a game's name (its own or the player's), any case.
 inline bool NameHas(const Game& g, const std::string& q)

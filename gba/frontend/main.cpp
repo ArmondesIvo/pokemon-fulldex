@@ -2799,7 +2799,8 @@ std::vector<ListGame> Find(const std::string& roms, const std::string& saves)
         l.key = g.key;
         l.name = g.name;
         l.file = g.ips.empty() ? g.rom : g.ips;
-        l.art = g.patch.empty() ? std::string() : Games::ArtCode(g.sha1);
+        // (The Game Boy's Pokémon games: art/<key>.jpg, red.jpg to crystal.jpg, when it is there.)
+        l.art = Games::IsGb(g) ? (g.known ? g.key : std::string()) : g.patch.empty() ? std::string() : Games::ArtCode(g.sha1);
         l.hasSave = g.hasSave;
         l.widescreen = !g.patch.empty();
         l.hack = !g.known;

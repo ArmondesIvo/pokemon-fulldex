@@ -22,6 +22,12 @@ inline std::string CodeOf(const std::string& key)
     if (key == "ultraviolet") return "UV22";
     if (key == "firered") return "BPRE";
     if (key == "leafgreen") return "BPGE";
+    // (Ruby and Sapphire, in any language: their cartridges' codes, AXV and AXP.)
+    if (key.rfind("ruby", 0) == 0) return key == "ruby" ? "AXVE" : "AXV-" + key.substr(4);
+    if (key.rfind("sapphire", 0) == 0) return key == "sapphire" ? "AXPE" : "AXP-" + key.substr(8);
+    // (The Game Boy's Pokémon games: Red to Crystal, gba/frontend/games.h IdentifyGb.)
+    for (const char* k : { "red", "blue", "green", "yellow", "gold", "silver", "crystal" })
+        if (key == k) return "GBC-" + key;
     return "GBA-" + key;
 }
 
