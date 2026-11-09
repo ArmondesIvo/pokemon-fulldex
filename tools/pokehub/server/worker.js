@@ -22,7 +22,8 @@ export default {
       if (url.pathname === "/auth/callback" && request.method === "GET") return await callback(request, url, env);
       if (url.pathname === "/auth/signout" && request.method === "POST") return await signout(request, env);
       if (url.pathname === "/me" && request.method === "GET") return await me(request, env);
-      if (url.pathname === "/") return text("PokeHub");
+      if (url.pathname === "/") return info("PokeHub", HOME);
+      if (url.pathname === "/privacy") return info("PokeHub: Privacidade", PRIVACY);
       return text("Not found", 404);
     } catch (e) {
       console.error(e && e.stack || e);
@@ -30,6 +31,35 @@ export default {
     }
   },
 };
+
+// The home page and the privacy policy Google's sign-in asks for (its Branding page).
+const HOME = `<h1>PokeHub</h1>
+<p>PokeHub é um app particular, para um pequeno grupo de amigos, que reúne jogos de Pokémon que cada um já tem, um PC de Pokémon e uma Pokédex.</p>
+<p>A conta do PokeHub (entrar com o Google) serve para guardar os saves de cada pessoa e ver as próprias coisas em qualquer celular.</p>
+<p><a href="/privacy">Política de privacidade</a></p>`;
+const PRIVACY = `<h1>Política de privacidade</h1>
+<p>Última atualização: 9 de novembro de 2026.</p>
+<h2>O que o PokeHub guarda</h2>
+<p>Quando você entra com o Google, o PokeHub recebe do Google apenas o seu <b>nome</b>, o seu <b>e-mail</b> e um <b>número que identifica a sua conta Google</b>. Ele guarda isso para saber que a conta é sua, e guarda a data em que você entrou.</p>
+<p>Depois do login, o app fica com uma chave de sessão no seu celular. No servidor fica só uma impressão digital (hash) dela, nunca a chave.</p>
+<p>Se você usar os saves na nuvem, os arquivos de save dos seus jogos ficam guardados no servidor do PokeHub, ligados à sua conta.</p>
+<h2>O que o PokeHub não faz</h2>
+<p>O PokeHub não lê seus e-mails, contatos, arquivos do Google Drive nem nada além do nome e do e-mail. Não vende, não compartilha e não usa seus dados para anúncios.</p>
+<h2>Onde ficam</h2>
+<p>Os dados ficam na Cloudflare (Workers, D1 e R2), na conta do PokeHub.</p>
+<h2>Apagar</h2>
+<p>Você pode sair da conta no app a qualquer momento. Para apagar sua conta e seus saves do servidor, peça a quem te passou o PokeHub, que apaga tudo.</p>
+<h2>Contato</h2>
+<p>armondeseuro@gmail.com</p>`;
+function info(title, body) {
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title><style>
+:root{--bg:#faf6f0;--ink:#3a1e08;--hint:#7b7467;--primary:#b6634e}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,sans-serif;line-height:1.6}
+main{max-width:680px;margin:0 auto;padding:32px 16px}h1{color:var(--primary)}a{color:var(--primary)}
+</style></head><body><main>${body}</main></body></html>`;
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+}
 
 function text(body, status = 200, headers = {}) {
   return new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8", ...headers } });
