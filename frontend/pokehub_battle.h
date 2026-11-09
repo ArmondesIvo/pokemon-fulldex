@@ -45,6 +45,9 @@ struct BattleState
     bool down = false, dragged = false;
     int downX = 0, downY = 0;
     float scroll0 = 0;
+    // (A team card held a moment, then dragged to another place: the order changed.)
+    int downCard = -1, dragCard = -1, dragX = 0, dragY = 0;
+    std::chrono::steady_clock::time_point downAt;
 };
 inline BattleState& Bat() { static BattleState s; return s; }
 enum { BT_PICK = 1, BT_REROLL, BT_DIFF, BT_FIGHT, BT_CARD, BT_BOTCARD, BT_PAUSE, BT_RESUME, BT_QUIT, BT_REMATCH, BT_MENU,
@@ -56,7 +59,7 @@ inline void PmdWantTeams(); // (both teams' moving pictures fetched: below)
 inline bool BattleSpec(PokemonHub::Save& s, int box, int slot, Arena::MonSpec& out)
 {
     PokemonHub::MonDetail d;
-    if (!PokemonHub::Detail(s, box, slot, d) || d.mon.egg || !d.mon.species) return false;
+    if (!PokemonHub::Detail(s, box, slot, d) || d.mon.egg || !d.mon.species || Arena::NoPicture(d.mon.species)) return false;
     out = Arena::MonSpec();
     out.species = d.mon.species; out.shiny = d.mon.shiny;
     out.name = PcMonName(d.mon);
@@ -99,7 +102,7 @@ inline void BattleReroll()
     for (int tries = 0; (int)B.bot.size() < 6 && tries < 200; tries++)
     {
         const int sp = 1 + (int)(rng() % PokemonHub::DEX_SPECIES);
-        if (sp == 292) continue; // (Shedinja: 1 HP, gone at the first touch)
+        if (sp == 292 || Arena::NoPicture(sp)) continue; // (Shedinja: 1 HP, gone at the first touch; and those without moving pictures)
         bool dup = false;
         for (const Arena::MonSpec& m : B.bot) dup |= m.species == sp;
         int base[6], types[2];
@@ -527,14 +530,203 @@ inline int PmdRow(float dx, float dy)
     return ((int)std::lround(a / 0.785398f) + 8) % 8;
 }
 
+// ---- The moves' looks, a kind for each type (drawn, in the pictures' blocky way) ------------------
+namespace BFx
+{
+using namespace Arena;
+// (A blocky disc: squares of b pixels, as the sprites' pixels are.)
+inline void Blob(Canvas& c, float cx, float cy, float r, uint32_t col, float b)
+{
+    b = std::max(1.0f, b);
+    const int n = (int)std::ceil(r / b);
+    for (int j = -n; j <= n; j++)
+        for (int i = -n; i <= n; i++)
+        {
+            const float dx = (i + 0.5f) * b, dy = (j + 0.5f) * b;
+            if (dx * dx + dy * dy > r * r) continue;
+            BGfx::Rect(c, (int)(cx + i * b), (int)(cy + j * b), (int)b + 1, (int)b + 1, col);
+        }
+}
+inline void Leaf(Canvas& c, float cx, float cy, float len, float ang, uint32_t col, float b)
+{
+    const float ca = std::cos(ang), sa = std::sin(ang);
+    for (float t = -1; t <= 1; t += 0.25f)
+    {
+        const float w = (1 - t * t) * len * 0.35f;
+        Blob(c, cx + ca * t * len, cy + sa * t * len, std::max(b * 0.6f, w), col, b);
+    }
+    BGfx::Seg(c, cx - ca * len, cy - sa * len, cx + ca * len, cy + sa * len, std::max(1.0f, b * 0.5f), 0xFF2E6B1Eu);
+}
+inline void Bolt(Canvas& c, float x0, float y0, float x1, float y1, float w, float seed, uint32_t col)
+{
+    float px = x0, py = y0;
+    const float dx = x1 - x0, dy = y1 - y0, l = std::max(1.0f, std::sqrt(dx * dx + dy * dy));
+    const float nx = -dy / l, ny = dx / l;
+    for (int i = 1; i <= 6; i++)
+    {
+        const float t = i / 6.0f, off = i == 6 ? 0 : std::sin(seed * 13.7f + i * 2.3f) * l * 0.18f;
+        const float qx = x0 + dx * t + nx * off, qy = y0 + dy * t + ny * off;
+        BGfx::Seg(c, px, py, qx, qy, w * 1.8f, BGfx::Alpha(col, 0.5f));
+        BGfx::Seg(c, px, py, qx, qy, w, 0xFFFFFFE0u);
+        px = qx; py = qy;
+    }
+}
+inline void Star(Canvas& c, float cx, float cy, float r, float ang, uint32_t col)
+{
+    for (int i = 0; i < 4; i++)
+    {
+        const float a = ang + i * 1.5708f;
+        BGfx::Seg(c, cx, cy, cx + std::cos(a) * r, cy + std::sin(a) * r, std::max(2.0f, r * 0.28f), col);
+    }
+    BGfx::Disc(c, cx, cy, r * 0.3f, 0xFFFFFFFFu);
+}
+// A shot flying: type, where, its size, how long it has flown, which way.
+inline void Shot(Canvas& c, int type, float x, float y, float r, float t, float dx, float dy, float px)
+{
+    const uint32_t tc = Arena::TypeColour(type);
+    const float l = std::max(1e-3f, std::sqrt(dx * dx + dy * dy)), ux = dx / l, uy = dy / l;
+    const float b = std::max(2.0f, px);
+    switch (type)
+    {
+    case T_FIRE: case T_DRAGON:
+    {
+        const uint32_t outer = type == T_FIRE ? 0xFFE84818u : 0xFF5A30C8u, mid = type == T_FIRE ? 0xFFF89830u : 0xFF8C68F8u, in = type == T_FIRE ? 0xFFFFF0A0u : 0xFFE0D0FFu;
+        for (int i = 3; i >= 0; i--)
+        {
+            const float f = 1 + 0.15f * std::sin(t * 40 + i * 2);
+            Blob(c, x - ux * r * i * 0.7f, y - uy * r * i * 0.7f, r * (1.0f - i * 0.2f) * f, BGfx::Alpha(outer, 1 - i * 0.2f), b);
+        }
+        Blob(c, x, y, r * 0.7f, mid, b);
+        Blob(c, x + ux * r * 0.2f, y + uy * r * 0.2f, r * 0.38f, in, b);
+        break;
+    }
+    case T_WATER:
+        for (int i = 0; i < 3; i++) Blob(c, x - ux * r * (1.2f + i * 0.9f) + std::sin(t * 20 + i) * r * 0.3f, y - uy * r * (1.2f + i * 0.9f), r * (0.35f - i * 0.08f), 0xC0A8D8FFu, b);
+        Blob(c, x, y, r, 0xFF3878E8u, b);
+        Blob(c, x - r * 0.25f, y - r * 0.25f, r * 0.55f, 0xFF78B0F8u, b);
+        Blob(c, x - r * 0.35f, y - r * 0.4f, r * 0.2f, 0xFFFFFFFFu, b);
+        break;
+    case T_GRASS: case T_BUG:
+        for (int i = 0; i < 3; i++)
+        {
+            const float a = t * 14 + i * 2.094f;
+            Leaf(c, x + std::cos(a) * r * 0.6f, y + std::sin(a) * r * 0.6f, r * 0.75f, a + 0.8f, type == T_GRASS ? 0xFF58C040u : 0xFFA8C020u, b);
+        }
+        break;
+    case T_ELECTRIC:
+        Blob(c, x, y, r * 0.8f, 0xFFF8D030u, b);
+        Blob(c, x, y, r * 0.4f, 0xFFFFFFF0u, b);
+        for (int i = 0; i < 3; i++)
+        {
+            const float a = t * 30 + i * 2.1f;
+            Bolt(c, x, y, x + std::cos(a) * r * 2, y + std::sin(a) * r * 2, std::max(2.0f, b * 0.7f), t * 9 + i, 0xFFF8D030u);
+        }
+        break;
+    case T_ICE:
+    {
+        const float a = t * 10;
+        for (int i = 0; i < 2; i++)
+        {
+            const float aa = a + i * 0.785f, rr = r * (1.1f - i * 0.4f);
+            BGfx::Seg(c, x + std::cos(aa) * rr, y + std::sin(aa) * rr, x - std::cos(aa) * rr, y - std::sin(aa) * rr, rr * 0.7f, i ? 0xFFFFFFFFu : 0xFF88D8F0u);
+        }
+        break;
+    }
+    case T_ROCK: case T_GROUND:
+    {
+        const uint32_t a = type == T_ROCK ? 0xFF8C7040u : 0xFFB89048u, d = type == T_ROCK ? 0xFF5A4828u : 0xFF7A5C2Cu;
+        Blob(c, x, y, r, d, b);
+        Blob(c, x - r * 0.15f, y - r * 0.15f, r * 0.75f, a, b);
+        Blob(c, x - r * 0.35f, y - r * 0.35f, r * 0.25f, 0xFFE8D8B0u, b);
+        for (int i = 0; i < 2; i++) Blob(c, x - ux * r * (1.6f + i) + std::sin(t * 25 + i) * r * 0.4f, y - uy * r * (1.6f + i), r * 0.3f, d, b);
+        break;
+    }
+    case T_PSYCHIC: case T_FAIRY:
+        for (int i = 0; i < 3; i++)
+        {
+            const float rr = r * (0.5f + std::fmod(t * 3 + i / 3.0f, 1.0f));
+            BGfx::Ring(c, x, y, rr, rr, std::max(2.0f, b * 0.8f), BGfx::Alpha(type == T_PSYCHIC ? 0xFFF85888u : 0xFFF8A0C8u, 1.2f - rr / r * 0.7f));
+        }
+        Blob(c, x, y, r * 0.45f, 0xFFFFE0F0u, b);
+        if (type == T_FAIRY) Star(c, x, y, r * 0.9f, t * 6, 0xFFFFFFFFu);
+        break;
+    case T_GHOST: case T_DARK: case T_POISON:
+    {
+        const uint32_t o = type == T_GHOST ? 0xFF6040A0u : type == T_DARK ? 0xFF302838u : 0xFF9040B0u, i2 = type == T_GHOST ? 0xFFB088F0u : type == T_DARK ? 0xFF8050A0u : 0xFFD088F0u;
+        for (int i = 1; i <= 4; i++) Blob(c, x - ux * r * i * 0.6f + std::sin(t * 18 + i * 1.7f) * r * 0.35f, y - uy * r * i * 0.6f + std::cos(t * 18 + i) * r * 0.35f, r * (0.7f - i * 0.12f), BGfx::Alpha(o, 0.8f - i * 0.15f), b);
+        Blob(c, x, y, r, o, b);
+        Blob(c, x - r * 0.2f, y - r * 0.2f, r * 0.5f, i2, b);
+        if (type == T_POISON) for (int i = 0; i < 3; i++) BGfx::Ring(c, x + std::cos(t * 9 + i * 2) * r, y + std::sin(t * 9 + i * 2) * r, r * 0.25f, r * 0.25f, b * 0.6f, 0xFFD088F0u);
+        break;
+    }
+    case T_FLYING:
+        for (int i = 0; i < 2; i++)
+        {
+            const float o = (i - 0.5f) * r * 0.9f;
+            const float cx = x - uy * o - ux * r * 0.3f * i, cy = y + ux * o - uy * r * 0.3f * i;
+            // (A crescent of wind: an arc facing the way it goes.)
+            for (float a = -1.1f; a <= 1.1f; a += 0.22f)
+            {
+                const float ca = std::cos(a), sa = std::sin(a);
+                const float qx = cx + (ux * ca - uy * sa) * r, qy = cy + (uy * ca + ux * sa) * r;
+                Blob(c, qx, qy, std::max(b, r * 0.18f * (1.2f - std::fabs(a) * 0.6f)), 0xE0F0F8FFu, b);
+            }
+        }
+        break;
+    case T_STEEL:
+        BGfx::Seg(c, x - ux * r * 1.3f, y - uy * r * 1.3f, x + ux * r * 1.3f, y + uy * r * 1.3f, r * 0.9f, 0xFF9098A8u);
+        BGfx::Seg(c, x - ux * r * 1.1f, y - uy * r * 1.1f, x + ux * r * 1.1f, y + uy * r * 1.1f, r * 0.45f, 0xFFE0E4F0u);
+        Star(c, x + ux * r * 0.6f, y + uy * r * 0.6f, r * 0.6f, t * 12, 0xFFFFFFFFu);
+        break;
+    case T_FIGHTING:
+        Blob(c, x, y, r, 0xFFC03028u, b);
+        Blob(c, x - r * 0.2f, y - r * 0.2f, r * 0.6f, 0xFFF07858u, b);
+        for (int i = 0; i < 4; i++) { const float a = t * 8 + i * 1.57f; BGfx::Seg(c, x + std::cos(a) * r * 1.2f, y + std::sin(a) * r * 1.2f, x + std::cos(a) * r * 1.7f, y + std::sin(a) * r * 1.7f, b, 0xFFFFFFFFu); }
+        break;
+    default:
+        Blob(c, x, y, r, tc, b);
+        Star(c, x, y, r * 1.1f, t * 10, 0xFFFFFFFFu);
+        break;
+    }
+}
+// Where a move landed: a flash and the type's own bits flying out; a physical one a slash too.
+inline void Hit(Canvas& c, const Impact& m, float x, float y, float k, float px)
+{
+    const float t = m.t / 0.35f, sz = (m.big ? 90 : 55) * k;
+    const uint32_t tc = Arena::TypeColour(m.type);
+    BGfx::Disc(c, x, y, sz * (0.3f + 0.7f * t), BGfx::Alpha(0xFFFFFFFFu, 0.55f * (1 - t)));
+    BGfx::Ring(c, x, y, sz * (0.4f + t), sz * (0.4f + t) * 0.8f, std::max(2.0f, 6 * k * (1 - t)), BGfx::Alpha(tc, 1 - t));
+    if (m.phys)
+    {
+        // (Three claw lines across it.)
+        const float l = sz * 0.9f, sh = std::min(1.0f, t * 3);
+        for (int i = -1; i <= 1; i++)
+        {
+            const float ox = i * sz * 0.22f;
+            BGfx::Seg(c, x - l * 0.6f + ox, y - l * 0.6f, x - l * 0.6f + ox + l * 1.2f * sh, y - l * 0.6f + l * 1.2f * sh, std::max(2.0f, 5 * k * (1 - t)), BGfx::Alpha(0xFFFFFFFFu, 1 - t));
+        }
+    }
+    for (int i = 0; i < 6; i++)
+    {
+        const float a = i * 1.047f + m.x * 0.01f, d = sz * (0.3f + t * 0.9f);
+        const float bx = x + std::cos(a) * d, by = y + std::sin(a) * d * 0.8f;
+        if (m.type == T_GRASS || m.type == T_BUG) Leaf(c, bx, by, 9 * k, a + t * 6, tc, px);
+        else if (m.type == T_ELECTRIC) Bolt(c, x, y, bx, by, std::max(2.0f, 3 * k), t * 7 + i, tc);
+        else if (m.type == T_FAIRY || m.type == T_NORMAL) Star(c, bx, by, 10 * k * (1 - t * 0.5f), t * 8, BGfx::Alpha(m.type == T_FAIRY ? 0xFFF8B8D8u : 0xFFFFFFFFu, 1 - t));
+        else Blob(c, bx, by, 8 * k * (1 - t * 0.6f), BGfx::Alpha(tc, 1 - t * 0.5f), px);
+    }
+}
+}
+
 // ---- The stadium: drawn once a size, then copied each frame ------------------------------------
 inline void BattleLayout(const Canvas& c, float u)
 {
     BattleState& B = Bat();
-    const float top = 74 * u, bottom = c.h - 6 * u;
-    B.fk = std::min((c.w * 0.94f) / (2 * Arena::RX), (bottom - top) / (2 * Arena::RY + 40));
+    // (As big as the screen lets it: under the bars at the top, a little past the foot.)
+    const float top = 52 * u, bottom = c.h + 4 * u;
+    B.fk = std::min((c.w * 0.97f) / (2 * Arena::RX), (bottom - top) / (2 * Arena::RY + 40));
     B.fcx = c.w * 0.5f;
-    B.fcy = (top + bottom) * 0.5f + 8 * u;
+    B.fcy = (top + bottom) * 0.5f + 6 * u;
 }
 inline void BattleBackground(Canvas& c, float u)
 {
@@ -807,17 +999,24 @@ inline void DrawBattle(Canvas& c, float u)
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, w * 1.3f, BGfx::Alpha(tc, 0.5f));
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, w * 0.8f, tc);
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, w * 0.35f, 0xFFFFFFF0u);
+            // (The type's own bits along it.)
+            for (int i = 1; i < 10; i++)
+            {
+                const float f = std::fmod(i / 10.0f + bm.t * 2.5f, 1.0f);
+                BFx::Shot(c, bm.type, x0 + (x1 - x0) * f, y0 - 30 * k + (y1 - y0) * f, w * 0.32f, bm.t * 3 + i, bm.dx, bm.dy, std::max(2.0f, 3.4f * k));
+            }
         }
     }
     for (const Arena::Particle& p : b.parts)
         BGfx::Rect(c, (int)(SX(p.x) - p.size * k / 2), (int)(SY(p.y) - 40 * k - p.size * k / 2), std::max(1, (int)(p.size * k)), std::max(1, (int)(p.size * k)), BGfx::Alpha(p.col, 1 - p.t / p.life));
+    const float fxPx = std::max(2.0f, 3.4f * k); // (the moves' blocks as big as the sprites' pixels)
     for (const Arena::Proj& p : b.projs)
     {
         const float x = SX(p.x), y = SY(p.y) - 40 * k;
-        BGfx::Disc(c, x, y, p.r * k * 1.6f, BGfx::Alpha(Arena::TypeColour(p.type), 0.35f));
-        BGfx::Disc(c, x, y, p.r * k, Arena::TypeColour(p.type));
-        BGfx::Disc(c, x, y, p.r * k * 0.45f, 0xFFFFFFF0u);
+        BGfx::Disc(c, x, y, p.r * k * 2.3f, BGfx::Alpha(Arena::TypeColour(p.type), 0.22f));
+        BFx::Shot(c, p.type, x, y, p.r * k * 1.6f, b.time + p.x * 0.001f, p.vx, p.vy, fxPx);
     }
+    for (const Arena::Impact& m : b.impacts) BFx::Hit(c, m, SX(m.x), SY(m.y) - 40 * k, k, fxPx);
     // Words floating up.
     for (const Arena::FloatText& t : b.texts)
     {
@@ -1095,10 +1294,13 @@ inline void DrawBattlePicker(Canvas& c, float u, int L, int R, int top, int bott
     const int rows = ((int)mons.size() + cols - 1) / cols;
     B.pickMax = std::max(0.0f, (float)(rows * (ch + gap) - (gb - gt - 2 * pad)));
     B.pickScroll = std::min(B.pickScroll, B.pickMax);
+    // (Cells cut by the edges drawn whole, then what went past the edges put back as it was.)
+    const int clipTop = gt + (int)(3 * u), clipBottom = gb - (int)(3 * u);
+    const std::vector<uint32_t> keep(c.px.begin(), c.px.end());
     for (int i = 0; i < (int)mons.size(); i++)
     {
         const int x0 = L + pad + (i % cols) * (cw + gap), y0 = gt + pad + (i / cols) * (ch + gap) - (int)B.pickScroll;
-        if (y0 < gt + pad - 1 || y0 + ch > gb - pad + 1) continue;
+        if (y0 + ch < clipTop || y0 > clipBottom) continue;
         const auto& m = mons[i];
         const auto it = std::find(B.pickSel.begin(), B.pickSel.end(), m.k);
         const bool on = it != B.pickSel.end();
@@ -1113,8 +1315,18 @@ inline void DrawBattlePicker(Canvas& c, float u, int L, int R, int top, int bott
             GT(c, x0 + cw - 12 * u - GW(n, 10 * u, true) / 2, y0 + 12 * u, n, 10 * u, PcPal::OnPrimary, true);
         }
         if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x0 + 10 * u, y0 + 10 * u, 5 * u, PcPal::Shiny);
-        B.hits.push_back({ x0, y0, cw, ch, BT_PG_MON, 0, i });
+        if (Arena::NoPicture(m.species))
+        {
+            // (No moving picture: faded, and not to be chosen.)
+            BGfx::Rect(c, x0, y0, cw, ch, 0xB0EAF1E2u);
+            GTFit(c, x0 + (int)(6 * u), y0 + ch * 0.45f, "sem sprite", 9.5f * u, cw - (int)(12 * u), PcPal::Hint, true);
+        }
+        const int hy0 = std::max(y0, clipTop), hy1 = std::min(y0 + ch, clipBottom);
+        if (hy1 > hy0) B.hits.push_back({ x0, hy0, cw, hy1 - hy0, BT_PG_MON, 0, i });
     }
+    for (int y = 0; y < c.h; y++)
+        if (y < clipTop || y >= clipBottom)
+            std::copy(keep.begin() + (size_t)y * c.w + L, keep.begin() + (size_t)y * c.w + R, c.px.begin() + (size_t)y * c.w + L);
     if (B.pickMax > 0)
     {
         // (How far down: a thin bar at the right.)
@@ -1156,7 +1368,8 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
             const int x0 = gx + i * (cw + (int)(6 * u));
             if (i < (int)team.size())
             {
-                BattleCard(c, u, x0, gy, cw, ch, team[i], i == sel);
+                if (me && i == B.dragCard) Glass::Round(c, x0, gy, cw, ch, 8 * u, PcPal::Slot, PcPal::Primary, 2.0f * u);
+                else BattleCard(c, u, x0, gy, cw, ch, team[i], i == sel);
                 B.hits.push_back({ x0, gy, cw, ch, me ? BT_CARD : BT_BOTCARD, side, i });
             }
             else Glass::Round(c, x0, gy, cw, ch, 8 * u, PcPal::Slot, PcPal::Line, 1.0f * u);
@@ -1169,6 +1382,17 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
     };
     panel(0, L);
     panel(1, L + pw + gap);
+    // (A team card held: it lifts after a moment, then goes where the finger goes.)
+    if (B.down && B.downCard >= 0 && B.dragCard < 0)
+    {
+        Hub().version++; // (frames while it is held, to show it lift)
+        if (std::chrono::duration<float>(std::chrono::steady_clock::now() - B.downAt).count() >= 0.35f && !B.dragged) { B.dragCard = B.downCard; B.dragX = B.downX; B.dragY = B.downY; }
+    }
+    if (B.dragCard >= 0 && B.dragCard < (int)B.mine.size())
+    {
+        const int cw = (int)(100 * u), ch = (int)(118 * u);
+        BattleCard(c, u, B.dragX - cw / 2, B.dragY - ch / 2, cw, ch, B.mine[B.dragCard], true);
+    }
     // The foot: the difficulty, the words, FIGHT.
     const int fy = bottom - footH;
     PcCard(c, L, fy, R - L, footH, 10 * u, u);
@@ -1195,16 +1419,51 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
 inline void BattlePagePointer(int phase, int x, int y)
 {
     BattleState& B = Bat();
-    if (phase == 0) { B.down = true; B.dragged = false; B.downX = x; B.downY = y; B.scroll0 = B.pickScroll; return; }
+    if (phase == 0)
+    {
+        B.down = true; B.dragged = false; B.downX = x; B.downY = y; B.scroll0 = B.pickScroll;
+        B.downAt = std::chrono::steady_clock::now(); B.downCard = -1; B.dragCard = -1;
+        if (!B.picking)
+            for (const PcHit& h : B.hits) if (h.kind == BT_CARD && x >= h.x && x < h.x + h.w && y >= h.y && y < h.y + h.h) B.downCard = h.value;
+        Hub().version++;
+        return;
+    }
     if (phase == 1)
     {
         if (!B.down) return;
+        if (B.downCard >= 0 && B.dragCard < 0 && std::chrono::duration<float>(std::chrono::steady_clock::now() - B.downAt).count() >= 0.35f) B.dragCard = B.downCard;
+        if (B.dragCard >= 0) { B.dragX = x; B.dragY = y; B.dragged = true; Hub().version++; return; }
         if (!B.dragged && std::abs(y - B.downY) > 10 * B.u) B.dragged = true;
         if (B.dragged && B.picking) { B.pickScroll = std::max(0.0f, std::min(B.pickMax, B.scroll0 - (y - B.downY))); Hub().version++; }
         return;
     }
-    const bool tap = B.down && !B.dragged;
+    const bool tap = B.down && !B.dragged && B.dragCard < 0;
     B.down = false;
+    if (B.dragCard >= 0)
+    {
+        // (Dropped: before the card under the finger, or the nearest one along.)
+        const int from = B.dragCard;
+        B.dragCard = -1; B.downCard = -1;
+        int to = -1, best = INT_MAX;
+        for (const PcHit& h : B.hits)
+            if (h.kind == BT_CARD)
+            {
+                const int d = std::abs(x - (h.x + h.w / 2)) + (y >= h.y - h.h && y < h.y + 2 * h.h ? 0 : 100000);
+                if (d < best) { best = d; to = h.value; }
+            }
+        if (to >= 0 && to != from && from < (int)B.mine.size() && from < (int)B.keys.size())
+        {
+            const Arena::MonSpec m = B.mine[from];
+            const BattleKey k = B.keys[from];
+            B.mine.erase(B.mine.begin() + from); B.keys.erase(B.keys.begin() + from);
+            B.mine.insert(B.mine.begin() + to, m); B.keys.insert(B.keys.begin() + to, k);
+            B.sel = to;
+            BattleSaveTeam();
+        }
+        Hub().version++;
+        return;
+    }
+    B.downCard = -1;
     if (!tap) return;
     for (size_t i = B.hits.size(); i-- > 0;)
     {
@@ -1223,6 +1482,7 @@ inline void BattlePagePointer(int phase, int x, int y)
         case BT_PG_MON:
         {
             if (B.pgTab < 0 || B.pgTab >= (int)B.pg.size() || h.value < 0 || h.value >= (int)B.pg[B.pgTab].mons.size()) break;
+            if (Arena::NoPicture(B.pg[B.pgTab].mons[h.value].species)) { B.msg = "Esse ainda n\xC3\xA3o tem sprite animado: n\xC3\xA3o luta por enquanto."; break; }
             const BattleKey k = B.pg[B.pgTab].mons[h.value].k;
             auto it = std::find(B.pickSel.begin(), B.pickSel.end(), k);
             if (it != B.pickSel.end()) B.pickSel.erase(it);

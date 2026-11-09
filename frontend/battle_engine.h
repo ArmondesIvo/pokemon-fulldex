@@ -18,7 +18,7 @@
 namespace Arena
 {
 // (The field: an ellipse round 0,0, in arena units; the screen fits it in.)
-constexpr float RX = 760, RY = 390;
+constexpr float RX = 900, RY = 430;
 enum { T_NORMAL, T_FIGHTING, T_FLYING, T_POISON, T_GROUND, T_ROCK, T_BUG, T_GHOST, T_STEEL, T_FIRE, T_WATER, T_GRASS, T_ELECTRIC, T_PSYCHIC, T_ICE, T_DRAGON, T_DARK, T_FAIRY };
 // (Attacking type by defending type: 0 none, h half, 1, 2 double. PKSM's order.)
 inline float TypeEff(int a, int d)
@@ -32,6 +32,15 @@ inline float TypeEff(int a, int d)
     if (a < 0 || a > 17 || d < 0 || d > 17) return 1;
     const char ch = chart[a][d];
     return ch == '0' ? 0.0f : ch == 'h' ? 0.5f : ch == '2' ? 2.0f : 1.0f;
+}
+// Species with no moving picture in SpriteCollab (tools/battle/fetch_pmd.py found none): they do
+// not fight, as the player asked; the bot never draws them, the choosing shows them faded.
+inline bool NoPicture(int species)
+{
+    static const int none[] = { 514, 516, 520, 522, 523, 538, 558, 564, 565, 591, 592, 616, 618, 626, 668, 683, 732, 733, 735, 756, 765 };
+    if (species <= 0 || species > 809) return true;
+    for (int n : none) if (n == species) return true;
+    return false;
 }
 inline const char* TypeNamePt(int t)
 {
@@ -89,6 +98,8 @@ struct Proj { int owner = 0, move = 0, type = 0; float x = 0, y = 0, vx = 0, vy 
 struct Beam { int owner = 0, move = 0, type = 0; float x0 = 0, y0 = 0, dx = 1, dy = 0, len = 1500, width = 90, t = 0, windup = 0.5f, dur = 0.3f, scale = 1; bool hit = false; };
 struct Ring { int owner = 0, move = 0, type = 0; float x = 0, y = 0, rmax = 240, t = 0, dur = 0.35f, scale = 1; bool hit = false; };
 struct FloatText { std::string s; float x = 0, y = 0, t = 0, life = 1.1f; uint32_t col = 0xFFFFFFFFu; float size = 1; };
+// (A hit's flash where it landed, drawn in its type's way.)
+struct Impact { float x = 0, y = 0, t = 0; int type = 0; bool big = false, phys = false; };
 struct Particle { float x = 0, y = 0, vx = 0, vy = 0, t = 0, life = 0.5f, size = 6; uint32_t col = 0xFFFFFFFFu; };
 struct Banner { std::string text; int type = 0; float t = 0, life = 0; };
 // What a side does this step: where it goes (a length up to 1), and the buttons pressed now.
@@ -148,6 +159,7 @@ public:
     std::vector<Ring> rings;
     std::vector<FloatText> texts;
     std::vector<Particle> parts;
+    std::vector<Impact> impacts;
     Banner banner;
     Phase phase = INTRO;
     float phaseT = 0, time = 0, shake = 0;
@@ -185,6 +197,8 @@ public:
         texts.erase(std::remove_if(texts.begin(), texts.end(), [](const FloatText& t) { return t.t >= t.life; }), texts.end());
         for (auto& p : parts) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92f; p.vy *= 0.92f; }
         parts.erase(std::remove_if(parts.begin(), parts.end(), [](const Particle& p) { return p.t >= p.life; }), parts.end());
+        for (auto& m : impacts) m.t += dt;
+        impacts.erase(std::remove_if(impacts.begin(), impacts.end(), [](const Impact& m) { return m.t >= 0.35f; }), impacts.end());
         if (phase == INTRO) { if (phaseT > 1.4f) SetPhase(FIGHT); return; }
         if (phase == END) return;
         if (phase == KO)
@@ -301,7 +315,7 @@ private:
         Fighter F;
         F.spec = team[s][index];
         F.maxHp = F.hp = std::max(1, F.spec.stats[0]);
-        F.x = s == 0 ? -430.0f : 430.0f;
+        F.x = (s == 0 ? -1.0f : 1.0f) * RX * 0.55f;
         F.y = 0;
         F.face = s == 0 ? 1.0f : -1.0f;
         F.dashCd = 1;
@@ -572,6 +586,7 @@ private:
         D.x += kx / kl * kb; D.y += ky / kl * kb;
         Clamp(D);
         const uint32_t tc = TypeColour(mi.type);
+        { Impact im; im.x = D.x; im.y = D.y; im.type = mi.type; im.big = ult || scale > 0.5f; im.phys = phys; impacts.push_back(im); }
         Burst(D.x, D.y, tc, ult ? 30 : scale > 0.5f ? 16 : 8, ult ? 380.0f : 220.0f, ult ? 10.0f : 6.0f);
         Say(D.x, D.y - 50, std::to_string(n), eff > 1 ? 0xFFFFD040u : eff < 1 ? 0xFFC8C8C8u : 0xFFFFFFFFu, ult ? 1.5f : scale > 0.5f ? 1.15f : 0.9f, 0.9f);
         if (eff > 1) Say(D.x, D.y - 80, "Super eficaz!", 0xFFFFD040u, 0.85f);
