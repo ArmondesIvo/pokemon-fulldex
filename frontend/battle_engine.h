@@ -86,6 +86,8 @@ struct Fighter
     bool moving = false;
     Skill sk[4];
     float dashCd = 0, dashT = 0, dashX = 0, dashY = 0;
+    int dashCharges = 1, dashMax = 1;        // (those that fight up close: two)
+    float rootT = 0;                         // held by vines: cannot move
     float ult = 0, ultLock = 0;           // ultLock: after a ULT, seconds it does not charge
     int stage[STAGES] = {};
     int status = NONE;
@@ -101,12 +103,31 @@ struct Fighter
     float boomT = 0;                         // Self-Destruct, Explosion: when it faints
 };
 struct Proj { int owner = 0, move = 0, type = 0; float x = 0, y = 0, vx = 0, vy = 0, life = 0, r = 16, scale = 1; bool ult = false, wave = false; };
-struct Beam { int owner = 0, move = 0, type = 0; float x0 = 0, y0 = 0, dx = 1, dy = 0, len = 1500, width = 90, t = 0, windup = 0.5f, dur = 0.3f, scale = 1; bool hit = false, ult = true; };
+struct Beam { int owner = 0, move = 0, type = 0; float x0 = 0, y0 = 0, dx = 1, dy = 0, len = 1500, width = 90, t = 0, windup = 0.5f, dur = 0.3f, scale = 1, tick = 0; bool hit = false, ult = true; };
 struct Ring { int owner = 0, move = 0, type = 0; float x = 0, y = 0, rmax = 240, t = 0, dur = 0.35f, scale = 1; bool hit = false; };
 struct FloatText { std::string s; float x = 0, y = 0, t = 0, life = 1.1f; uint32_t col = 0xFFFFFFFFu; float size = 1; };
 // (A hit's flash where it landed, drawn in its type's way.)
 struct Impact { float x = 0, y = 0, t = 0; int type = 0; bool big = false, phys = false; };
-struct Particle { float x = 0, y = 0, vx = 0, vy = 0, t = 0, life = 0.5f, size = 6; uint32_t col = 0xFFFFFFFFu; };
+// (Particles: kind 0 a square, 1 a flame (white, yellow, orange, red, smoke as it ages), 2 a leaf,
+// 3 a spark, 4 smoke, 5 a drop, 6 a rock, 7 a glowing orb. grow: how much bigger by its end; g: a
+// pull downwards (negative: it rises).)
+enum { PK_SQUARE, PK_FLAME, PK_LEAF, PK_SPARK, PK_SMOKE, PK_DROP, PK_ROCK, PK_ORB };
+struct Particle { float x = 0, y = 0, vx = 0, vy = 0, t = 0, life = 0.5f, size = 6, grow = 0, g = 0, rot = 0; uint32_t col = 0xFFFFFFFFu; int kind = PK_SQUARE; };
+// (A patch of ground a move leaves for a while: burning, vines that hold, ice...; it hurts the
+// other side's Pokémon while it stands on it.)
+struct Zone { int owner = 0, type = 0, move = 0; float x = 0, y = 0, r = 120, t = 0, life = 2.5f, tick = 0.3f; bool root = false; unsigned seed = 0; };
+inline int TypeParticle(int t)
+{
+    switch (t)
+    {
+    case T_FIRE: case T_DRAGON: return PK_FLAME;
+    case T_GRASS: case T_BUG: return PK_LEAF;
+    case T_WATER: return PK_DROP;
+    case T_ROCK: case T_GROUND: return PK_ROCK;
+    case T_GHOST: case T_DARK: case T_POISON: case T_PSYCHIC: case T_FAIRY: return PK_ORB;
+    default: return PK_SPARK;
+    }
+}
 struct Banner { std::string text; int type = 0; float t = 0, life = 0; };
 // What a side does this step: where it goes (a length up to 1), and the buttons pressed now.
 struct Input { float mx = 0, my = 0; bool press[SLOTS] = {}; };
@@ -168,6 +189,7 @@ public:
     std::vector<FloatText> texts;
     std::vector<Particle> parts;
     std::vector<Impact> impacts;
+    std::vector<Zone> zones;
     Banner banner;
     Phase phase = INTRO;
     float phaseT = 0, time = 0, shake = 0;
@@ -213,7 +235,7 @@ public:
         if (banner.life > 0) banner.t += dt;
         for (auto& t : texts) t.t += dt;
         texts.erase(std::remove_if(texts.begin(), texts.end(), [](const FloatText& t) { return t.t >= t.life; }), texts.end());
-        for (auto& p : parts) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92f; p.vy *= 0.92f; }
+        for (auto& p : parts) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; const float drag = p.kind == PK_SMOKE ? 0.95f : p.kind == PK_FLAME ? 0.985f : 0.92f; p.vx *= drag; p.vy = p.vy * drag + p.g * dt; p.rot += dt * 6; }
         parts.erase(std::remove_if(parts.begin(), parts.end(), [](const Particle& p) { return p.t >= p.life; }), parts.end());
         for (auto& m : impacts) m.t += dt;
         impacts.erase(std::remove_if(impacts.begin(), impacts.end(), [](const Impact& m) { return m.t >= 0.35f; }), impacts.end());
@@ -277,14 +299,36 @@ private:
         FloatText t; t.s = s; t.x = x + (R01() - 0.5f) * 30; t.y = y - near * 30; t.col = col; t.size = size; t.life = life;
         texts.push_back(t);
     }
-    void Burst(float x, float y, uint32_t col, int n, float speed, float size = 6, float life = 0.45f)
+    void Burst(float x, float y, uint32_t col, int n, float speed, float size = 6, float life = 0.45f, int kind = PK_SQUARE, float grow = 0, float g = 0)
     {
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < n && parts.size() < 600; i++)
         {
             const float a = R01() * 6.2832f, v = speed * (0.3f + R01());
             Particle p; p.x = x; p.y = y; p.vx = std::cos(a) * v; p.vy = std::sin(a) * v * 0.7f; p.col = col; p.size = size * (0.6f + R01() * 0.8f); p.life = life * (0.6f + R01() * 0.8f);
+            p.kind = kind; p.grow = grow; p.g = g; p.rot = R01() * 6;
             parts.push_back(p);
         }
+    }
+    // A big blast of a type where a ULT lands: its bits flying up and out, flames rising, smoke.
+    void Blast(float x, float y, int type, float scale = 1)
+    {
+        const int k = TypeParticle(type);
+        Burst(x, y, TypeColour(type), (int)(60 * scale), 360 * scale, 18, 0.9f, k, k == PK_FLAME ? 1.8f : 0.4f, k == PK_FLAME ? -340.0f : -60.0f);
+        // (A column: the same bits going straight up from it.)
+        for (int i = 0; i < (int)(24 * scale) && parts.size() < 600; i++)
+        {
+            Particle q; q.x = x + (R01() - 0.5f) * 60; q.y = y; q.vx = (R01() - 0.5f) * 80; q.vy = -(200 + R01() * 380); q.kind = k; q.col = TypeColour(type);
+            q.size = 16 + R01() * 10; q.grow = 1.4f; q.g = -200; q.life = 0.7f + R01() * 0.3f;
+            parts.push_back(q);
+        }
+        Burst(x, y, 0xFFFFFFFFu, (int)(14 * scale), 300 * scale, 10, 0.35f, PK_SPARK);
+        Burst(x, y, 0x90606060u, (int)(10 * scale), 160 * scale, 22, 1.0f, PK_SMOKE, 1.5f, -90);
+    }
+    void Leave(int owner, int type, int move, float x, float y, float r, float life, bool root)
+    {
+        if (zones.size() >= 8) zones.erase(zones.begin());
+        Zone z; z.owner = owner; z.type = type; z.move = move; z.x = x; z.y = y; z.r = r; z.life = life; z.root = root; z.seed = (unsigned)(R01() * 1e6f);
+        zones.push_back(z);
     }
     static float Power(int id)
     {
@@ -337,8 +381,11 @@ private:
         F.x = (s == 0 ? -1.0f : 1.0f) * RX * 0.55f;
         F.y = 0;
         F.face = s == 0 ? 1.0f : -1.0f;
-        F.dashCd = 1;
         MakeKit(F);
+        // (One whose ATQ touches: two dashes, to close in.)
+        F.dashMax = BattleData::Move(F.sk[S_ATQ].move).shape == BattleData::SH_LUNGE ? 2 : 1;
+        F.dashCharges = F.dashMax;
+        F.dashCd = 0;
         f[s] = F;
         Burst(F.x, F.y, 0xFFFFFFFFu, 18, 260, 7, 0.5f);
     }
@@ -359,7 +406,8 @@ private:
         Fighter& F = f[s];
         Fighter& O = f[1 - s];
         for (auto& k : F.sk) k.cd = std::max(0.0f, k.cd - dt * (F.status == PAR ? 0.75f : 1.0f));
-        F.dashCd = std::max(0.0f, F.dashCd - dt);
+        if (F.dashCharges < F.dashMax && (F.dashCd -= dt) <= 0) { F.dashCharges++; F.dashCd = F.dashCharges < F.dashMax ? 3.5f : 0.0f; }
+        F.rootT = std::max(0.0f, F.rootT - dt);
         F.busy = std::max(0.0f, F.busy - dt);
         F.flash = std::max(0.0f, F.flash - dt);
         F.castT = std::max(0.0f, F.castT - dt);
@@ -378,6 +426,9 @@ private:
             {
                 F.lungeHit = true;
                 Hit(s, F.lungeMove, F.lungeScale, F.lungeUlt, F.x, F.y);
+                const int lt = BattleData::Move(F.lungeMove).type;
+                if (F.lungeUlt) { Blast(O.x, O.y, lt, 1.2f); Leave(s, lt, F.lungeMove, O.x, O.y, 130, 2.5f, lt == T_GRASS); }
+                else if (lt == T_GRASS) Leave(s, lt, F.lungeMove, O.x, O.y, 80, 1.6f, true);
                 F.lungeT = std::min(F.lungeT, 0.05f);
             }
             if (F.lungeT <= 0 && !F.lungeHit && F.lungeUlt) Say(F.x, F.y - 70, "Errou", 0xFFDDDDDDu);
@@ -397,7 +448,7 @@ private:
         const float len = std::sqrt(mx * mx + my * my);
         if (len > 1) { mx /= len; my /= len; }
         if (F.confT > 0) { mx = -mx; my = -my; }
-        F.moving = len > 0.15f && F.busy <= 0.12f;
+        F.moving = len > 0.15f && F.busy <= 0.12f && F.rootT <= 0;
         if (F.moving)
         {
             const float v = Speed(F);
@@ -414,13 +465,14 @@ private:
         }
         // Its buttons.
         if (in.press[S_EVO]) MegaEvolve(s);
-        if (in.press[S_DASH] && F.dashCd <= 0)
+        if (in.press[S_DASH] && F.dashCharges > 0 && F.rootT <= 0)
         {
             float dx = mx, dy = my;
             if (std::sqrt(dx * dx + dy * dy) < 0.2f) { dx = F.x - O.x; dy = F.y - O.y; const float l = std::max(1.0f, std::sqrt(dx * dx + dy * dy)); dx /= l; dy /= l; }
             else { const float l = std::sqrt(dx * dx + dy * dy); dx /= l; dy /= l; }
             const float v = 1500;
-            F.dashX = dx * v; F.dashY = dy * v; F.dashT = 0.2f; F.dashCd = 3.5f;
+            F.dashX = dx * v; F.dashY = dy * v; F.dashT = 0.2f;
+            if (F.dashCharges-- == F.dashMax) F.dashCd = 3.5f;
             return;
         }
         if (F.busy > 0) return;
@@ -492,7 +544,7 @@ private:
         {
             // (A beam: a ULT's across the field after its warning; a jet, short and quick.)
             Beam b; b.owner = s; b.move = sk.move; b.type = mi.type; b.x0 = F.x; b.y0 = F.y; b.dx = dx; b.dy = dy; b.scale = scale; b.ult = ult;
-            if (!ult) { b.windup = 0.12f; b.dur = 0.3f; b.len = 720; b.width = k == S_ATQ ? 44.0f : 62.0f; }
+            if (!ult) { b.windup = 0.08f; b.dur = k == S_ATQ ? 0.3f : 0.5f; b.len = 680; b.width = k == S_ATQ ? 44.0f : 62.0f; }
             beams.push_back(b);
             F.busy = b.windup + b.dur + rest;
             return true;
@@ -591,7 +643,7 @@ private:
         if (In(id, { 261 })) { if (!Inflict(o, BRN)) Say(O.x, O.y - 60, "N\xC3\xA3o afetou", 0xFFDDDDDDu); return; }
         if (In(id, { 79, 95, 47, 147, 142, 281, 320, 464 })) { if (!Inflict(o, SLP)) Say(O.x, O.y - 60, "N\xC3\xA3o afetou", 0xFFDDDDDDu); return; }
         if (In(id, { 109, 48, 207, 186, 298 })) { O.confT = 3; Say(O.x, O.y - 60, "Confuso!", 0xFFFFA0E0u); return; }
-        if (In(id, { 73 })) { if (O.spec.types[0] == T_GRASS || O.spec.types[1] == T_GRASS) Say(O.x, O.y - 60, "N\xC3\xA3o afetou", 0xFFDDDDDDu); else { O.seedT = 8; Say(O.x, O.y - 60, "Semente!", 0xFF7CFC7Cu); } return; }
+        if (In(id, { 73 })) { if (O.spec.types[0] == T_GRASS || O.spec.types[1] == T_GRASS) Say(O.x, O.y - 60, "N\xC3\xA3o afetou", 0xFFDDDDDDu); else { O.seedT = 8; Say(O.x, O.y - 60, "Semente!", 0xFF7CFC7Cu); Leave(s, T_GRASS, id, O.x, O.y, 130, 2.5f, true); } return; }
         // (Any other: a short boost, so no button is ever dead.)
         Stage(s, (int)(R01() * 2) ? ST_DEF : ST_SPD, 1);
     }
@@ -629,6 +681,14 @@ private:
         float dmg = (22.0f * Power(move) * atk / std::max(1.0f, def)) / 50.0f + 2;
         dmg *= (Stab(A.spec, mi.type) ? 1.5f : 1.0f) * eff * (0.85f + 0.15f * R01()) * (crit ? 1.5f : 1.0f) * scale;
         if (s == 1) dmg *= difficulty == 0 ? 0.75f : difficulty == 2 ? 1.1f : 1.0f;
+        // (Up close pays: a move that touches does a quarter more; a shot from far off, up to a
+        // quarter less.)
+        if (mi.shape == BattleData::SH_LUNGE) dmg *= 1.25f;
+        else if (mi.shape != BattleData::SH_RING && !M::Ground(move))
+        {
+            const float far = Dist(A, D);
+            if (far > 450) dmg *= 1 - 0.25f * std::min(1.0f, (far - 450) / 450);
+        }
         // (A ULT takes at most 60% of a full bar: never one that wipes a team alone.)
         if (ult) dmg = std::min(dmg, D.maxHp * 0.6f);
         const int n = std::max(1, (int)std::lround(dmg));
@@ -644,7 +704,7 @@ private:
         Clamp(D);
         const uint32_t tc = TypeColour(mi.type);
         { Impact im; im.x = D.x; im.y = D.y; im.type = mi.type; im.big = ult || scale > 0.5f; im.phys = phys; impacts.push_back(im); }
-        Burst(D.x, D.y, tc, ult ? 30 : scale > 0.5f ? 16 : 8, ult ? 380.0f : 220.0f, ult ? 10.0f : 6.0f);
+        Burst(D.x, D.y, tc, ult ? 30 : scale > 0.5f ? 14 : 6, ult ? 380.0f : 220.0f, ult ? 12.0f : 8.0f, 0.45f, TypeParticle(mi.type), TypeParticle(mi.type) == PK_FLAME ? 1.0f : 0.0f, TypeParticle(mi.type) == PK_FLAME ? -200.0f : 0.0f);
         Say(D.x, D.y - 50, std::to_string(n), eff > 1 ? 0xFFFFD040u : eff < 1 ? 0xFFC8C8C8u : 0xFFFFFFFFu, ult ? 1.5f : scale > 0.5f ? 1.15f : 0.9f, 0.9f);
         if (eff > 1) Say(D.x, D.y - 80, "Super eficaz!", 0xFFFFD040u, 0.85f);
         else if (eff < 1) Say(D.x, D.y - 80, "Pouco eficaz", 0xFFC8C8C8u, 0.8f);
@@ -673,7 +733,7 @@ private:
         for (Proj& p : projs)
         {
             p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
-            if (R01() < 0.7f) { Particle q; q.x = p.x; q.y = p.y; q.size = p.r * 0.5f; q.col = TypeColour(p.type); q.life = 0.25f; parts.push_back(q); }
+            if (R01() < 0.8f && parts.size() < 600) { Particle q; q.x = p.x + (R01() - 0.5f) * p.r; q.y = p.y + (R01() - 0.5f) * p.r; q.size = p.r * 0.55f; q.col = TypeColour(p.type); q.life = 0.3f; q.kind = TypeParticle(p.type); q.grow = q.kind == PK_FLAME ? 0.8f : -0.5f; q.g = q.kind == PK_FLAME ? -120.0f : 0.0f; q.vx = -p.vx * 0.08f; q.vy = -p.vy * 0.08f; parts.push_back(q); }
             Fighter& D = f[1 - p.owner];
             if (p.life > 0 && phase == FIGHT && !D.fainted && D.dashT <= 0)
             {
@@ -686,16 +746,45 @@ private:
         for (Beam& b : beams)
         {
             b.t += dt;
+            Fighter& A = f[b.owner];
+            Fighter& D = f[1 - b.owner];
+            if (!b.ult && b.t >= b.windup)
+            {
+                // A JET: a cone of its type's bits from the user, several hits as it lasts.
+                b.x0 = A.x; b.y0 = A.y;
+                const int k = TypeParticle(b.type);
+                for (int i = 0; i < 7 && parts.size() < 600; i++)
+                {
+                    const float a = (R01() - 0.5f) * 0.32f, ca = std::cos(a), sa = std::sin(a);
+                    const float vx = b.dx * ca - b.dy * sa, vy = b.dy * ca + b.dx * sa, v = 1400 + R01() * 500;
+                    Particle q; q.x = A.x + b.dx * 30; q.y = A.y + b.dy * 30; q.vx = vx * v; q.vy = vy * v; q.kind = k; q.col = TypeColour(b.type);
+                    q.size = 13 + R01() * 8; q.grow = k == PK_FLAME ? 2.6f : 0.8f; q.g = k == PK_FLAME ? -160.0f : 0.0f; q.life = 0.5f + R01() * 0.15f;
+                    parts.push_back(q);
+                }
+                b.tick -= dt;
+                if (b.tick <= 0 && phase == FIGHT)
+                {
+                    b.tick = 0.12f;
+                    const float px = D.x - A.x, py = D.y - A.y;
+                    const float along = px * b.dx + py * b.dy, across = std::fabs(px * -b.dy + py * b.dx);
+                    if (along > 0 && along < b.len && across < 34 + along * 0.14f) Hit(b.owner, b.move, b.scale * 0.32f, false, D.x - b.dx * 40, D.y - b.dy * 40);
+                }
+                continue;
+            }
             if (!b.hit && b.t >= b.windup && phase == FIGHT)
             {
                 b.hit = true;
-                Fighter& D = f[1 - b.owner];
                 // (Along the line, within its width.)
                 const float px = D.x - b.x0, py = D.y - b.y0;
                 const float along = px * b.dx + py * b.dy, across = std::fabs(px * -b.dy + py * b.dx);
-                if (along > 0 && along < b.len && across < b.width * 0.5f + 30) Hit(b.owner, b.move, b.scale, b.ult, D.x - b.dx * 50, D.y - b.dy * 50);
+                const bool on = along > 0 && along < b.len && across < b.width * 0.5f + 30;
+                if (on) Hit(b.owner, b.move, b.scale, true, D.x - b.dx * 50, D.y - b.dy * 50);
                 else Say(D.x, D.y - 60, "Errou", 0xFFDDDDDDu);
-                if (b.ult) shake = std::max(shake, 0.6f);
+                // (The ULT's blast where it lands, and the ground it leaves.)
+                const float ex = on ? D.x : b.x0 + b.dx * std::min(b.len, 600.0f), ey = on ? D.y : b.y0 + b.dy * std::min(b.len, 600.0f);
+                Blast(ex, ey, b.type, 1.4f);
+                Leave(b.owner, b.type, b.move, ex, ey, 150, 2.5f, b.type == T_GRASS || b.type == T_BUG);
+                shake = std::max(shake, 0.8f);
             }
         }
         beams.erase(std::remove_if(beams.begin(), beams.end(), [](const Beam& b) { return b.t >= b.windup + b.dur; }), beams.end());
@@ -709,9 +798,35 @@ private:
                 const float dx = D.x - r.x, dy = (D.y - r.y) * 1.6f;
                 if (dx * dx + dy * dy < r.rmax * r.rmax) Hit(r.owner, r.move, r.scale, r.scale > 1, r.x, r.y);
                 else Say(D.x, D.y - 60, "Errou", 0xFFDDDDDDu);
+                Burst(r.x, r.y, TypeColour(r.type), 24, r.rmax * 1.6f, 12, 0.5f, TypeParticle(r.type), 0.5f);
+                if (r.scale > 1) { Blast(r.x, r.y, r.type, 1.2f); Leave(r.owner, r.type, r.move, r.x, r.y, r.rmax * 0.6f, 2.5f, r.type == T_GRASS); }
             }
         }
         rings.erase(std::remove_if(rings.begin(), rings.end(), [](const Ring& r) { return r.t >= r.dur; }), rings.end());
+        for (Zone& z : zones)
+        {
+            z.t += dt;
+            // (Its look: flames, leaves or bits rising from it now and then.)
+            if (R01() < dt * 30 && parts.size() < 600)
+            {
+                const float a = R01() * 6.2832f, rr = std::sqrt(R01()) * z.r;
+                Particle q; q.x = z.x + std::cos(a) * rr; q.y = z.y + std::sin(a) * rr * 0.6f; q.kind = TypeParticle(z.type); q.col = TypeColour(z.type);
+                q.size = 10 + R01() * 8; q.grow = q.kind == PK_FLAME ? 1.4f : 0.2f; q.g = -180; q.vy = -60; q.life = 0.6f;
+                parts.push_back(q);
+            }
+            Fighter& D = f[1 - z.owner];
+            z.tick -= dt;
+            if (z.tick > 0 || phase != FIGHT || D.fainted) continue;
+            z.tick = 0.4f;
+            const float dx = (D.x - z.x) / z.r, dy = (D.y - z.y) / (z.r * 0.6f);
+            if (dx * dx + dy * dy > 1) continue;
+            const int n = std::max(1, D.maxHp / 45);
+            Hurt(1 - z.owner, n);
+            dealt[z.owner] += n;
+            Say(D.x, D.y - 40, std::to_string(n), TypeColour(z.type), 0.7f, 0.6f);
+            if (z.root && D.rootT <= 0) { D.rootT = 0.8f; Say(D.x, D.y - 70, "Preso!", 0xFF7CFC7Cu, 0.9f); }
+        }
+        zones.erase(std::remove_if(zones.begin(), zones.end(), [](const Zone& z) { return z.t >= z.life; }), zones.end());
     }
     void Tick(int s, float dt)
     {
@@ -764,7 +879,7 @@ inline Input Battle::BotThink(int s, float dt)
     const float dx = O.x - F.x, dy = O.y - F.y;
     const float d = std::max(1.0f, std::sqrt(dx * dx + dy * dy));
     // (Something coming: the dash, sometimes.)
-    if (F.dashCd <= 0)
+    if (F.dashCharges > 0)
     {
         bool danger = false;
         for (const Proj& p : projs)

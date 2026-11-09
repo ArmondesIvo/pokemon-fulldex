@@ -1136,6 +1136,82 @@ inline void Shot(Canvas& c, int type, float x, float y, float r, float t, float 
         break;
     }
 }
+// A particle, by its kind (battle_engine.h's PK_...), at (x, y) on the screen.
+inline void Part(Canvas& c, const Arena::Particle& p, float x, float y, float k, float px)
+{
+    const float f = std::min(1.0f, p.t / std::max(0.01f, p.life));
+    const float sz = std::max(1.0f, p.size * k * (1 + p.grow * f));
+    switch (p.kind)
+    {
+    case Arena::PK_FLAME:
+    {
+        // (Hot to cold: white, yellow, orange, red, then smoke; it swells, then shrinks and fades,
+        // a tongue of flame with its tip up.)
+        const float swell = 1 + p.grow * std::min(f, 0.35f) / 0.35f, shrink = f > 0.55f ? 1 - (f - 0.55f) / 0.45f * 0.75f : 1.0f;
+        const float z = std::max(1.0f, p.size * k * swell * shrink);
+        uint32_t col = f < 0.12f ? 0xFFFFFFF0u : f < 0.3f ? 0xFFFFF07Au : f < 0.5f ? 0xFFFFA234u : f < 0.68f ? 0xFFF05A1Eu : 0xFF5A4842u;
+        if (p.col != Arena::TypeColour(Arena::T_FIRE)) col = BGfx::Mix(col, p.col, 0.55f); // (a dragon's: purple flames)
+        const float a = f < 0.68f ? 1.0f : (1 - f) / 0.32f * 0.55f;
+        const float flick = std::sin(p.rot * 3) * z * 0.08f;
+        Blob(c, x, y, z * 0.5f, BGfx::Alpha(col, a), px);
+        Blob(c, x + flick, y - z * 0.42f, z * 0.3f, BGfx::Alpha(col, a), px);
+        if (f < 0.5f) Blob(c, x, y - z * 0.05f, z * 0.24f, BGfx::Alpha(0xFFFFF8D0u, 1 - f * 1.6f), px);
+        break;
+    }
+    case Arena::PK_SMOKE: Blob(c, x, y, sz * 0.5f, BGfx::Alpha(p.col, (1 - f) * 0.8f), px); break;
+    case Arena::PK_LEAF: Leaf(c, x, y, sz * 0.6f, p.rot, BGfx::Alpha(p.col, f > 0.8f ? (1 - f) * 5 : 1.0f), px); break;
+    case Arena::PK_SPARK:
+        Star(c, x, y, sz * 0.6f * (1 - f * 0.5f), p.rot, BGfx::Alpha(BGfx::Mix(p.col, 0xFFFFFFFFu, 0.5f), 1 - f));
+        break;
+    case Arena::PK_DROP:
+        Blob(c, x, y, sz * 0.45f, BGfx::Alpha(BGfx::Mix(p.col, 0xFF2858C8u, 0.3f), 1 - f * 0.7f), px);
+        Blob(c, x - sz * 0.12f, y - sz * 0.15f, sz * 0.14f, BGfx::Alpha(0xFFFFFFFFu, 1 - f), px);
+        break;
+    case Arena::PK_ROCK:
+        Blob(c, x, y, sz * 0.45f, BGfx::Alpha(BGfx::Mix(p.col, 0xFF3A2C1Cu, 0.4f), 1 - f * 0.5f), px);
+        Blob(c, x - sz * 0.1f, y - sz * 0.1f, sz * 0.22f, BGfx::Alpha(p.col, 1 - f * 0.5f), px);
+        break;
+    case Arena::PK_ORB:
+        Blob(c, x, y, sz * 0.7f, BGfx::Alpha(p.col, 0.3f * (1 - f)), px);
+        Blob(c, x, y, sz * 0.4f, BGfx::Alpha(p.col, 1 - f), px);
+        Blob(c, x, y, sz * 0.15f, BGfx::Alpha(0xFFFFFFFFu, 1 - f), px);
+        break;
+    default:
+        BGfx::Rect(c, (int)(x - sz / 2), (int)(y - sz / 2), std::max(1, (int)sz), std::max(1, (int)sz), BGfx::Alpha(p.col, 1 - f));
+        break;
+    }
+}
+// A patch of ground: scorched, frozen..., and for Grass and Bug thorny vines coming up from it.
+inline void ZoneDraw(Canvas& c, const Arena::Zone& z, float x, float y, float k, float px)
+{
+    const float in = std::min(1.0f, z.t * 5), out = std::min(1.0f, (z.life - z.t) * 3), a = in * out;
+    const uint32_t tc = Arena::TypeColour(z.type);
+    const float rx = z.r * k, ry = z.r * k * 0.6f;
+    BGfx::Ellipse(c, x, y, rx, ry, BGfx::Alpha(BGfx::Mix(tc, 0xFF201810u, z.type == Arena::T_FIRE ? 0.55f : 0.3f), 0.45f * a));
+    BGfx::Ring(c, x, y, rx, ry, std::max(2.0f, 3 * k), BGfx::Alpha(tc, 0.7f * a));
+    if (z.type == Arena::T_GRASS || z.type == Arena::T_BUG)
+    {
+        // (Vines: curling up from the ground, thorns on them.)
+        unsigned s = z.seed;
+        for (int i = 0; i < 10; i++)
+        {
+            s = s * 1103515245u + 12345u;
+            const float ang = (s % 628) / 100.0f, d = ((s >> 10) % 100) / 100.0f * 0.8f;
+            float vx = x + std::cos(ang) * rx * d, vy = y + std::sin(ang) * ry * d;
+            const float hgt = (60 + (s >> 20) % 45) * k * in;
+            float lx = vx, ly = vy;
+            for (int j = 1; j <= 6; j++)
+            {
+                const float t = j / 6.0f, sw = std::sin(t * 4 + i + z.t * 3) * 8 * k;
+                const float nx = vx + sw, ny = vy - hgt * t;
+                BGfx::Seg(c, lx, ly, nx, ny, std::max(3.0f, 9 * k * (1.3f - t)), BGfx::Alpha(0xFF1E5A1Eu, a));
+                BGfx::Seg(c, lx, ly, nx, ny, std::max(2.0f, 5 * k * (1.3f - t)), BGfx::Alpha(0xFF3E9A32u, a));
+                if (j % 2 == 0) { Blob(c, nx + 6 * k, ny, std::max(px, 5 * k), BGfx::Alpha(0xFF7CD050u, a), px); Blob(c, nx - 5 * k, ny + 3 * k, std::max(px * 0.7f, 2.5f * k), BGfx::Alpha(0xFFC04040u, a), px); }
+                lx = nx; ly = ny;
+            }
+        }
+    }
+}
 // A wave (sound, wind): wide arcs of its type's colour, facing the way it goes.
 inline void Wave(Canvas& c, int type, float x, float y, float r, float dx, float dy, float t, float px)
 {
@@ -1323,7 +1399,7 @@ inline void BattleButton(Canvas& c, float u, int k, float x, float y, float r)
     const bool none = k < 4 && !move;
     const BattleData::MoveInfo& mi = BattleData::Move(move);
     float wait = 0, frac = 0;
-    if (k == Arena::S_DASH) { wait = F.dashCd; frac = F.dashCd / 3.5f; }
+    if (k == Arena::S_DASH) { wait = F.dashCharges > 0 ? 0 : F.dashCd; frac = F.dashCharges > 0 ? 0 : F.dashCd / 3.5f; }
     else if (k == Arena::S_ULT) { frac = 1 - F.ult / 100; }
     else if (k < 4) { wait = F.sk[k].cd; frac = F.sk[k].cdMax > 0 ? F.sk[k].cd / F.sk[k].cdMax : 0; }
     const bool ready = !none && (k == Arena::S_ULT ? F.ult >= 100 : wait <= 0);
@@ -1352,6 +1428,11 @@ inline void BattleButton(Canvas& c, float u, int k, float x, float y, float r)
     else if (k == Arena::S_ULT && !ready) BGfx::Text(c, x, y, std::to_string((int)F.ult) + "%", 10 * u, 0xFFFFFFFFu);
     else BGfx::Text(c, x, y, label, fs, none ? 0xFF909090u : 0xFFFFFFFFu);
     // (The move's name under it.)
+    if (k == Arena::S_DASH && F.dashMax > 1)
+    {
+        // (Two dashes: how many are ready, as dots under it.)
+        for (int i = 0; i < F.dashMax; i++) BGfx::Disc(c, x - 6 * u + i * 12 * u, y + r + 7 * u, 4 * u, i < F.dashCharges ? 0xFFFFFFFFu : 0x60FFFFFFu);
+    }
     if (k < 4 && move)
     {
         std::string n = mi.name;
@@ -1407,6 +1488,7 @@ inline void DrawBattle(Canvas& c, float u)
         BGfx::Ring(c, SX(r.x), SY(r.y), rr, rr / 1.6f, 10 * k, BGfx::Alpha(Arena::TypeColour(r.type), 1 - t * 0.7f));
         BGfx::Ellipse(c, SX(r.x), SY(r.y), rr, rr / 1.6f, BGfx::Alpha(Arena::TypeColour(r.type), 0.25f * (1 - t)));
     }
+    for (const Arena::Zone& z : b.zones) BFx::ZoneDraw(c, z, SX(z.x), SY(z.y), k, std::max(2.0f, 3.4f * k));
     int order[2] = { 0, 1 };
     if (b.f[1].y < b.f[0].y) std::swap(order[0], order[1]);
     const float monH = 215 * k;
@@ -1458,14 +1540,21 @@ inline void DrawBattle(Canvas& c, float u)
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, bm.width * k, BGfx::Alpha(tc, a * 0.35f));
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, 3 * k, BGfx::Alpha(0xFFFFFFFFu, a));
             BGfx::Disc(c, x0, y0 - 30 * k, (20 + 30 * bm.t / bm.windup) * k, BGfx::Alpha(tc, 0.7f));
+            // (Charging: sparks drawn in to it.)
+            for (int i = 0; i < 10; i++)
+            {
+                const float ang = i * 0.628f + bm.t * 5, rr = (1 - std::fmod(bm.t * 2.5f + i * 0.1f, 1.0f)) * 110 * k;
+                BFx::Star(c, x0 + std::cos(ang) * rr, y0 - 30 * k + std::sin(ang) * rr * 0.7f, 7 * k, bm.t * 9 + i, BGfx::Alpha(BGfx::Mix(tc, 0xFFFFFFFFu, 0.5f), 0.9f));
+            }
         }
         else
         {
             const float t = (bm.t - bm.windup) / bm.dur, w = bm.width * k * (1 - t * 0.6f);
-            if (bm.type == Arena::T_ELECTRIC && !bm.ult)
+            if (!bm.ult)
             {
-                // (Electric: lightning, three bolts that flicker.)
-                for (int i = 0; i < 3; i++) BFx::Bolt(c, x0, y0 - 30 * k, x1, y1 - 30 * k, std::max(2.0f, w * 0.14f), bm.t * 23 + i * 3.1f, tc, 0.035f);
+                // (A jet is its particles; Electric's lightning too, three bolts that flicker.)
+                if (bm.type == Arena::T_ELECTRIC)
+                    for (int i = 0; i < 3; i++) BFx::Bolt(c, x0, y0 - 30 * k, x1, y1 - 30 * k, std::max(2.0f, w * 0.14f), bm.t * 23 + i * 3.1f, tc, 0.035f);
                 continue;
             }
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, w * 1.3f, BGfx::Alpha(tc, 0.5f));
@@ -1479,8 +1568,7 @@ inline void DrawBattle(Canvas& c, float u)
             }
         }
     }
-    for (const Arena::Particle& p : b.parts)
-        BGfx::Rect(c, (int)(SX(p.x) - p.size * k / 2), (int)(SY(p.y) - 40 * k - p.size * k / 2), std::max(1, (int)(p.size * k)), std::max(1, (int)(p.size * k)), BGfx::Alpha(p.col, 1 - p.t / p.life));
+    for (const Arena::Particle& p : b.parts) BFx::Part(c, p, SX(p.x), SY(p.y) - 40 * k, k, std::max(2.0f, 3.4f * k));
     const float fxPx = std::max(2.0f, 3.4f * k); // (the moves' blocks as big as the sprites' pixels)
     for (const Arena::Proj& p : b.projs)
     {
