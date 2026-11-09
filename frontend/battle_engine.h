@@ -64,6 +64,8 @@ struct MonSpec
     int types[2] = { 0, -1 };
     int stats[6] = { 100, 50, 50, 50, 50, 50 };
     int moves[4] = {};
+    int level = 50;
+    int hp = -1;                       // the HP it starts with (-1 all: the Elite Four's keep theirs)
 };
 enum { S_ATQ, S_HAB, S_Q, S_ULT, S_DASH, SLOTS };
 inline const char* SlotLabel(int s) { static const char* n[SLOTS] = { "Atq", "Hab", "Q", "ULT", "Disparada" }; return s >= 0 && s < SLOTS ? n[s] : ""; }
@@ -120,13 +122,13 @@ inline bool Heal(int id) { return In(id, { 105, 135, 208, 303, 355, 235, 236, 23
 // nature) from its base stats, and four moves chosen for it (the real moves it could learn are not
 // built in): a weak, a middling and a strong one of its own types, physical or special as its
 // Attack or Special Attack is higher, and a boost or a status move.
-inline MonSpec BotMon(int species, const int base[6], const int types[2], const std::string& name, std::mt19937& rng)
+inline MonSpec BotMon(int species, const int base[6], const int types[2], const std::string& name, std::mt19937& rng, int level = 50)
 {
     MonSpec m;
-    m.species = species; m.name = name;
+    m.species = species; m.name = name; m.level = level;
     m.shiny = rng() % 64 == 0;
     m.types[0] = types[0]; m.types[1] = types[1];
-    for (int i = 0; i < 6; i++) m.stats[i] = (2 * base[i] + 31 + 21) / 2 + (i == 0 ? 60 : 5);
+    for (int i = 0; i < 6; i++) m.stats[i] = (2 * base[i] + 31 + 21) * level / 100 + (i == 0 ? level + 10 : 5);
     // (Per type: physical weak, middling, strong; then special the same.)
     static const int moves[18][6] = {
         { 98, 34, 38, 129, 304, 63 },     { 183, 280, 370, 410, 396, 411 }, { 17, 332, 413, 16, 403, 542 },
@@ -185,6 +187,15 @@ public:
         return n;
     }
     float R01() { return std::uniform_real_distribution<float>(0, 1)(rng); }
+    // The HP each of a side's team has now: those before the one fighting fainted, those after it
+    // untouched.
+    int HpAfter(int side, int i) const
+    {
+        if (i < cur[side]) return 0;
+        if (i == cur[side]) return f[side].fainted ? 0 : f[side].hp;
+        const MonSpec& m = team[side][i];
+        return m.hp >= 0 ? m.hp : m.stats[0];
+    }
 
     // A step of dt seconds (the page calls it at 60 a second).
     void Step(float dt, Input in0)
@@ -314,7 +325,8 @@ private:
         cur[s] = index;
         Fighter F;
         F.spec = team[s][index];
-        F.maxHp = F.hp = std::max(1, F.spec.stats[0]);
+        F.maxHp = std::max(1, F.spec.stats[0]);
+        F.hp = F.spec.hp >= 0 ? std::max(1, std::min(F.maxHp, F.spec.hp)) : F.maxHp;
         F.x = (s == 0 ? -1.0f : 1.0f) * RX * 0.55f;
         F.y = 0;
         F.face = s == 0 ? 1.0f : -1.0f;

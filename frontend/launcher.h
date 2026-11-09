@@ -36,6 +36,7 @@
 #include "ui.h"
 #include "optional_features.h"
 #include "battle_engine.h" // (the arena's fight: outside namespace Launcher, as it has std headers)
+#include "battle_trainers.h" // (the arena's gym leaders, Elite Four and shop)
 #include "cloud_saves.h"
 #include "net_http.h"
 #include <fstream>
