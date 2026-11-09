@@ -100,8 +100,8 @@ struct Fighter
     bool fainted = false, mega = false;
     float boomT = 0;                         // Self-Destruct, Explosion: when it faints
 };
-struct Proj { int owner = 0, move = 0, type = 0; float x = 0, y = 0, vx = 0, vy = 0, life = 0, r = 16, scale = 1; bool ult = false; };
-struct Beam { int owner = 0, move = 0, type = 0; float x0 = 0, y0 = 0, dx = 1, dy = 0, len = 1500, width = 90, t = 0, windup = 0.5f, dur = 0.3f, scale = 1; bool hit = false; };
+struct Proj { int owner = 0, move = 0, type = 0; float x = 0, y = 0, vx = 0, vy = 0, life = 0, r = 16, scale = 1; bool ult = false, wave = false; };
+struct Beam { int owner = 0, move = 0, type = 0; float x0 = 0, y0 = 0, dx = 1, dy = 0, len = 1500, width = 90, t = 0, windup = 0.5f, dur = 0.3f, scale = 1; bool hit = false, ult = true; };
 struct Ring { int owner = 0, move = 0, type = 0; float x = 0, y = 0, rmax = 240, t = 0, dur = 0.35f, scale = 1; bool hit = false; };
 struct FloatText { std::string s; float x = 0, y = 0, t = 0, life = 1.1f; uint32_t col = 0xFFFFFFFFu; float size = 1; };
 // (A hit's flash where it landed, drawn in its type's way.)
@@ -320,7 +320,7 @@ public:
             const auto& i = BattleData::Move(k.move);
             if (s == S_ATQ) k.cdMax = 0.5f + (Power(k.move) >= 80 ? 0.25f : 0);
             else if (s == S_ULT) k.cdMax = 0;
-            else if (i.cat == 2) k.cdMax = M::Heal(k.move) ? 12.0f : 8.0f;
+            else if (i.cat == 2) k.cdMax = k.move == 156 ? 25.0f : M::Heal(k.move) ? 15.0f : 8.0f; // (Rest a long wait; healing ones a while)
             else k.cdMax = 2.4f + Power(k.move) / 40.0f;
             if (s != S_ULT && M::Priority(k.move)) k.cdMax *= 0.6f;
             k.cd = s == S_ATQ ? 0 : k.cdMax * 0.4f;
@@ -468,14 +468,16 @@ private:
         const float rest = M::Recharge(sk.move) ? 1.0f : 0.0f;
         if (rest > 0) Say(F.x, F.y - 110, "Recarregando...", 0xFFDDDDDDu, 0.75f, 1.2f);
         if (mi.cat == 2) { StatusMove(s, sk.move); F.busy = 0.35f; return true; }
-        if (mi.cat == 0 && M::Ground(sk.move))
+        // (Its shape, as Showdown describes the move: battle_moves.h.)
+        const int shape = M::Ground(sk.move) ? BattleData::SH_RING : mi.shape;
+        if (shape == BattleData::SH_RING)
         {
             Ring r; r.owner = s; r.move = sk.move; r.type = mi.type; r.x = F.x; r.y = F.y; r.rmax = ult ? 420.0f : 240.0f; r.scale = scale;
             rings.push_back(r);
             F.busy = 0.35f + rest; shake = std::max(shake, ult ? 1.0f : 0.5f);
             return true;
         }
-        if (mi.cat == 0)
+        if (shape == BattleData::SH_LUNGE)
         {
             // (A lunge: as far as the other, or its reach.)
             const float reach = ult ? 480.0f : k == S_ATQ ? 200.0f : 280.0f;
@@ -486,17 +488,32 @@ private:
             F.busy = dur + (k == S_ATQ ? 0.12f : 0.25f) + rest;
             return true;
         }
-        if (ult)
+        if (ult || shape == BattleData::SH_JET)
         {
-            Beam b; b.owner = s; b.move = sk.move; b.type = mi.type; b.x0 = F.x; b.y0 = F.y; b.dx = dx; b.dy = dy; b.scale = scale;
+            // (A beam: a ULT's across the field after its warning; a jet, short and quick.)
+            Beam b; b.owner = s; b.move = sk.move; b.type = mi.type; b.x0 = F.x; b.y0 = F.y; b.dx = dx; b.dy = dy; b.scale = scale; b.ult = ult;
+            if (!ult) { b.windup = 0.12f; b.dur = 0.3f; b.len = 720; b.width = k == S_ATQ ? 44.0f : 62.0f; }
             beams.push_back(b);
             F.busy = b.windup + b.dur + rest;
             return true;
         }
-        Proj p; p.owner = s; p.move = sk.move; p.type = mi.type; p.x = F.x + dx * 30; p.y = F.y + dy * 30;
-        const float v = k == S_ATQ ? 900.0f : 760.0f;
-        p.vx = dx * v; p.vy = dy * v; p.life = 1300.0f / v; p.r = k == S_ATQ ? 16.0f : 28.0f; p.scale = scale;
-        projs.push_back(p);
+        const float v = shape == BattleData::SH_WAVE ? 620.0f : k == S_ATQ ? 900.0f : 760.0f;
+        auto shot = [&](float ax, float ay, float sc, float r, bool wave) {
+            Proj p; p.owner = s; p.move = sk.move; p.type = mi.type; p.x = F.x + ax * 30; p.y = F.y + ay * 30;
+            p.vx = ax * v; p.vy = ay * v; p.life = (wave ? 680.0f : 1300.0f) / v; p.r = r; p.scale = sc; p.wave = wave;
+            projs.push_back(p);
+        };
+        if (shape == BattleData::SH_SPREAD)
+        {
+            // (Several at once, in a fan: the middle one where it aims.)
+            for (int i = -1; i <= 1; i++)
+            {
+                const float a = i * 0.22f, ca = std::cos(a), sa = std::sin(a);
+                shot(dx * ca - dy * sa, dy * ca + dx * sa, scale * 0.55f, k == S_ATQ ? 13.0f : 18.0f, false);
+            }
+        }
+        else if (shape == BattleData::SH_WAVE) shot(dx, dy, scale, 55, true);
+        else shot(dx, dy, scale, k == S_ATQ ? 16.0f : 28.0f, false);
         F.busy = (k == S_ATQ ? 0.22f : 0.35f) + rest;
         return true;
     }
@@ -547,11 +564,12 @@ private:
         if (In(id, { 182, 197, 203, 588, 596 })) { F.protectT = 1.3f; Say(F.x, F.y - 60, "Protegido!", 0xFF90D0FFu); return; }
         if (In(id, { 156 }))
         {
-            F.hp = F.maxHp; F.status = NONE; Inflict(s, SLP, false); F.statusT = 3.0f;
-            Say(F.x, F.y - 60, "Dormiu e curou tudo!", 0xFF7CFC7Cu); Burst(F.x, F.y, 0xFF9CFF9Cu, 16, 140);
+            // (Rest: half its HP back, its status gone, and asleep, open to all, a long while.)
+            F.status = NONE; Heal(s, F.maxHp / 2); Inflict(s, SLP, false); F.statusT = 4.0f;
+            Say(F.x, F.y - 60, "Dormiu!", 0xFFB0B0C8u); Burst(F.x, F.y, 0xFF9CFF9Cu, 16, 140);
             return;
         }
-        if (M::Heal(id)) { Heal(s, F.maxHp / 2); return; }
+        if (M::Heal(id)) { Heal(s, F.maxHp * 2 / 5); return; }
         if (In(id, { 392, 275 })) { F.regenT = 10; Say(F.x, F.y - 60, "Enraizado!", 0xFF7CFC7Cu); return; }
         // (On the other, wherever it is.)
         if (O.protectT > 0) { Say(O.x, O.y - 60, "Protegeu!", 0xFF90D0FFu); return; }
@@ -675,9 +693,9 @@ private:
                 // (Along the line, within its width.)
                 const float px = D.x - b.x0, py = D.y - b.y0;
                 const float along = px * b.dx + py * b.dy, across = std::fabs(px * -b.dy + py * b.dx);
-                if (along > 0 && along < b.len && across < b.width * 0.5f + 30) Hit(b.owner, b.move, b.scale, true, D.x - b.dx * 50, D.y - b.dy * 50);
+                if (along > 0 && along < b.len && across < b.width * 0.5f + 30) Hit(b.owner, b.move, b.scale, b.ult, D.x - b.dx * 50, D.y - b.dy * 50);
                 else Say(D.x, D.y - 60, "Errou", 0xFFDDDDDDu);
-                shake = std::max(shake, 0.6f);
+                if (b.ult) shake = std::max(shake, 0.6f);
             }
         }
         beams.erase(std::remove_if(beams.begin(), beams.end(), [](const Beam& b) { return b.t >= b.windup + b.dur; }), beams.end());
@@ -768,7 +786,7 @@ inline Input Battle::BotThink(int s, float dt)
     if (botTimer[s] > 0) return in;
     botTimer[s] = react * (0.7f + 0.6f * R01());
     const BattleData::MoveInfo& atq = BattleData::Move(F.sk[S_ATQ].move);
-    const bool close = atq.cat == 0;
+    const bool close = atq.shape == BattleData::SH_LUNGE || atq.shape == BattleData::SH_RING;
     const float want = close ? 90.0f : 380.0f;
     if (R01() < 0.15f) botStrafe[s] = -botStrafe[s];
     float mx = 0, my = 0;
@@ -783,7 +801,11 @@ inline Input Battle::BotThink(int s, float dt)
     auto reach = [&](int k) {
         const BattleData::MoveInfo& m = BattleData::Move(F.sk[k].move);
         if (m.cat == 2) return true;
-        if (m.cat == 0) return M::Ground(F.sk[k].move) ? d < (k == S_ULT ? 380.0f : 220.0f) : d < (k == S_ULT ? 470.0f : k == S_ATQ ? 210.0f : 290.0f);
+        const int sh = M::Ground(F.sk[k].move) ? BattleData::SH_RING : m.shape;
+        if (sh == BattleData::SH_RING) return d < (k == S_ULT ? 380.0f : 220.0f);
+        if (sh == BattleData::SH_LUNGE) return d < (k == S_ULT ? 470.0f : k == S_ATQ ? 210.0f : 290.0f);
+        if (k != S_ULT && sh == BattleData::SH_JET) return d < 680.0f;
+        if (sh == BattleData::SH_WAVE) return d < 650.0f;
         return d < 1000.0f;
     };
     // (Healing when low, boosting early, the rest when in reach.)

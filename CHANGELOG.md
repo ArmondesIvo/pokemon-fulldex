@@ -7,7 +7,12 @@
   Pokémon in My PC (boxes, party or Bank) and fight in real time in a stadium, with a stick and five
   buttons made from each one's own moves (the strongest is the ULT, charged by fighting) plus a dash.
   When one faints the next comes in; 99 seconds a pair. Everyone fights at level 50; your saves are
-  never changed. The bot picks 6 of your other Pokémon; Easy, Normal or Hard.
+  never changed. Free battles against a random trainer (or a gym leader or Elite Four member already
+  beaten), the Gyms (two gym trainers and the leader in a row, any gym of an open region) and the
+  Elite Four (five in a row, no healing between), region after region, Kanto to Unova, and Red on
+  Mt. Silver with Johto's eight badges. The famous trainers have their teams and moves from the
+  games. Money, a shop (potions, revives, Mega Stones), items between a run's battles, Mega
+  Evolution, animated sprites (PMD SpriteCollab) and each move drawn by its kind and type.
 - **Online trades.** A bell beside the account figure (a red dot when one waits on you). Choose up to 6
   of yours in My PC and a player; they choose the one they want and put as many of theirs on the
   table; you take one. Either can call it off. Each Pokémon is shown with its origin, level, nature,

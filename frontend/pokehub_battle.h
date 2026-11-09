@@ -1002,14 +1002,16 @@ inline void Leaf(Canvas& c, float cx, float cy, float len, float ang, uint32_t c
     }
     BGfx::Seg(c, cx - ca * len, cy - sa * len, cx + ca * len, cy + sa * len, std::max(1.0f, b * 0.5f), 0xFF2E6B1Eu);
 }
-inline void Bolt(Canvas& c, float x0, float y0, float x1, float y1, float w, float seed, uint32_t col)
+inline void Bolt(Canvas& c, float x0, float y0, float x1, float y1, float w, float seed, uint32_t col, float amp = 0.18f)
 {
     float px = x0, py = y0;
     const float dx = x1 - x0, dy = y1 - y0, l = std::max(1.0f, std::sqrt(dx * dx + dy * dy));
     const float nx = -dy / l, ny = dx / l;
-    for (int i = 1; i <= 6; i++)
+    // (Long ones in more, smaller steps: a jagged line, not a saw.)
+    const int n = std::max(6, std::min(24, (int)(l / (amp < 0.1f ? 30.0f : 1e9f))));
+    for (int i = 1; i <= n; i++)
     {
-        const float t = i / 6.0f, off = i == 6 ? 0 : std::sin(seed * 13.7f + i * 2.3f) * l * 0.18f;
+        const float t = (float)i / n, off = i == n ? 0 : std::sin(seed * 13.7f + i * 2.3f) * l * amp;
         const float qx = x0 + dx * t + nx * off, qy = y0 + dy * t + ny * off;
         BGfx::Seg(c, px, py, qx, qy, w * 1.8f, BGfx::Alpha(col, 0.5f));
         BGfx::Seg(c, px, py, qx, qy, w, 0xFFFFFFE0u);
@@ -1133,6 +1135,24 @@ inline void Shot(Canvas& c, int type, float x, float y, float r, float t, float 
         Star(c, x, y, r * 1.1f, t * 10, 0xFFFFFFFFu);
         break;
     }
+}
+// A wave (sound, wind): wide arcs of its type's colour, facing the way it goes.
+inline void Wave(Canvas& c, int type, float x, float y, float r, float dx, float dy, float t, float px)
+{
+    const float l = std::max(1e-3f, std::sqrt(dx * dx + dy * dy)), ux = dx / l, uy = dy / l;
+    const uint32_t tc = Arena::TypeColour(type);
+    for (int k = 0; k < 3; k++)
+    {
+        const float rr = r * (0.6f + 0.2f * k), back = r * 0.45f * k;
+        const float cx = x - ux * back, cy = y - uy * back;
+        for (float a = -1.0f; a <= 1.0f; a += 0.12f)
+        {
+            const float ca = std::cos(a), sa = std::sin(a);
+            const float qx = cx + (ux * ca - uy * sa) * rr, qy = cy + (uy * ca + ux * sa) * rr;
+            Blob(c, qx, qy, std::max(px, rr * 0.13f * (1.3f - std::fabs(a))), k == 1 ? 0xF0FFFFFFu : BGfx::Alpha(BGfx::Mix(tc, 0xFFFFFFFFu, 0.25f), 0.95f - k * 0.2f), px);
+        }
+    }
+    (void)t;
 }
 // Where a move landed: a flash and the type's own bits flying out; a physical one a slash too.
 inline void Hit(Canvas& c, const Impact& m, float x, float y, float k, float px)
@@ -1442,6 +1462,12 @@ inline void DrawBattle(Canvas& c, float u)
         else
         {
             const float t = (bm.t - bm.windup) / bm.dur, w = bm.width * k * (1 - t * 0.6f);
+            if (bm.type == Arena::T_ELECTRIC && !bm.ult)
+            {
+                // (Electric: lightning, three bolts that flicker.)
+                for (int i = 0; i < 3; i++) BFx::Bolt(c, x0, y0 - 30 * k, x1, y1 - 30 * k, std::max(2.0f, w * 0.14f), bm.t * 23 + i * 3.1f, tc, 0.035f);
+                continue;
+            }
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, w * 1.3f, BGfx::Alpha(tc, 0.5f));
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, w * 0.8f, tc);
             BGfx::Seg(c, x0, y0 - 30 * k, x1, y1 - 30 * k, w * 0.35f, 0xFFFFFFF0u);
@@ -1459,8 +1485,9 @@ inline void DrawBattle(Canvas& c, float u)
     for (const Arena::Proj& p : b.projs)
     {
         const float x = SX(p.x), y = SY(p.y) - 40 * k;
-        BGfx::Disc(c, x, y, p.r * k * 2.3f, BGfx::Alpha(Arena::TypeColour(p.type), 0.22f));
-        BFx::Shot(c, p.type, x, y, p.r * k * 1.6f, b.time + p.x * 0.001f, p.vx, p.vy, fxPx);
+        if (!p.wave) BGfx::Disc(c, x, y, p.r * k * 2.3f, BGfx::Alpha(Arena::TypeColour(p.type), 0.22f));
+        if (p.wave) BFx::Wave(c, p.type, x, y, p.r * k * 2.4f, p.vx, p.vy, b.time, fxPx);
+        else BFx::Shot(c, p.type, x, y, p.r * k * 1.6f, b.time + p.x * 0.001f, p.vx, p.vy, fxPx);
     }
     for (const Arena::Impact& m : b.impacts) BFx::Hit(c, m, SX(m.x), SY(m.y) - 40 * k, k, fxPx);
     // Words floating up.
