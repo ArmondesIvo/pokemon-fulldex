@@ -5399,12 +5399,27 @@ inline void PcDrawMon(Canvas& c, int species, bool shiny, bool egg, int x, int y
 #endif
     Glass::DrawIcon(c, Glass::I_POKEBALL, x + bw * 0.5f, y + bh * 0.5f, std::min(bw, bh) * 0.25f, Menu::GlassHint);
 }
+// PKVault's colours (its light theme, frontend/src/ui/base-theme.ts): cream cards and slots,
+// brown ink, terracotta for what is chosen; its type, stat and gender colours.
+namespace PcPal {
+constexpr uint32_t Body = 0xFFFAF6F0u, Card = 0xFFF4EAE0u, Slot = 0xFFE4DBD0u, Line = 0xFFCFC4B8u, Btn = 0xFFEDE2D8u,
+    Ink = 0xFF3A1E08u, Hint = 0xFF7B7467u, Primary = 0xFFB6634Eu, PrimaryDark = 0xFF934E3Du, PrimaryPale = 0xFFECDEDAu,
+    OnPrimary = 0xFFFAF6F0u, Shiny = 0xFFEAB000u, Male = 0xFF00C6ADu, Female = 0xFFFF4273u;
+// (HP, Atk, Def, Spe, SpA, SpD: the order of MonDetail's stats.)
+constexpr uint32_t Stat[6] = { 0xFF4CAF70u, 0xFFF08030u, 0xFFE0A820u, 0xFFF85888u, 0xFF6890F0u, 0xFF5FA83Bu };
+}
+inline void PcCard(Canvas& c, int x, int y, int w, int h, float r, float u) { Glass::Round(c, x, y, w, h, r, PcPal::Card, PcPal::Line, 1.5f * u); }
+inline void PcButton(Canvas& c, int x, int y, int w, int h, float r, bool on, float u)
+{
+    if (on) Glass::Round(c, x, y, w, h, r, PcPal::Primary, PcPal::PrimaryDark, 1.2f * u);
+    else Glass::Round(c, x, y, w, h, r, PcPal::Btn, PcPal::Line, 1.0f * u);
+}
 inline uint32_t PcTypeColour(const std::string& t)
 {
     static const std::pair<const char*, uint32_t> k[] = { { "NORMAL", 0xFF9FA19F }, { "FIRE", 0xFFE62829 }, { "WATER", 0xFF2980EF }, { "GRASS", 0xFF3FA129 },
-        { "ELECTRIC", 0xFFFAC000 }, { "ICE", 0xFF3DCEF3 }, { "FIGHTING", 0xFFFF8000 }, { "POISON", 0xFF9141CB }, { "GROUND", 0xFF915121 },
+        { "ELECTRIC", 0xFFFAC000 }, { "ICE", 0xFF3FD8FF }, { "FIGHTING", 0xFFFF8000 }, { "POISON", 0xFF9141CB }, { "GROUND", 0xFF915121 },
         { "FLYING", 0xFF81B9EF }, { "PSYCHIC", 0xFFEF4179 }, { "BUG", 0xFF91A119 }, { "ROCK", 0xFFAFA981 }, { "GHOST", 0xFF704170 },
-        { "DRAGON", 0xFF5060E1 }, { "DARK", 0xFF624D4E }, { "STEEL", 0xFF60A1B8 }, { "FAIRY", 0xFFEF70EF } };
+        { "DRAGON", 0xFF5060E1 }, { "DARK", 0xFF50413F }, { "STEEL", 0xFF60A1B8 }, { "FAIRY", 0xFFEF70EF } };
     for (const auto& e : k) if (t == e.first) return e.second;
     return 0xFF707070;
 }
@@ -5414,8 +5429,9 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
 {
     PcState& P = Pc();
     PcSide& S = P.s[side];
-    const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
-    Menu::FrostBox(c, solid, x, y, w, h, 14 * u);
+    const uint32_t text = PcPal::Ink, hint = PcPal::Hint;
+    (void)solid;
+    PcCard(c, x, y, w, h, 10 * u, u);
     const int pad = (int)(8 * u);
     const std::vector<MoverGame> gs = MoverGames();
     // The games: chips from firstChip, arrows when they do not all fit.
@@ -5425,7 +5441,7 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
         const int right = x + w - pad - (int)(26 * u);
         if (S.firstChip > 0)
         {
-            Glass::Round(c, cx, cy, (int)(22 * u), chH, 8 * u, 0x24FFFFFFu);
+            PcButton(c, cx, cy, (int)(22 * u), chH, 8 * u, false, u);
             GT(c, cx + (int)(7 * u), cy + chH * 0.5f, "<", 14 * u, text, true);
             PcHitAdd(cx, cy, (int)(22 * u), chH, PC_PREV_GAMES, side, 0);
             cx += (int)(26 * u);
@@ -5437,15 +5453,14 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
             const int cw = GW(n, 12 * u, true) + (int)(18 * u);
             if (cx + cw > right && i > S.firstChip) break;
             const bool on = i == S.game, other = i == P.s[1 - side].game;
-            if (on) Glass::Round(c, cx, cy, cw, chH, 8 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.2f * u);
-            else Glass::Round(c, cx, cy, cw, chH, 8 * u, other ? 0x10FFFFFFu : 0x24FFFFFFu);
-            GT(c, cx + (int)(9 * u), cy + chH * 0.5f, n, 12 * u, other && !on ? hint : text, true);
+            PcButton(c, cx, cy, cw, chH, 8 * u, on, u);
+            GT(c, cx + (int)(9 * u), cy + chH * 0.5f, n, 12 * u, on ? PcPal::OnPrimary : other ? hint : text, true);
             PcHitAdd(cx, cy, cw, chH, PC_GAME, side, i);
             cx += cw + (int)(5 * u);
         }
         if (i < (int)gs.size())
         {
-            Glass::Round(c, right + (int)(4 * u), cy, (int)(22 * u), chH, 8 * u, 0x24FFFFFFu);
+            PcButton(c, right + (int)(4 * u), cy, (int)(22 * u), chH, 8 * u, false, u);
             GT(c, right + (int)(11 * u), cy + chH * 0.5f, ">", 14 * u, text, true);
             PcHitAdd(right + (int)(4 * u), cy, (int)(22 * u), chH, PC_NEXT_GAMES, side, 0);
         }
@@ -5459,9 +5474,8 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
     {
         const bool on = S.box == PokemonHub::PARTY;
         const int pw = GW("Party", 12 * u, true) + (int)(18 * u);
-        if (on) Glass::Round(c, bx, by, pw, bh, 8 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.2f * u);
-        else Glass::Round(c, bx, by, pw, bh, 8 * u, 0x24FFFFFFu);
-        GT(c, bx + (int)(9 * u), by + bh * 0.5f, "Party", 12 * u, text, true);
+        PcButton(c, bx, by, pw, bh, 8 * u, on, u);
+        GT(c, bx + (int)(9 * u), by + bh * 0.5f, "Party", 12 * u, on ? PcPal::OnPrimary : text, true);
         PcHitAdd(bx, by, pw, bh, PC_PARTY, side, 0);
         bx += pw + (int)(8 * u);
     }
@@ -5469,13 +5483,13 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
     if (S.save)
     {
         const int aw = (int)(26 * u);
-        Glass::Round(c, bx, by, aw, bh, 8 * u, 0x24FFFFFFu);
+        PcButton(c, bx, by, aw, bh, 8 * u, false, u);
         GT(c, bx + (int)(9 * u), by + bh * 0.5f, "<", 14 * u, text, true);
         PcHitAdd(bx, by, aw, bh, PC_BOX_PREV, side, 0);
         const std::string label = S.box == PokemonHub::PARTY ? std::string("Party") : BoxLabel(S.save.get(), S.box);
         const int lw = std::max((int)(70 * u), GW(label, 13 * u, true) + (int)(16 * u));
         GT(c, bx + aw + (lw - GW(label, 13 * u, true)) / 2, by + bh * 0.5f, label, 13 * u, text, true);
-        Glass::Round(c, bx + aw + lw, by, aw, bh, 8 * u, 0x24FFFFFFu);
+        PcButton(c, bx + aw + lw, by, aw, bh, 8 * u, false, u);
         GT(c, bx + aw + lw + (int)(9 * u), by + bh * 0.5f, ">", 14 * u, text, true);
         PcHitAdd(bx + aw + lw, by, aw, bh, PC_BOX_NEXT, side, 0);
         const std::string cnt = std::to_string(mons.size()) + "/" + (S.box == PokemonHub::PARTY ? "6" : "30");
@@ -5487,7 +5501,7 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
     const int gx = x + (w - (6 * cs + 5 * gap)) / 2;
     if (!S.save)
     {
-        GTFit(c, x + pad, gy + 20 * u, "This save could not be read. " + S.err, 13 * u, w - 2 * pad, Menu::GlassHint, false);
+        GTFit(c, x + pad, gy + 20 * u, "This save could not be read. " + S.err, 13 * u, w - 2 * pad, hint, false);
         return;
     }
     const int cells = S.box == PokemonHub::PARTY ? 6 : 30;
@@ -5506,13 +5520,13 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
         const PokemonHub::Mon* m = at[(size_t)k];
         const bool sel = P.selSide == side && P.selBox == S.box && P.selSlot == k;
         const bool carried = P.drag && P.dSide == side && P.dBox == S.box && P.dSlot == k;
-        if (sel) Glass::Round(c, cx, cy, cs, cs, 8 * u, 0x40FFFFFFu, 0xFFFFFFFFu, 2 * u);
-        else if (k == hover) Glass::Round(c, cx, cy, cs, cs, 8 * u, 0x308FE3A2u, 0xFF8FE3A2u, 2 * u);
-        else Glass::Round(c, cx, cy, cs, cs, 8 * u, m ? 0x22FFFFFFu : 0x10FFFFFFu);
+        if (sel) Glass::Round(c, cx, cy, cs, cs, 6 * u, PcPal::Body, PcPal::Primary, 2.5f * u);
+        else if (k == hover) Glass::Round(c, cx, cy, cs, cs, 6 * u, PcPal::PrimaryPale, PcPal::Primary, 2 * u);
+        else Glass::Round(c, cx, cy, cs, cs, 6 * u, m ? PcPal::Body : PcPal::Slot, PcPal::Line, 1.0f * u);
         PcHitAdd(cx, cy, cs, cs, PC_CELL, side, k);
         if (!m || carried) continue;
         PcDrawMon(c, m->species, m->shiny, m->egg, cx + (int)(2 * u), cy + (int)(2 * u), cs - (int)(4 * u), cs - (int)(14 * u));
-        if (m->shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, cx + cs - 8 * u, cy + 8 * u, 5 * u, 0xFFF2C46Bu);
+        if (m->shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, cx + cs - 8 * u, cy + 8 * u, 5 * u, PcPal::Shiny);
         if (!m->egg)
         {
             const std::string lv = "Lv." + std::to_string(m->level);
@@ -5526,8 +5540,9 @@ inline void PcDrawSide(Canvas& c, bool solid, float u, int side, int x, int y, i
 inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, int h)
 {
     PcState& P = Pc();
-    const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
-    Menu::FrostBox(c, solid, x, y, w, h, 14 * u);
+    const uint32_t text = PcPal::Ink, hint = PcPal::Hint;
+    (void)solid;
+    PcCard(c, x, y, w, h, 10 * u, u);
     const int pad = (int)(12 * u), iw = w - 2 * pad;
     int ty = y + pad;
     auto line = [&](const std::string& k, const std::string& v) {
@@ -5556,11 +5571,11 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
     // Its picture, name and level; its number, species and kinds.
     const int ps = std::min(iw, (int)(h * (P.tab == 1 ? 0.15f : 0.28f))); // (Stats: a smaller picture, room for its table)
     PcDrawMon(c, m.species, m.shiny, m.egg, x + (w - ps) / 2, ty, ps, (int)(ps * 0.82f));
-    if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - pad - 8 * u, ty + 10 * u, 7 * u, 0xFFF2C46Bu);
+    if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, x + w - pad - 8 * u, ty + 10 * u, 7 * u, PcPal::Shiny);
     ty += (int)(ps * 0.82f) + (int)(6 * u);
     const std::string nm = PcMonName(m);
     GTFit(c, x + pad, ty + 10 * u, nm, 17 * u, iw - (int)(76 * u), text, true);
-    if (!d.gender.empty()) GT(c, x + pad + std::min(GW(nm, 17 * u, true), iw - (int)(76 * u)) + (int)(8 * u), ty + 10 * u, d.gender, 14 * u, d.gender == "M" ? 0xFF6FA8FFu : 0xFFFF8FB8u, true);
+    if (!d.gender.empty()) GT(c, x + pad + std::min(GW(nm, 17 * u, true), iw - (int)(76 * u)) + (int)(8 * u), ty + 10 * u, d.gender, 14 * u, d.gender == "M" ? PcPal::Male : PcPal::Female, true);
     const std::string lv = m.egg ? std::string("Egg") : "Lv." + std::to_string(m.level);
     GT(c, x + w - pad - GW(lv, 14 * u, true), ty + 10 * u, lv, 14 * u, text, true);
     ty += (int)(24 * u);
@@ -5585,9 +5600,8 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
         for (int i = 0; i < 3; i++)
         {
             const int cw = GW(names[i], 11 * u, true) + (int)(14 * u), ch = (int)(22 * u);
-            if (P.tab == i) Glass::Round(c, cx, ty, cw, ch, 7 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.2f * u);
-            else Glass::Round(c, cx, ty, cw, ch, 7 * u, 0x24FFFFFFu);
-            GT(c, cx + (int)(7 * u), ty + ch * 0.5f, names[i], 11 * u, text, true);
+            PcButton(c, cx, ty, cw, ch, 7 * u, P.tab == i, u);
+            GT(c, cx + (int)(7 * u), ty + ch * 0.5f, names[i], 11 * u, P.tab == i ? PcPal::OnPrimary : text, true);
             PcHitAdd(cx, ty, cw, ch, PC_TAB, P.selSide, i);
             cx += cw + (int)(5 * u);
         }
@@ -5618,23 +5632,23 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
         const bool canEdit = m.generation >= 3 && S->save && !S->save->ReadOnly();
         for (int r = 0; r < 6; r++)
         {
-            const int k = order[r], ry = ty + r * (int)(19 * u), mid = ry + (int)(9 * u);
-            GT(c, x + pad, mid, sn[k], 11 * u, hint, true);
+            const int k = order[r], ry = ty + r * (int)(17 * u), mid = ry + (int)(9 * u);
+            GT(c, x + pad, mid, sn[k], 11 * u, PcPal::Stat[k], true);
             GT(c, x + pad + (int)(44 * u), mid, std::to_string(d.stats[k]), 12 * u, text, true);
             GT(c, x + pad + (int)(88 * u), mid, std::to_string(d.ivs[k]), 12 * u, text, true);
             GT(c, x + pad + (int)(118 * u), mid, std::to_string(d.evs[k]), 12 * u, text, true);
             if (canEdit)
             {
                 const int bw = (int)(22 * u), bx2 = x + w - pad - bw, bx1 = bx2 - bw - (int)(4 * u);
-                Glass::Round(c, bx1, ry, bw, (int)(18 * u), 6 * u, 0x24FFFFFFu);
+                PcButton(c, bx1, ry, bw, (int)(16 * u), 6 * u, false, u);
                 GT(c, bx1 + (int)(8 * u), mid, "-", 13 * u, text, true);
-                PcHitAdd(bx1, ry, bw, (int)(18 * u), PC_EV, P.selSide, k * 2);
-                Glass::Round(c, bx2, ry, bw, (int)(18 * u), 6 * u, 0x24FFFFFFu);
+                PcHitAdd(bx1, ry, bw, (int)(16 * u), PC_EV, P.selSide, k * 2);
+                PcButton(c, bx2, ry, bw, (int)(16 * u), 6 * u, false, u);
                 GT(c, bx2 + (int)(7 * u), mid, "+", 13 * u, text, true);
-                PcHitAdd(bx2, ry, bw, (int)(18 * u), PC_EV, P.selSide, k * 2 + 1);
+                PcHitAdd(bx2, ry, bw, (int)(16 * u), PC_EV, P.selSide, k * 2 + 1);
             }
         }
-        ty += 6 * (int)(19 * u) + (int)(2 * u);
+        ty += 6 * (int)(17 * u) + (int)(2 * u);
         GT(c, x + pad, ty + 6 * u, "EVs " + std::to_string(total) + " / 510" + (canEdit ? "   (- and + change them by 4)" : ""), 10 * u, hint, false);
         ty += (int)(16 * u);
     }
@@ -5643,7 +5657,7 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
         for (int i = 0; i < 4; i++)
         {
             const std::string mv = d.moves[i].empty() ? std::string("-") : MonName(d.moves[i]);
-            Glass::Round(c, x + pad, ty, iw, (int)(24 * u), 7 * u, 0x1CFFFFFFu);
+            Glass::Round(c, x + pad, ty, iw, (int)(24 * u), 6 * u, PcPal::Body, PcPal::Line, 1.0f * u);
             GTFit(c, x + pad + (int)(10 * u), ty + 12 * u, mv, 13 * u, iw - (int)(20 * u), text, true);
             ty += (int)(29 * u);
         }
@@ -5653,9 +5667,8 @@ inline void PcDrawDetail(Canvas& c, bool solid, float u, int x, int y, int w, in
         int bx = x + pad;
         auto button = [&](const std::string& label, int kind, bool on) {
             const int bw = GW(label, 11 * u, true) + (int)(16 * u), bh2 = (int)(24 * u);
-            if (on) Glass::Round(c, bx, bottomButtons, bw, bh2, 7 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.2f * u);
-            else Glass::Round(c, bx, bottomButtons, bw, bh2, 7 * u, 0x24FFFFFFu);
-            GT(c, bx + (int)(8 * u), bottomButtons + bh2 * 0.5f, label, 11 * u, text, true);
+            PcButton(c, bx, bottomButtons, bw, bh2, 7 * u, on, u);
+            GT(c, bx + (int)(8 * u), bottomButtons + bh2 * 0.5f, label, 11 * u, on ? PcPal::OnPrimary : text, true);
             PcHitAdd(bx, bottomButtons, bw, bh2, kind, P.selSide, 0);
             bx += bw + (int)(5 * u);
         };
@@ -5677,7 +5690,10 @@ inline void DrawPcPage(Canvas& c, bool solid, float u, int L, int R, int top, in
 #ifdef SSR_POKEMON_HUB
     PcEnsure();
 #endif
-    const uint32_t text = Menu::GlassText, hint = Menu::GlassHint;
+    const uint32_t text = PcPal::Ink, hint = PcPal::Hint;
+    // (PKVault's page: cream, in a terracotta frame.)
+    Glass::Round(c, L, top, R - L, bottom - top, 12 * u, PcPal::Body, PcPal::Primary, 4 * u);
+    { const int in = (int)(10 * u); L += in; R -= in; top += in; bottom -= in; }
     const int gap = (int)(10 * u), barH = (int)(40 * u);
     const int midW = std::min((int)(250 * u), (R - L) / 4);
     const int pw = (R - L - midW - 2 * gap) / 2, ph = bottom - top - barH - gap;
@@ -5686,16 +5702,15 @@ inline void DrawPcPage(Canvas& c, bool solid, float u, int L, int R, int top, in
     PcDrawSide(c, solid, u, 1, R - pw, top, pw, ph);
     // The foot: the changes waiting, and Save / Undo All.
     const int fy = bottom - barH;
-    Menu::FrostBox(c, solid, L, fy, R - L, barH, 12 * u);
+    PcCard(c, L, fy, R - L, barH, 10 * u, u);
     int bx = R - (int)(10 * u);
     if (P.pending)
     {
         auto button = [&](const std::string& label, int kind, bool strong) {
             const int bw = GW(label, 13 * u, true) + (int)(26 * u), bh = barH - (int)(12 * u);
             bx -= bw;
-            if (strong) Glass::Surface(c, 3, bx, fy + (int)(6 * u), bw, bh, 9 * u, Glass::Button());
-            else Glass::Round(c, bx, fy + (int)(6 * u), bw, bh, 9 * u, 0x24FFFFFFu);
-            GT(c, bx + (int)(13 * u), fy + barH * 0.5f, label, 13 * u, strong ? Glass::ButtonInk() : text, true);
+            PcButton(c, bx, fy + (int)(6 * u), bw, bh, 6 * u, strong, u);
+            GT(c, bx + (int)(13 * u), fy + barH * 0.5f, label, 13 * u, strong ? PcPal::OnPrimary : text, true);
             PcHitAdd(bx, fy + (int)(6 * u), bw, bh, kind, 0, 0);
             bx -= (int)(8 * u);
         };
