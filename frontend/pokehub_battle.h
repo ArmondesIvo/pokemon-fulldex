@@ -320,7 +320,7 @@ inline int TeamSize(const Arena::Trainer& t) { int n = 0; while (n < 6 && t.team
 inline std::vector<Arena::MonSpec> TrainerTeam(int region, const Arena::Trainer& t, std::mt19937& rng)
 {
     const Arena::RealTeam* real = Arena::FindRealTeam(region, t.sprite);
-    if (!real) return BattleTeamOf(t.team, TeamSize(t), 50, rng);
+    if (!real) { auto v = BattleTeamOf(t.team, TeamSize(t), 50, rng); for (auto& m : v) m.shiny = false; return v; }
     std::vector<Arena::MonSpec> out;
     for (int i = 0; i < real->count; i++)
     {
@@ -331,9 +331,11 @@ inline std::vector<Arena::MonSpec> TrainerTeam(int region, const Arena::Trainer&
         bool any = false;
         for (int k = 0; k < 4; k++) any |= rm.moves[k] > 0;
         if (any) for (int k = 0; k < 4; k++) m.moves[k] = rm.moves[k];
+        m.shiny = false; // (a famous one's team as the games have it: never shiny)
         out.push_back(m);
     }
-    return out.empty() ? BattleTeamOf(t.team, TeamSize(t), 50, rng) : out;
+    if (out.empty()) { out = BattleTeamOf(t.team, TeamSize(t), 50, rng); for (auto& m : out) m.shiny = false; }
+    return out;
 }
 // The gym to fight now in a region: the first without its badge (-1: all eight won).
 inline int NextGym(int region) { for (int i = 0; i < 8; i++) if (!(Bat().badges[region] >> i & 1)) return i; return -1; }
@@ -1818,6 +1820,22 @@ inline void DrawBattlePicker(Canvas& c, float u, int L, int R, int top, int bott
         BGfx::Rect(c, R - (int)(6 * u), (int)by, (int)(3 * u), (int)bh, 0x60000000u);
     }
 }
+// (A team card held: it lifts after a moment, then goes where the finger goes; the team's page and
+// the preparation's.)
+inline void BattleDragDraw(Canvas& c, float u)
+{
+    BattleState& B = Bat();
+    if (B.down && B.downCard >= 0 && B.dragCard < 0)
+    {
+        Hub().version++; // (frames while it is held, to show it lift)
+        if (std::chrono::duration<float>(std::chrono::steady_clock::now() - B.downAt).count() >= 0.35f && !B.dragged) { B.dragCard = B.downCard; B.dragX = B.downX; B.dragY = B.downY; }
+    }
+    if (B.dragCard >= 0 && B.dragCard < (int)B.mine.size())
+    {
+        const int cw = (int)(100 * u), ch = (int)(118 * u);
+        BattleCard(c, u, B.dragX - cw / 2, B.dragY - ch / 2, cw, ch, B.mine[B.dragCard], true);
+    }
+}
 // A small trainer tile: picture, name, the type chip; done (a check) or the one now (framed).
 inline void BattleTrainerTile(Canvas& c, float u, int x, int y, int w, int h, const Arena::Trainer& t, bool done, bool now, const std::string& tag)
 {
@@ -2007,7 +2025,8 @@ inline void DrawBattlePrep(Canvas& c, float u, int L, int R, int top, int bottom
     {
         const int x0 = gx + i * (cw + (int)(8 * u));
         const int mx = B.mine[i].stats[0], hp = i < (int)B.runHp.size() ? B.runHp[i] : mx;
-        BattleCard(c, u, x0, gy, cw, ch - (int)(18 * u), B.mine[i], false);
+        if (i == B.dragCard) Glass::Round(c, x0, gy, cw, ch - (int)(18 * u), 8 * u, PcPal::Slot, PcPal::Primary, 2.0f * u);
+        else BattleCard(c, u, x0, gy, cw, ch - (int)(18 * u), B.mine[i], false);
         if (hp <= 0) { BGfx::Rect(c, x0, gy, cw, ch - (int)(18 * u), 0xA0EAF1E2u); GTFit(c, x0 + (int)(6 * u), gy + ch * 0.4f, "Desmaiado", 10 * u, cw - (int)(12 * u), 0xFFC04040u, true); }
         const float f = (float)std::max(0, hp) / std::max(1, mx);
         BGfx::Rect(c, x0, gy + ch - (int)(14 * u), cw, (int)(6 * u), 0xFFC8D4C0u);
@@ -2046,7 +2065,8 @@ inline void DrawBattlePrep(Canvas& c, float u, int L, int R, int top, int bottom
     };
     button(std::string("Lutar contra ") + nx.name, BT_NEXT, true);
     button("Desistir", BT_GIVEUP, false);
-    GTFit(c, gx, fy + fh / 2.0f, !B.msg.empty() ? B.msg : "Os desmaiados s\xC3\xB3 voltam com Reviver.", 11.5f * u, bx - gx - (int)(10 * u), PcPal::Hint, false);
+    GTFit(c, gx, fy + fh / 2.0f, !B.msg.empty() ? B.msg : "Os desmaiados s\xC3\xB3 voltam com Reviver. Segure um card e arraste para mudar a ordem.", 11.5f * u, bx - gx - (int)(10 * u), PcPal::Hint, false);
+    BattleDragDraw(c, u);
 }
 // Choosing a famous opponent for a free battle: a tab a region, its leaders, Elite Four and
 // champion (Red under Johto); those not beaten yet faded.
@@ -2140,17 +2160,7 @@ inline void DrawBattlePage(Canvas& c, float u, int L, int R, int top, int bottom
     };
     panel(0, L);
     BattleOppPanel(c, u, L + pw + gap, top, pw, ph);
-    // (A team card held: it lifts after a moment, then goes where the finger goes.)
-    if (B.down && B.downCard >= 0 && B.dragCard < 0)
-    {
-        Hub().version++; // (frames while it is held, to show it lift)
-        if (std::chrono::duration<float>(std::chrono::steady_clock::now() - B.downAt).count() >= 0.35f && !B.dragged) { B.dragCard = B.downCard; B.dragX = B.downX; B.dragY = B.downY; }
-    }
-    if (B.dragCard >= 0 && B.dragCard < (int)B.mine.size())
-    {
-        const int cw = (int)(100 * u), ch = (int)(118 * u);
-        BattleCard(c, u, B.dragX - cw / 2, B.dragY - ch / 2, cw, ch, B.mine[B.dragCard], true);
-    }
+    BattleDragDraw(c, u);
     // The foot: the mode, the difficulty (a free battle's), your money and the shop, FIGHT.
     const int fy = bottom - footH;
     PcCard(c, L, fy, R - L, footH, 10 * u, u);
@@ -2204,7 +2214,7 @@ inline void BattlePagePointer(int phase, int x, int y)
         B.down = true; B.dragged = false; B.downX = x; B.downY = y; B.scroll0 = B.pickScroll;
         B.downAt = std::chrono::steady_clock::now(); B.downCard = -1; B.dragCard = -1;
         if (!B.picking)
-            for (const PcHit& h : B.hits) if (h.kind == BT_CARD && x >= h.x && x < h.x + h.w && y >= h.y && y < h.y + h.h) B.downCard = h.value;
+            for (const PcHit& h : B.hits) if ((h.kind == BT_CARD || h.kind == BT_PREP_MON) && x >= h.x && x < h.x + h.w && y >= h.y && y < h.y + h.h) B.downCard = h.value;
         Hub().version++;
         return;
     }
@@ -2226,7 +2236,7 @@ inline void BattlePagePointer(int phase, int x, int y)
         B.dragCard = -1; B.downCard = -1;
         int to = -1, best = INT_MAX;
         for (const PcHit& h : B.hits)
-            if (h.kind == BT_CARD)
+            if (h.kind == BT_CARD || h.kind == BT_PREP_MON)
             {
                 const int d = std::abs(x - (h.x + h.w / 2)) + (y >= h.y - h.h && y < h.y + 2 * h.h ? 0 : 100000);
                 if (d < best) { best = d; to = h.value; }
@@ -2237,6 +2247,13 @@ inline void BattlePagePointer(int phase, int x, int y)
             const BattleKey k = B.keys[from];
             B.mine.erase(B.mine.begin() + from); B.keys.erase(B.keys.begin() + from);
             B.mine.insert(B.mine.begin() + to, m); B.keys.insert(B.keys.begin() + to, k);
+            if (from < (int)B.runHp.size() && to < (int)B.runHp.size())
+            {
+                // (In a run: its HP goes with it.)
+                const int hp = B.runHp[from];
+                B.runHp.erase(B.runHp.begin() + from);
+                B.runHp.insert(B.runHp.begin() + to, hp);
+            }
             B.sel = to;
             BattleSaveTeam();
         }
