@@ -73,7 +73,7 @@ inline const char* PlatformName(int p) { return p == DS ? "DS" : p == GBA ? "GBA
 // last. ROMHACKS: the hacks, whatever their console.)
 // (GB: the Game Boy and Game Boy Color games, played by the GBA player, apart from the GBA's. MY PC:
 // not a list of games, the Pokémon PC (the Hub's Move Pokémon, with the Bank), opened from the bar.)
-enum TabId { TAB_HOME, TAB_ALL, TAB_DS, TAB_GBA, TAB_3DS, TAB_HACKS, TAB_GB, TAB_MYPC, TABS };
+enum TabId { TAB_HOME, TAB_ALL, TAB_DS, TAB_GBA, TAB_3DS, TAB_HACKS, TAB_GB, TAB_MYPC, TAB_DEX, TABS };
 // Tabs of the player's own, after the built-in ones (tab TABS + k): a name and its games' ROM paths;
 // kept in fulldex-tabs.txt beside the saves, a line a tab (its name, then its ROMs), tab-separated.
 // A tab of the player's own: its games, and the built-in tab it comes after (Move Left / Right; Home stays first).
@@ -118,7 +118,7 @@ inline void LoadTabOrder()
 {
     TabOrderAll().clear();
     TabHidden().clear();
-    bool found = false, fork = false;
+    bool found = false, fork = false, beforeDex = false;
     if (FILE* f = fopen(TabOrderPath().c_str(), "rb"))
     {
         char line[4096];
@@ -129,7 +129,7 @@ inline void LoadTabOrder()
             const size_t tb = l.find('\t');
             if (tb == std::string::npos) continue;
             const std::string key = l.substr(0, tb);
-            if (key == "layout") fork = true;
+            if (key == "layout") { fork = true; beforeDex = l.substr(tb + 1) == "myboy1"; }
             if (key != "order" && key != "hidden") continue;
             if (key == "order") found = true;
             std::vector<int>& dst = key == "hidden" ? TabHidden() : TabOrderAll();
@@ -142,6 +142,19 @@ inline void LoadTabOrder()
             }
         }
         fclose(f);
+    }
+    if (beforeDex)
+    {
+        // (Saved before the POKEDEX tab, number 8: the player's own tabs were 8 on, one less than
+        // now; the new tab goes after MY PC.)
+        for (std::vector<int>* v : { &TabOrderAll(), &TabHidden() })
+            for (int& t : *v) if (t >= TAB_DEX) t++;
+        std::vector<int>& o = TabOrderAll();
+        const auto pc = std::find(o.begin(), o.end(), (int)TAB_MYPC);
+        o.insert(pc == o.end() ? o.end() : pc + 1, (int)TAB_DEX);
+        TabOrderFix();
+        SaveTabOrder();
+        return;
     }
     if (!found)
     {
@@ -159,7 +172,7 @@ inline void LoadTabOrder()
     {
         // (This fork's tabs, once: GB, GBA, DS, 3DS and My PC first, Home and All hidden; the
         // player's own tabs and what they hid kept. "layout" in the file says it was done.)
-        std::vector<int> o = { TAB_GB, TAB_GBA, TAB_DS, TAB_3DS, TAB_MYPC };
+        std::vector<int> o = { TAB_GB, TAB_GBA, TAB_DS, TAB_3DS, TAB_MYPC, TAB_DEX };
         for (const int t : TabOrderAll()) if (std::find(o.begin(), o.end(), t) == o.end()) o.push_back(t);
         TabOrderAll() = o;
         for (const int t : { (int)TAB_HOME, (int)TAB_ALL }) if (!TabIsHidden(t)) TabHidden().push_back(t);
@@ -178,7 +191,7 @@ inline bool SaveTabOrder()
     std::string o, h;
     for (const int t : TabOrderAll()) o += (o.empty() ? "" : ",") + std::to_string(t);
     for (const int t : TabHidden()) h += (h.empty() ? "" : ",") + std::to_string(t);
-    fprintf(f, "layout\tmyboy1\norder\t%s\nhidden\t%s\n", o.c_str(), h.c_str());
+    fprintf(f, "layout\tmyboy2\norder\t%s\nhidden\t%s\n", o.c_str(), h.c_str());
     return fclose(f) == 0;
 }
 inline std::string TabsSig()
@@ -245,10 +258,10 @@ inline bool SaveTabs()
 // kept apart from the focus, which a click can start again.
 inline std::string& SearchText() { static std::string s; return s; }
 inline std::string& SortKey() { static std::string s; return s; }
-inline const char* TabName(int t) { static const char* n[] = { "HOME", "ALL", "DS", "GBA", "3DS", "ROMHACKS", "GB", "MY PC" }; return t >= 0 && t < TABS ? n[t] : t < TabCount() ? "CUSTOM" : "ALL"; }
+inline const char* TabName(int t) { static const char* n[] = { "HOME", "ALL", "DS", "GBA", "3DS", "ROMHACKS", "GB", "MY PC", "POKEDEX" }; return t >= 0 && t < TABS ? n[t] : t < TabCount() ? "CUSTOM" : "ALL"; }
 inline std::string TabLabel(int t)
 {
-    static const char* n[] = { "Home", "All", "DS", "GBA", "3DS", "Romhacks", "GB", "My PC" };
+    static const char* n[] = { "Home", "All", "DS", "GBA", "3DS", "Romhacks", "GB", "My PC", "Pok\xC3\xA9" "dex" };
     if (t >= 0 && t < TABS) return n[t];
     const int k = t - TABS;
     return k >= 0 && k < (int)CustomTabs().size() ? CustomTabs()[k].name : std::string("All");
@@ -517,6 +530,7 @@ inline bool InTab(const std::vector<Game>& games, int i, int tab)
     case TAB_GBA: return g.platform == GBA && !IsGbGame(g);
     case TAB_GB: return g.platform == GBA && IsGbGame(g);
     case TAB_MYPC: return false;
+    case TAB_DEX: return false;
     case TAB_3DS: return g.platform == N3DS;
     case TAB_HACKS: return IsHack(g);
     default: return true;
@@ -1443,7 +1457,7 @@ inline View MakeView(const Canvas& c, const std::vector<Game>& games, int tab)
     for (int p = 0; p < PLATFORMS; p++)
     {
         if (tab >= TAB_DS && tab <= TAB_3DS && p != tab - TAB_DS) continue;
-        if ((tab == TAB_GB && p != GBA) || tab == TAB_MYPC) continue;
+        if ((tab == TAB_GB && p != GBA) || tab == TAB_MYPC || tab == TAB_DEX) continue;
         std::vector<int> mine;
         for (size_t i = 0; i < games.size(); i++)
             if (games[i].platform == p && InTab(games, (int)i, tab)) mine.push_back((int)i);
@@ -3222,6 +3236,7 @@ struct DexState
     std::vector<PokemonHub::DexMark> marks;
 #endif
     std::vector<int> list;
+    bool fromTab = false; // (opened by the POKEDEX tab: back goes to the games)
 };
 inline DexState& Dex() { static DexState d; return d; }
 inline const char* DexFilterName(int f) { return f == 1 ? "Caught" : f == 2 ? "Missing" : f == 3 ? "Have Now" : f == 4 ? "Shiny" : "All"; }
@@ -3620,7 +3635,7 @@ inline bool HubEnter(int row)
     if (row == 0) { HubMode() = 1; F.prow = 0; }
     else if (row == 2) { HubMode() = 2; F.prow = 2; }
     else if (row == 3) return false; // (Discord: a link, nothing to open here)
-    else if (row == 4) { DexShow(); F.prow = DEX_FIRST; }
+    else if (row == 4) { DexShow(); Dex().fromTab = false; F.prow = DEX_FIRST; }
     else if (row == 5) { ImportShow(); F.prow = 1; }
     else { MoverShow(true); F.prow = MOVER_FIRST; }
     F.pact = -1; F.rScroll = 0;
@@ -5073,6 +5088,7 @@ inline bool PageBack()
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 5 && Import().fromPc) { Import().fromPc = false; HubMode() = 6; F.prow = 0; F.rScroll = 0; PcReopen(); return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 4 && Dex().fromTab) { Dex().fromTab = false; HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && (HubMode() == 4 || HubMode() == 5)) { F.prow = HubMode(); HubMode() = 0; F.rScroll = 0; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() != 0) { HubMode() = 0; F.prow = 0; F.rScroll = 0; Hub().version++; return true; }
     if ((F.page == SIDE_ROMS || F.page == SIDE_HUB) && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
@@ -5102,6 +5118,15 @@ inline void OpenMyPc()
     // (The saves read again: a game played since may have changed them.)
     PcRefresh();
     Hub().version++;
+}
+// The POKEDEX tab: the Hub's Pokédex, straight from the games (back goes to them).
+inline void OpenDexTab()
+{
+    GlassFocus& F = Focus();
+    OpenSide(SIDE_HUB);
+    DexShow();
+    Dex().fromTab = true;
+    F.prow = DEX_FIRST; F.pact = -1; F.rScroll = 0;
 }
 // IMPORT SAVES, from the settings or My PC's foot (back goes to My PC when it came from there).
 inline void OpenImport(bool fromPc)

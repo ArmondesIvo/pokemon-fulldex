@@ -856,7 +856,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     Launcher::LoadTabs(fo.saves);
     static int lastTab = std::max(0, std::min(Launcher::TabCount() - 1, atoi(Launcher::ConfigValue(fo.cfg, "launcher_tab2").c_str())));
     // (A tab hidden since, or MY PC, which is no list: the first one shown instead.)
-    if (Launcher::TabIsHidden(lastTab) || lastTab == Launcher::TAB_MYPC) lastTab = Launcher::FirstTab();
+    if (Launcher::TabIsHidden(lastTab) || lastTab == Launcher::TAB_MYPC || lastTab == Launcher::TAB_DEX) lastTab = Launcher::FirstTab();
     int tab = lastTab, scroll = 0, result = -1;
     // false while the list is where a finger (or the mouse, held) dragged it, rather than where
     // the chosen game is; a key, button or tap that chooses a game makes it follow again.
@@ -1028,6 +1028,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
     auto setTab = [&](int t, const char* why) {
         // (MY PC is no list of games: it opens the Pokémon PC, the tab before it staying chosen.)
         if ((t + Launcher::TabCount()) % Launcher::TabCount() == Launcher::TAB_MYPC) { Launcher::OpenMyPc(); fprintf(stderr, "[launcher] my pc (%s)\n", why); return; }
+        if ((t + Launcher::TabCount()) % Launcher::TabCount() == Launcher::TAB_DEX) { Launcher::OpenDexTab(); fprintf(stderr, "[launcher] pokedex (%s)\n", why); return; }
         tab = (t + Launcher::TabCount()) % Launcher::TabCount();
         fprintf(stderr, "[launcher] tab %s (%s)\n", Launcher::TabName(tab), why);
         scroll = 0;
