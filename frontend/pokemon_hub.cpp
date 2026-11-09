@@ -202,9 +202,20 @@ struct Save::Impl
     std::vector<u8> tail;                // what an emulator keeps after a GBA save (mGBA: 16 bytes of clock), kept as it was
     std::unique_ptr<pksm::Sav> sav;
     bool readOnly = false, changed = false;
+    // The Bank (Save::OpenBank): its folder, each place's Pokémon (nullptr: free), and the places
+    // changed since it was last written, with what their file held before (to put it back).
+    bool bank = false;
+    std::vector<std::unique_ptr<pksm::PKX>> slots;
+    std::vector<std::pair<int, std::vector<u8>>> touched; // (place, its file before; empty: none)
 
     std::unique_ptr<pksm::PKX> At(int box, int slot) const
     {
+        if (bank)
+        {
+            if (box < 0 || box >= BANK_BOXES || slot < 0 || slot >= 30) return nullptr;
+            const auto& pk = slots[(size_t)box * 30 + slot];
+            return pk ? pk->clone() : nullptr;
+        }
         if (box == PARTY)
         {
             if (slot < 0 || slot >= 6 || slot >= (int)sav->partyCount()) return nullptr;
@@ -246,6 +257,7 @@ Mon MonOf(const pksm::PKX& pk, int box, int slot)
     m.shiny = pk.shiny();
     m.egg = pk.egg();
     m.heldItem = pk.heldItem();
+    m.generation = GenNumber(pk.generation());
     return m;
 }
 }
@@ -270,13 +282,65 @@ std::unique_ptr<Save> Save::Open(const std::string& path, std::string& error, bo
     return s;
 }
 
+namespace
+{
+// A Bank place's file: <folder>/box-07/12.pk4 (box 7, slot 12, a Gen 4 Pokémon), as PKHeX names its kinds.
+std::string BankBoxDir(const std::string& folder, int box)
+{
+    char b[16];
+    snprintf(b, sizeof b, "box-%02d", box + 1);
+    return S(P(folder) / b);
+}
+std::string BankFile(const std::string& folder, int box, int slot, int gen)
+{
+    char b[16];
+    snprintf(b, sizeof b, "%02d.pk%d", slot + 1, gen);
+    return S(P(BankBoxDir(folder, box)) / b);
+}
+// The place's file now, whichever generation it is (empty path: none).
+std::string BankFileFound(const std::string& folder, int box, int slot)
+{
+    for (int g = 3; g <= 7; g++)
+    {
+        const std::string f = BankFile(folder, box, slot, g);
+        std::error_code ec;
+        if (fs::exists(P(f), ec)) return f;
+    }
+    return std::string();
+}
+}
+
+std::unique_ptr<Save> Save::OpenBank(const std::string& folder, std::string& error)
+{
+    std::unique_ptr<Save> s(new Save);
+    s->d->bank = true;
+    s->d->path = folder;
+    s->d->slots.resize((size_t)BANK_BOXES * 30);
+    std::error_code ec;
+    fs::create_directories(P(folder), ec);
+    if (ec) { error = "CANNOT MAKE THE BANK'S FOLDER"; return nullptr; }
+    for (int box = 0; box < BANK_BOXES; box++)
+        for (int slot = 0; slot < 30; slot++)
+        {
+            const std::string f = BankFileFound(folder, box, slot);
+            if (f.empty()) continue;
+            std::vector<u8> raw;
+            if (!ReadFile(f, raw) || raw.empty() || raw.size() > 512) continue;
+            const int gen = f.back() - '0';
+            auto pk = pksm::PKX::getPKM(GenOf(gen), raw.data(), raw.size());
+            if (pk && (int)pk->species() != 0) s->d->slots[(size_t)box * 30 + slot] = std::move(pk);
+        }
+    return s;
+}
+
+bool Save::IsBank() const { return d->bank; }
 const std::string& Save::Path() const { return d->path; }
-int Save::Generation() const { return GenNumber(d->sav->generation()); }
-std::string Save::GameName() const { return GameNameOf(*d->sav); }
-std::string Save::Trainer() const { return d->sav->otName(); }
+int Save::Generation() const { return d->bank ? 0 : GenNumber(d->sav->generation()); }
+std::string Save::GameName() const { return d->bank ? std::string("Bank") : GameNameOf(*d->sav); }
+std::string Save::Trainer() const { return d->bank ? std::string() : d->sav->otName(); }
 bool Save::ReadOnly() const { return d->readOnly; }
-int Save::Boxes() const { return d->sav->maxBoxes(); }
-std::string Save::BoxName(int box) const { return d->sav->boxName((u8)box); }
+int Save::Boxes() const { return d->bank ? BANK_BOXES : d->sav->maxBoxes(); }
+std::string Save::BoxName(int box) const { return d->bank ? "Bank " + std::to_string(box + 1) : d->sav->boxName((u8)box); }
 bool Save::Changed() const { return d->changed; }
 
 std::vector<Mon> Save::Box(int box) const
@@ -289,7 +353,7 @@ std::vector<Mon> Save::Box(int box) const
 
 bool Save::FirstEmpty(int& box, int& slot) const
 {
-    for (box = 0; box < d->sav->maxBoxes(); box++)
+    for (box = 0; box < Boxes(); box++)
         for (slot = 0; slot < 30; slot++)
             if (!d->At(box, slot)) return true;
     return false;
@@ -330,6 +394,14 @@ std::unique_ptr<pksm::PKX> ArrivingPk(const pksm::PKX& source, int a, bool readO
         c.verdict = Verdict::ReadOnly;
         c.reason = "THE HUB CANNOT CHANGE THIS GAME'S SAVE YET";
         return nullptr;
+    }
+    if (to.IsBank())
+    {
+        // (The Bank keeps it as it is, in its own game's format: nothing converted, nothing lost.)
+        int fb, fs;
+        if (needRoom && !to.FirstEmpty(fb, fs)) { c.verdict = Verdict::Full; c.reason = "THE BANK IS FULL"; return nullptr; }
+        c.verdict = Verdict::Ok;
+        return pk;
     }
     const int b = to.Generation();
     if (b < a)
@@ -379,12 +451,12 @@ std::unique_ptr<pksm::PKX> Arriving(const Save& from, int box, int slot, const S
 {
     auto pk = from.d->At(box, slot);
     if (!pk) { c.verdict = Verdict::Empty; c.reason = "THERE IS NO POKEMON THERE"; return nullptr; }
-    return ArrivingPk(*pk, from.Generation(), from.ReadOnly(), to, c, needRoom, tradedFor);
+    return ArrivingPk(*pk, GenNumber(pk->generation()), from.ReadOnly(), to, c, needRoom, tradedFor);
 }
 // (Taking the party's last Pokémon that is not an egg would leave a game nothing to play with.)
 bool LastInParty(const Save& s, int box, int slot)
 {
-    if (box != PARTY) return false;
+    if (box != PARTY || s.IsBank()) return false;
     int others = 0;
     for (int i = 0; i < (int)s.d->sav->partyCount(); i++)
         if (i != slot)
@@ -392,8 +464,25 @@ bool LastInParty(const Save& s, int box, int slot)
     return others == 0;
 }
 // Puts a Pokémon at a place (the party, or a box), and takes one away.
+// (In the Bank: the place's Pokémon, and the place noted with its file as it was, for Commit.)
+void BankSet(Save& s, int box, int slot, std::unique_ptr<pksm::PKX> pk)
+{
+    const int place = box * 30 + slot;
+    bool noted = false;
+    for (const auto& t : s.d->touched) noted = noted || t.first == place;
+    if (!noted)
+    {
+        std::vector<u8> before;
+        const std::string f = BankFileFound(s.d->path, box, slot);
+        if (!f.empty()) ReadFile(f, before);
+        s.d->touched.push_back({ place, before });
+    }
+    s.d->slots[(size_t)place] = std::move(pk);
+    s.d->changed = true;
+}
 void Put(Save& s, const pksm::PKX& pk, int box, int slot)
 {
+    if (s.IsBank()) { BankSet(s, box, slot, pk.clone()); return; }
     if (box == PARTY)
     {
         s.d->sav->pkm(pk, (u8)slot);
@@ -404,6 +493,7 @@ void Put(Save& s, const pksm::PKX& pk, int box, int slot)
 }
 void Take(Save& s, int box, int slot)
 {
+    if (s.IsBank()) { BankSet(s, box, slot, nullptr); return; }
     if (box == PARTY)
     {
         s.d->sav->pkm(*s.d->sav->emptyPkm(), (u8)slot);
@@ -417,7 +507,7 @@ bool Place(const Save& to, int& box, int& slot)
 {
     if (box == TO_PARTY)
     {
-        if ((int)to.d->sav->partyCount() >= 6) return false;
+        if (to.IsBank() || (int)to.d->sav->partyCount() >= 6) return false;
         box = PARTY;
         slot = (int)to.d->sav->partyCount();
         return true;
@@ -450,7 +540,7 @@ bool Move(Save& from, int box, int slot, Save& to, bool evolve, std::string& err
     Check again;
     auto pk = Arriving(from, box, slot, to, again, false);
     if (!pk || !Place(to, toBox, toSlot)) { error = "THERE IS NO ROOM THERE"; return false; }
-    if (evolve)
+    if (evolve && !to.IsBank())
         if (const TradeEvo* e = EvolutionFor(*pk, *to.d->sav)) Evolve(*pk, *e, to.Generation());
     pk->refreshChecksum();
     Take(from, box, slot);
@@ -464,6 +554,7 @@ Check CanEvolve(const Save& save, int box, int slot)
     auto pk = save.d->At(box, slot);
     if (!pk) { c.verdict = Verdict::Empty; c.reason = "THERE IS NO POKEMON THERE"; return c; }
     if (save.ReadOnly()) { c.verdict = Verdict::ReadOnly; c.reason = "THE HUB CANNOT CHANGE THIS GAME'S SAVE YET"; return c; }
+    if (save.IsBank()) { c.verdict = Verdict::NoEvolution; c.reason = "POKEMON EVOLVE IN A GAME, NOT IN THE BANK"; return c; }
     const TradeEvo* e = EvolutionFor(*pk, *save.d->sav);
     if (!e)
     {
@@ -490,6 +581,56 @@ bool Evolve(Save& save, int box, int slot, std::string& error)
 
 namespace
 {
+// The Bank's changed places written: adding (the places that now hold a Pokémon) or taking away
+// (the files of places now free). Adding goes before the game's save is written and taking away
+// after it, so that whatever fails, a Pokémon is never in neither place.
+bool BankWrite(Save& s, bool adding, std::string& error)
+{
+    for (const auto& t : s.d->touched)
+    {
+        const int box = t.first / 30, slot = t.first % 30;
+        const auto& pk = s.d->slots[(size_t)t.first];
+        if (adding != (pk != nullptr)) continue;
+        std::error_code ec;
+        fs::create_directories(P(BankBoxDir(s.d->path, box)), ec);
+        // (Whatever file the place had, of any generation, goes first.)
+        const std::string old = BankFileFound(s.d->path, box, slot);
+        if (!pk)
+        {
+            if (!old.empty() && !fs::remove(P(old), ec)) { error = "CANNOT TAKE IT OUT OF THE BANK'S FOLDER"; return false; }
+            continue;
+        }
+        const std::string f = BankFile(s.d->path, box, slot, GenNumber(pk->generation()));
+        if (!old.empty() && old != f) fs::remove(P(old), ec);
+        auto kept = BoxForm(*pk);
+        if (!kept || !WriteAtomic(f, kept->rawData().data(), kept->rawData().size())) { error = "CANNOT WRITE TO THE BANK'S FOLDER"; return false; }
+    }
+    return true;
+}
+// (The places added put back as their files were, when the game's save could not be written.)
+void BankUndoAdding(Save& s)
+{
+    for (const auto& t : s.d->touched)
+    {
+        const int box = t.first / 30, slot = t.first % 30;
+        if (!s.d->slots[(size_t)t.first]) continue;
+        std::error_code ec;
+        const std::string now = BankFileFound(s.d->path, box, slot);
+        if (!now.empty()) fs::remove(P(now), ec);
+        if (!t.second.empty())
+        {
+            // (Its old file's generation, from its length: as PKHeX's box forms are.)
+            const size_t n = t.second.size();
+            const int g = n == 80 ? 3 : n == 232 ? 6 : 4;
+            WriteAtomic(BankFile(s.d->path, box, slot, g), t.second.data(), n);
+        }
+    }
+}
+void BankDone(Save& s)
+{
+    s.d->touched.clear();
+    s.d->changed = false;
+}
 bool WriteSave(Save& s, std::string& error)
 {
     s.d->sav->finishEditing();
@@ -505,6 +646,12 @@ bool WriteSave(Save& s, std::string& error)
 bool Commit(Save& save, std::string& error, std::vector<std::string>* backups)
 {
     if (!save.Changed()) return true;
+    if (save.IsBank())
+    {
+        if (!BankWrite(save, true, error) || !BankWrite(save, false, error)) return false;
+        BankDone(save);
+        return true;
+    }
     const std::string kept = BackUp(save.Path(), save.d->original);
     if (kept.empty()) { error = "CANNOT BACK UP " + Upper(save.GameName()) + "'S SAVE - NOTHING CHANGED"; return false; }
     if (backups) backups->push_back(kept);
@@ -516,6 +663,27 @@ bool Commit(Save& save, std::string& error, std::vector<std::string>* backups)
 
 bool Commit(Save& a, Save& b, std::string& error, std::vector<std::string>* backups)
 {
+    // With the Bank: what it gains first, then the game's save (backed up), then what it gives up.
+    if (a.IsBank() || b.IsBank())
+    {
+        Save& bank = a.IsBank() ? a : b;
+        Save& game = a.IsBank() ? b : a;
+        if (game.IsBank()) { error = "CHOOSE A GAME"; return false; }
+        if (bank.Changed() && !BankWrite(bank, true, error)) { BankUndoAdding(bank); return false; }
+        if (!Commit(game, error, backups))
+        {
+            BankUndoAdding(bank);
+            return false;
+        }
+        if (bank.Changed() && !BankWrite(bank, false, error))
+        {
+            error += " - IT IS NOW IN BOTH: TAKE IT OUT OF ONE";
+            BankDone(bank);
+            return false;
+        }
+        BankDone(bank);
+        return true;
+    }
     Save* both[2] = { &a, &b };
     for (Save* s : both)
         if (s->Changed())
@@ -546,13 +714,14 @@ bool Commit(Save& a, Save& b, std::string& error, std::vector<std::string>* back
 std::vector<Mon> Party(const Save& save)
 {
     std::vector<Mon> out;
+    if (save.IsBank()) return out;
     for (int slot = 0; slot < 6; slot++)
         if (auto pk = save.d->At(PARTY, slot)) out.push_back(MonOf(*pk, PARTY, slot));
     return out;
 }
 
 bool Free(const Save& save, int box, int slot) { return !save.d->At(box, slot); }
-bool PartyFull(const Save& save) { return (int)save.d->sav->partyCount() >= 6; }
+bool PartyFull(const Save& save) { return save.IsBank() || (int)save.d->sav->partyCount() >= 6; }
 
 Check CanMoveTo(const Save& from, int box, int slot, const Save& to, int toBox, int toSlot)
 {
@@ -579,6 +748,7 @@ Check CanSwap(const Save& a, int boxA, int slotA, const Save& b, int boxB, int s
 {
     Check c;
     if (&a == &b) { c.verdict = Verdict::Empty; c.reason = "CHOOSE TWO DIFFERENT GAMES"; return c; }
+    if (a.IsBank() || b.IsBank()) { c.verdict = Verdict::NotInGame; c.reason = "THE BANK DOES NOT TRADE: MOVE THEM ONE BY ONE"; return c; }
     auto pa = a.d->At(boxA, slotA), pb = b.d->At(boxB, slotB);
     if (!pa || !pb) { c.verdict = Verdict::Empty; c.reason = "CHOOSE A POKEMON IN EACH GAME"; return c; }
     Check ca, cb;
@@ -616,13 +786,41 @@ bool Swap(Save& a, int boxA, int slotA, Save& b, int boxB, int slotB, bool evolv
     return true;
 }
 
+std::string SpeciesNameOf(int species) { return species > 0 ? SpeciesName(species) : std::string(); }
+int GenerationOfSpecies(int n)
+{
+    return n <= 151 ? 1 : n <= 251 ? 2 : n <= 386 ? 3 : n <= 493 ? 4 : n <= 649 ? 5 : n <= 721 ? 6 : 7;
+}
+
+void AddToDex(const Save& save, std::vector<DexMark>& dex)
+{
+    if (dex.size() < (size_t)DEX_SPECIES + 1) dex.resize((size_t)DEX_SPECIES + 1);
+    const std::string name = save.GameName();
+    auto own = [&](const Mon& m) {
+        if (m.egg || m.species <= 0 || m.species > DEX_SPECIES) return;
+        DexMark& d = dex[(size_t)m.species];
+        d.owned++;
+        d.shiny = d.shiny || m.shiny;
+        if (std::find(d.where.begin(), d.where.end(), name) == d.where.end()) d.where.push_back(name);
+        // (Having one is having caught one, whatever a game's Pokédex says.)
+        d.state = std::max(d.state, 2);
+    };
+    for (int box = 0; box < save.Boxes(); box++)
+        for (const Mon& m : save.Box(box)) own(m);
+    for (const Mon& m : Party(save)) own(m);
+    if (save.IsBank()) return;
+    const int top = std::min<int>(DEX_SPECIES, (int)save.d->sav->maxSpecies());
+    for (int n = 1; n <= top; n++)
+        dex[(size_t)n].state = std::max(dex[(size_t)n].state, save.d->sav->dexState(pksm::Species{(u16)n}));
+}
+
 bool Pack(const Save& save, int box, int slot, Packed& out, std::string& error)
 {
     auto pk = save.d->At(box, slot);
     if (!pk) { error = "THERE IS NO POKEMON THERE"; return false; }
     auto bx = BoxForm(*pk);
     if (!bx) { error = "THIS POKEMON CANNOT BE SENT"; return false; }
-    out.generation = save.Generation();
+    out.generation = GenNumber(bx->generation());
     out.mon = MonOf(*bx, box, slot);
     out.game = save.GameName();
     bx->encrypt();
@@ -658,7 +856,7 @@ bool Receive(Save& to, const Packed& p, bool evolve, int tradedFor, std::string&
     auto pk = ArrivingPk(*src, p.generation, false, to, c, false, tradedFor);
     if (!pk) { error = c.reason; return false; }
     if (!Place(to, toBox, toSlot)) { error = "THERE IS NO ROOM THERE"; return false; }
-    if (evolve)
+    if (evolve && !to.IsBank())
         if (const TradeEvo* e = EvolutionFor(*pk, *to.d->sav, tradedFor)) Evolve(*pk, *e, to.Generation());
     pk->refreshChecksum();
     Put(to, *pk, toBox, toSlot);

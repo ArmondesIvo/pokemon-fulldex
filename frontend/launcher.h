@@ -2574,7 +2574,7 @@ inline std::string SettingSentence(const std::string& s); // (below: capitals ma
 const int HUB_FIRST = 1; // (Cloud Saves' first save row: after the account)
 // (The Hub's page: 0 its first, Cloud Saves and Move Pokémon to open; 1 Cloud Saves. Move Pokémon: Mover().open.)
 inline int& HubMode() { static int m = 0; return m; }
-struct MoverGame { std::string name, path; bool hack; };
+struct MoverGame { std::string name, path; bool hack; bool bank = false; };
 struct MoverState
 {
     bool open = false;
@@ -2594,13 +2594,22 @@ struct MoverState
 #endif
 };
 inline MoverState& Mover() { static MoverState m; return m; }
+// (The Bank first, where Pokémon of every game are kept outside them: a folder beside the saves.)
+inline std::string BankDir() { return HubDir() + "/bank"; }
 inline std::vector<MoverGame> MoverGames()
 {
     std::vector<MoverGame> r;
+#ifdef SSR_POKEMON_HUB
+    if (!HubDir().empty()) r.push_back({ "Bank", BankDir(), false, true });
+#endif
     for (const HubGame& g : HubGames()) if (g.g && g.g->hasSave) r.push_back({ g.name + (g.g->where.empty() ? std::string() : "  \xC2\xB7  " + WhereName(g.g->where)), g.path, IsHack(*g.g) });
     return r;
 }
 #ifdef SSR_POKEMON_HUB
+inline std::unique_ptr<PokemonHub::Save> OpenMoverGame(const MoverGame& g, std::string& err)
+{
+    return g.bank ? PokemonHub::Save::OpenBank(g.path, err) : PokemonHub::Save::Open(g.path, err, g.hack);
+}
 // (The two saves open as chosen: opened again after a move, or when the choice changes.)
 inline void MoverOpenSaves(bool again = false)
 {
@@ -2609,8 +2618,9 @@ inline void MoverOpenSaves(bool again = false)
     if (gs.empty()) { m.a.reset(); m.b.reset(); m.aPath.clear(); m.bPath.clear(); return; }
     m.from = std::max(0, std::min(m.from, (int)gs.size() - 1));
     m.to = std::max(0, std::min(m.to, (int)gs.size() - 1));
-    if (again || !m.a || m.aPath != gs[m.from].path) { m.aPath = gs[m.from].path; m.aErr.clear(); m.a = PokemonHub::Save::Open(m.aPath, m.aErr, gs[m.from].hack); }
-    if (again || !m.b || m.bPath != gs[m.to].path) { m.bPath = gs[m.to].path; m.bErr.clear(); m.b = PokemonHub::Save::Open(m.bPath, m.bErr, gs[m.to].hack); }
+    auto open = OpenMoverGame;
+    if (again || !m.a || m.aPath != gs[m.from].path) { m.aPath = gs[m.from].path; m.aErr.clear(); m.a = open(gs[m.from], m.aErr); }
+    if (again || !m.b || m.bPath != gs[m.to].path) { m.bPath = gs[m.to].path; m.bErr.clear(); m.b = open(gs[m.to], m.bErr); }
     if (m.a && m.box != PokemonHub::PARTY) m.box = std::max(0, std::min(m.box, m.a->Boxes() - 1));
     if (m.b && m.put >= 0) m.put = std::min(m.put, m.b->Boxes() - 1);
 }
@@ -2954,7 +2964,7 @@ inline void TradeOpenSave(bool again = false)
     const std::vector<MoverGame> gs = MoverGames();
     if (gs.empty()) { t.save.reset(); t.path.clear(); return; }
     t.game = std::max(0, std::min(t.game, (int)gs.size() - 1));
-    if (again || !t.save || t.path != gs[t.game].path) { t.path = gs[t.game].path; t.err.clear(); t.save = PokemonHub::Save::Open(t.path, t.err, gs[t.game].hack); }
+    if (again || !t.save || t.path != gs[t.game].path) { t.path = gs[t.game].path; t.err.clear(); t.save = OpenMoverGame(gs[t.game], t.err); }
     if (t.save && t.box != PokemonHub::PARTY) t.box = std::max(0, std::min(t.box, t.save->Boxes() - 1));
 }
 inline std::vector<PokemonHub::Mon> TradeList() { TradeOpenSave(); return MonsIn(Trade().save.get(), Trade().box); }
@@ -3150,6 +3160,74 @@ inline std::string TradeDo(int row, int act)
 #endif
     return "";
 }
+// POKEDEX (the Hub's fifth row): every species, and how the player stands with it across all their
+// games and the Bank together (pokemon_hub.h, AddToDex), as PKVault's Pokédex. Row 0 chooses which
+// are listed; then one row a species.
+const int DEX_FIRST = 1;
+struct DexState
+{
+    bool loaded = false;
+    int filter = 0, games = 0;
+#ifdef SSR_POKEMON_HUB
+    std::vector<PokemonHub::DexMark> marks;
+#endif
+    std::vector<int> list;
+};
+inline DexState& Dex() { static DexState d; return d; }
+inline const char* DexFilterName(int f) { return f == 1 ? "Caught" : f == 2 ? "Missing" : f == 3 ? "Have Now" : f == 4 ? "Shiny" : "All"; }
+inline void DexLoad(bool again = false)
+{
+    DexState& d = Dex();
+    if (d.loaded && !again) return;
+    d.loaded = true;
+    d.list.clear();
+#ifdef SSR_POKEMON_HUB
+    d.marks.clear();
+    d.games = 0;
+    for (const MoverGame& g : MoverGames())
+    {
+        std::string err;
+        if (auto sv = OpenMoverGame(g, err))
+        {
+            PokemonHub::AddToDex(*sv, d.marks);
+            d.games += !g.bank;
+        }
+    }
+    d.marks.resize((size_t)PokemonHub::DEX_SPECIES + 1);
+    // (The five generations Fulldex plays, and any later species the player has.)
+    int last = 649;
+    for (int n = 650; n <= PokemonHub::DEX_SPECIES; n++) if (d.marks[(size_t)n].state) last = n;
+    for (int n = 1; n <= last; n++)
+    {
+        const PokemonHub::DexMark& k = d.marks[(size_t)n];
+        const bool in = d.filter == 1 ? k.state == 2 : d.filter == 2 ? k.state < 2 : d.filter == 3 ? k.owned > 0 : d.filter == 4 ? k.shiny : true;
+        if (in) d.list.push_back(n);
+    }
+#endif
+}
+inline void DexShow()
+{
+    HubMode() = 4;
+    Dex().loaded = false;
+    Hub().version++;
+}
+inline int DexRows() { DexLoad(); return DEX_FIRST + (int)Dex().list.size(); }
+inline std::vector<std::string> DexActions(int row)
+{
+    if (row == 0) return { "All", "Caught", "Missing", "Have Now", "Shiny" };
+    return {};
+}
+inline std::string DexDo(int row, int act)
+{
+    if (row == 0 && act >= 0 && act <= 4)
+    {
+        Dex().filter = act;
+        DexLoad(true);
+        Focus().rScroll = 0;
+        Hub().version++;
+    }
+    return "";
+}
 inline void MoverShow(bool open)
 {
     MoverState& m = Mover();
@@ -3196,6 +3274,7 @@ inline bool HubEnter(int row)
     if (row == 0) { HubMode() = 1; F.prow = 0; }
     else if (row == 2) { HubMode() = 2; F.prow = 2; }
     else if (row == 3) return false; // (Discord: a link, nothing to open here)
+    else if (row == 4) { DexShow(); F.prow = DEX_FIRST; }
     else { MoverShow(true); F.prow = MOVER_FIRST; }
     F.pact = -1; F.rScroll = 0;
     Hub().version++;
@@ -4276,11 +4355,12 @@ inline int ThemePick(const std::string& pick)
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
 static const char* const kReleasesUrl = "https://github.com/mamesj/pokemon-fulldex/releases";
-inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 4 : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
+inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 5 : HubMode() == 4 ? DexRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
     if (Mover().open) return MoverActions(row);
     if (HubMode() == 2) return TradeActions(row);
+    if (HubMode() == 4) return DexActions(row);
     if (HubMode() == 3) return SavesDs() ? std::vector<std::string>(10, "Slot") : std::vector<std::string>(); // (Manage Saves: its slots)
     if (HubMode() == 0) return {};
     HubLoad();
@@ -4397,6 +4477,7 @@ inline std::string HubDo(int row, int act)
 {
     if (Mover().open) return MoverDo(row, act);
     if (HubMode() == 2) return TradeDo(row, act);
+    if (HubMode() == 4) return DexDo(row, act);
     if (HubMode() == 3) return SavesSlotDo(act);
     const std::vector<std::string> acts = HubActions(row);
     if (act < 0 || act >= (int)acts.size()) return "";
@@ -4638,6 +4719,7 @@ inline bool PageBack()
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 4) { HubMode() = 0; F.prow = 4; F.rScroll = 0; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() != 0) { HubMode() = 0; F.prow = 0; F.rScroll = 0; Hub().version++; return true; }
     if ((F.page == SIDE_ROMS || F.page == SIDE_HUB) && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
     if (TilesOn()) { const int pg = F.page; F.page = -1; F.side = pg; return true; } // (the window closed: back on the tile that opened it)
@@ -4835,7 +4917,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const int barH = portP ? (int)(44 * u) : sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)((portP ? 10 : 18) * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : PhoneLook() && c.h > c.w && sp.navY > 0 ? sp.navY - (int)(12 * u) : c.h - (int)((ShortNow() ? 14 : 64) * u); // (a phone sideways: the panels run to the foot of the screen, the back button is in the bar)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
-    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("Fulldex   \xC2\xB7   ") + PlatformLabel();
     if (!ShortNow() && !portP) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -5800,6 +5882,131 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         return;
     }
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 3) { DrawSavesPage(c, solid, u, L, R, top, bottom); return; } // (Manage Saves)
+    if (F.page == SIDE_HUB && !Mover().open && HubMode() == 4)
+    {
+        // The Pokédex: the filter, then a row a species; the chosen one's standing beside them.
+        DexState& d = Dex();
+        DexLoad();
+        const std::vector<std::string> acts = HubActions(F.prow);
+        const uint32_t okCol = 0xFF8FE3A2u, seenCol = 0xFF8CC8FFu, noCol = 0xFFAEB7C4u, shinyCol = 0xFFF2C46Bu;
+        const int n = DexRows();
+        const bool stkP = PhoneLook() && c.h > c.w; const int rw = stkP ? R - L : (int)(360 * u), gap = (int)(18 * u), lw2 = stkP ? R - L : R - L - rw - gap, lhP = stkP ? (int)((bottom - top) * 0.55f) : bottom - top, dTopP = stkP ? top + lhP + gap : top, dHP = stkP ? bottom - dTopP : bottom - top, pad = (int)(12 * u);
+        const int rowH = (int)(46 * u), rg = (int)(6 * u);
+        Menu::FrostBox(c, solid, L, top, lw2, lhP, 18 * u);
+        const int vis = std::max(1, (lhP - 2 * pad + rg) / (rowH + rg));
+        F.prow = std::max(0, std::min(F.prow, n - 1));
+        if (F.pact >= (int)acts.size()) F.pact = acts.empty() ? -1 : (int)acts.size() - 1;
+        if (!F.freeScroll) { if (F.prow < F.rScroll) F.rScroll = F.prow; if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1; }
+        F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
+        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
+        int caught = 0, seen = 0, have = 0, shinies = 0;
+#ifdef SSR_POKEMON_HUB
+        for (size_t k = 1; k < d.marks.size() && k <= 649; k++) { caught += d.marks[k].state == 2; seen += d.marks[k].state >= 1; have += d.marks[k].owned > 0; shinies += d.marks[k].shiny; }
+#endif
+        auto numText = [](int sp) { char b[8]; snprintf(b, sizeof b, "#%03d", sp); return std::string(b); };
+        for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
+        {
+            const int rx = L + pad, ry = top + pad + (i - F.rScroll) * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
+            if (i == F.prow)
+            {
+                if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
+                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
+            }
+            std::string k, v, chip;
+            uint32_t chipCol = hint;
+            if (i == 0)
+            {
+                Glass::DrawIcon(c, Glass::I_GRID, rx + 18 * u, mid, 9 * u, text);
+                k = "Show";
+                v = DexFilterName(d.filter);
+                chip = std::to_string(caught) + " of 649 Caught";
+                chipCol = okCol;
+            }
+#ifdef SSR_POKEMON_HUB
+            else
+            {
+                const int sp = d.list[(size_t)(i - DEX_FIRST)];
+                const PokemonHub::DexMark& mk = d.marks[(size_t)sp];
+                std::vector<uint32_t> ic;
+                if (mk.state && MonIcon(sp, false, ic)) DrawMonIcon(c, ic, rx + (int)(2 * u), mid - (int)(21 * u), (int)(40 * u));
+                else Glass::Round(c, rx + (int)(14 * u), mid - (int)(4 * u), (int)(8 * u), (int)(8 * u), 4 * u, noCol);
+                if (mk.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, rx + 38 * u, mid - 12 * u, 6 * u, shinyCol);
+                k = numText(sp);
+                v = mk.state ? MonName(PokemonHub::SpeciesNameOf(sp)) : std::string("???");
+                chip = mk.owned > 0 ? "Have " + std::to_string(mk.owned) : mk.state == 2 ? "Caught" : mk.state == 1 ? "Seen" : "Missing";
+                chipCol = mk.owned > 0 || mk.state == 2 ? okCol : mk.state == 1 ? seenCol : noCol;
+            }
+#endif
+            if (!chip.empty())
+            {
+                const int chipW = GW(chip, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(10 * u) - chipW;
+                Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
+                GT(c, chipX + (int)(10 * u), mid, chip, 12 * u, chipCol, true);
+            }
+            GT(c, rx + (int)(48 * u), mid, k, 13 * u, hint, true);
+            GT(c, rx + (int)(108 * u), mid, v, 16 * u, text, true);
+        }
+        if (n > vis)
+        {
+            const int tx = L + lw2 - (int)(7 * u), ty = top + (int)(16 * u), th = lhP - (int)(32 * u);
+            Glass::Round(c, tx, ty, (int)(3 * u), th, 1.5f * u, 0x26FFFFFFu);
+            const int thumbH = std::max((int)(24 * u), th * vis / n), thumbY = ty + (th - thumbH) * F.rScroll / std::max(1, n - vis);
+            Glass::Round(c, tx, thumbY, (int)(3 * u), thumbH, 1.5f * u, 0xCCFFFFFFu);
+        }
+        // The chosen row.
+        const int dx = stkP ? L : R - rw, ix = dx + (int)(20 * u), iw = rw - (int)(40 * u);
+        Menu::FrostBox(c, solid, dx, dTopP, rw, dHP, 18 * u);
+        static int dKey = -1; { const int nk = F.page * 100000 + F.prow * 100 + LauncherMode() * 10 + HubMode() + (Look().edit + 1) * 10000000; if (nk != dKey) { dKey = nk; F.dScroll = 0; } }
+        F.dScroll = std::min(F.dScroll, F.dMax); TextLow() = 0; F.pdY = stkP ? dTopP : 0;
+        const int dTopC = dTopP - (stkP ? F.dScroll : 0);
+        ClipGuard clipG(c, F, stkP ? dTopP : 0, stkP ? bottom : c.h, (int)(16 * u));
+        int y = dTopC + (int)(20 * u);
+        auto para = [&](const std::string& s2, uint32_t col, float px) {
+            for (const std::string& line : WrapLines(s2, px, iw)) { GT(c, ix, y + px * 0.6f, line, px, col, false); y += (int)(px * 1.45f); }
+            y += (int)(8 * u);
+        };
+        auto cell = [&](int cx, int cy, const std::string& k2, const std::string& v2, uint32_t col) {
+            GT(c, cx, cy + 8 * u, k2, 12 * u, hint, true);
+            GT(c, cx, cy + 28 * u, v2, 15 * u, col, true);
+        };
+        if (F.prow == 0)
+        {
+            GT(c, ix, y + 14 * u, "Your Pok\xC3\xA9" "dex", 22 * u, text, true);
+            y += (int)(48 * u);
+            cell(ix, y, "Caught", std::to_string(caught) + " of 649", okCol);
+            cell(ix + iw / 2, y, "Seen", std::to_string(seen), seenCol);
+            y += (int)(56 * u);
+            cell(ix, y, "With You Now", std::to_string(have) + " Species", text);
+            cell(ix + iw / 2, y, "Shiny", std::to_string(shinies), shinyCol);
+            y += (int)(60 * u);
+            para("From " + std::to_string(d.games) + (d.games == 1 ? " game" : " games") + " and the Bank. Caught: in any game's Pok\xC3\xA9" "dex, or one you have. Choose what to show: All, Caught, Missing, Have Now or Shiny.", hint, 13 * u);
+        }
+#ifdef SSR_POKEMON_HUB
+        else if (F.prow - DEX_FIRST < (int)d.list.size())
+        {
+            const int sp = d.list[(size_t)(F.prow - DEX_FIRST)];
+            const PokemonHub::DexMark& mk = d.marks[(size_t)sp];
+            std::vector<uint32_t> big;
+            const int bs = (int)(96 * u);
+            if (mk.state && MonIcon(sp, false, big)) DrawMonIcon(c, big, ix + iw - bs, y - (int)(18 * u), bs);
+            GT(c, ix, y + 14 * u, mk.state ? MonName(PokemonHub::SpeciesNameOf(sp)) : std::string("???"), 22 * u, text, true);
+            GT(c, ix, y + 42 * u, numText(sp) + "   \xC2\xB7   Generation " + std::to_string(PokemonHub::GenerationOfSpecies(sp)), 14 * u, hint, true);
+            y += (int)(72 * u);
+            cell(ix, y, "Pok\xC3\xA9" "dex", mk.state == 2 ? "Caught" : mk.state == 1 ? "Seen" : "Not Seen", mk.state == 2 ? okCol : mk.state == 1 ? seenCol : noCol);
+            cell(ix + iw / 2, y, "You Have", std::to_string(mk.owned) + (mk.shiny ? "  (Shiny)" : ""), mk.shiny ? shinyCol : text);
+            y += (int)(60 * u);
+            if (!mk.where.empty())
+            {
+                std::string w;
+                for (const std::string& g : mk.where) w += (w.empty() ? "" : ", ") + g;
+                para("In " + w + ".", text, 14 * u);
+            }
+            else if (mk.state < 2) para("Not caught in any of your games yet.", hint, 13 * u);
+            else para("Caught in a game's Pok\xC3\xA9" "dex, but none is in your boxes, parties or the Bank now.", hint, 13 * u);
+        }
+#endif
+        return;
+    }
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 0)
     {
         // The Hub's first page: what it holds, each opened with A.
@@ -5820,7 +6027,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         lk.unlock();
         const int moverGames = (int)MoverGames().size();
         const bool stkP = PhoneLook() && c.h > c.w; const int rw = stkP ? R - L : (int)(400 * u), gap = (int)(18 * u), lw2 = stkP ? R - L : R - L - rw - gap, lhP = stkP ? (int)((bottom - top) * 0.55f) : bottom - top, dTopP = stkP ? top + lhP + gap : top, dHP = stkP ? bottom - dTopP : bottom - top, pad = (int)(14 * u);
-        const int rowH = (int)(72 * u), rg = (int)(10 * u), n = 4;
+        const int n = 5, rg = (int)(10 * u), rowH = std::min((int)(72 * u), std::max((int)(52 * u), (lhP - 2 * pad - (n - 1) * rg) / n));
         const HubLink::Status link = HubLink::Snapshot();
         Menu::FrostBox(c, solid, L, top, lw2, lhP, 18 * u);
         F.prow = std::max(0, std::min(F.prow, n - 1));
@@ -5856,6 +6063,12 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 st = link.state == HubLink::State::Linked ? "Linked" : link.state == HubLink::State::Online ? "Online" : link.state == HubLink::State::Hosting ? "Room Open" : link.state == HubLink::State::Browsing ? "Looking" : "Same Wi-Fi";
                 if (link.state != HubLink::State::Off) col = 0xFF8CC8FFu;
             }
+            else if (i == 4)
+            {
+                name = "Pok\xC3\xA9" "dex";
+                sub = "Every species across your games and the Bank: caught, missing, shiny";
+                st = std::to_string(moverGames) + (moverGames == 1 ? " Save" : " Saves");
+            }
             else if (i == 3)
             {
                 name = "Fulldex Discord";
@@ -5866,10 +6079,10 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             else
             {
                 name = "Move Pok\xC3\xA9mon";
-                sub = "Between your own games, as a trade would";
+                sub = "Between your own games and the Bank, as a trade would";
                 st = std::to_string(moverGames) + (moverGames == 1 ? " Save" : " Saves");
             }
-            Glass::DrawIcon(c, i == 0 ? Glass::I_GLOBE : i == 2 ? Glass::I_PEOPLE : i == 3 ? Glass::I_CHAT : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
+            Glass::DrawIcon(c, i == 0 ? Glass::I_GLOBE : i == 2 ? Glass::I_PEOPLE : i == 3 ? Glass::I_CHAT : i == 4 ? Glass::I_GRID : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
             GT(c, rx + (int)(60 * u), mid - 11 * u, name, 18 * u, text, true);
             const int chipW = GW(st, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(46 * u) - chipW;
             GTFit(c, rx + (int)(60 * u), mid + 13 * u, sub, 13 * u, chipX - (rx + (int)(60 * u)) - (int)(12 * u), hint, false);
@@ -5894,7 +6107,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             GT(c, cx, cy + 28 * u, v, 15 * u, text, true);
             (void)cw;
         };
-        GT(c, ix, y + 14 * u, F.prow == 0 ? "Cloud Saves" : F.prow == 2 ? "Trade" : F.prow == 3 ? "Fulldex Discord" : "Move Pok\xC3\xA9mon", 22 * u, text, true);
+        GT(c, ix, y + 14 * u, F.prow == 0 ? "Cloud Saves" : F.prow == 2 ? "Trade" : F.prow == 3 ? "Fulldex Discord" : F.prow == 4 ? "Pok\xC3\xA9" "dex" : "Move Pok\xC3\xA9mon", 22 * u, text, true);
         y += (int)(44 * u);
         if (F.prow == 0)
         {
@@ -5942,6 +6155,11 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
 #endif
                  , hint, 13 * u);
 #endif
+        }
+        else if (F.prow == 4)
+        {
+            para("One Pok\xC3\xA9" "dex for all your games and the Bank: which species you have caught in any of them, which are still missing, how many you have now and where, and your shinies.", text, 14 * u);
+            para("Open it to go through every species, or only those caught, missing, with you now, or shiny.", hint, 13 * u);
         }
         else
         {
@@ -6087,6 +6305,15 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             GT(c, ix, y + 40 * u, fit(F.prow == 0 ? fromName : toName, 22 * u, true, iw), 22 * u, text, true);
             y += (int)(64 * u);
             if (!s) para("This save could not be read. " + (F.prow == 0 ? m.aErr : m.bErr), noCol, 13 * u);
+            else if (s->IsBank())
+            {
+                int kept = 0;
+                for (int bx = 0; bx < s->Boxes(); bx++) kept += (int)s->Box(bx).size();
+                cell(ix, y, iw / 2, "Pok\xC3\xA9mon Kept", std::to_string(kept));
+                cell(ix + iw / 2, y, iw / 2, "Boxes", std::to_string(s->Boxes()));
+                y += (int)(56 * u);
+                para("The Bank keeps Pok\xC3\xA9mon outside your games, each as it was in its own game (files PKHeX and PKVault read, in the bank folder beside your saves). One can come out to a game of its generation or a newer one.", hint, 13 * u);
+            }
             else
             {
                 cell(ix, y, iw / 2, "Trainer", Shown(s->Trainer(), "-"));

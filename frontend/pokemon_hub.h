@@ -23,6 +23,8 @@
 namespace PokemonHub
 {
 
+const int BANK_BOXES = 50;
+
 struct Mon
 {
     int box = -1, slot = -1;             // 0-based
@@ -31,6 +33,7 @@ struct Mon
     std::string speciesName;             // in English capitals: "SWAMPERT"
     bool shiny = false, egg = false;
     int heldItem = 0;
+    int generation = 0;                  // the format it is kept in (3 to 7)
 };
 
 class Save
@@ -39,6 +42,13 @@ public:
     ~Save();
     // romHack: the game is a ROM hack (Ultra Violet): read-only until its format is known.
     static std::unique_ptr<Save> Open(const std::string& path, std::string& error, bool romHack = false);
+    // The Bank: boxes of the player's own, outside every game, as PKVault and Pokémon Home keep.
+    // A folder of BANK_BOXES boxes (box-01 ... ), each Pokémon a file in its own game's format as
+    // PKHeX writes it (05.pk3, 12.pk5: its slot and generation), so PKHeX and PKVault read them too.
+    // A Pokémon goes in from any game as it is, and out to a game of its generation or a newer one
+    // (converted then, as the games did). No party, no trainer; Generation() 0.
+    static std::unique_ptr<Save> OpenBank(const std::string& folder, std::string& error);
+    bool IsBank() const;
     const std::string& Path() const;
     int Generation() const;              // 3 to 7
     std::string GameName() const;        // "HeartGold / SoulSilver", "Black 2", "Omega Ruby"
@@ -79,6 +89,22 @@ struct Check
     int evolvesTo = 0;                   // a trade evolution it could take (0: none)
     std::string evolution;               // "KADABRA WILL EVOLVE INTO ALAKAZAM"
 };
+
+// The Pokédex of all the player's games and the Bank together (as PKVault's): for each species
+// (index = National Dex number, 0 unused), the most any game has (0 not seen, 1 seen, 2 caught by
+// its Pokédex), how many the player has now in boxes, parties and the Bank, and a shiny among them.
+struct DexMark
+{
+    int state = 0;
+    int owned = 0;
+    bool shiny = false;
+    std::vector<std::string> where;      // the games (and "Bank") that have one now
+};
+const int DEX_SPECIES = 809;             // up to the 7th generation's last
+// Adds a save's (or the Bank's) Pokédex and Pokémon to dex (sized DEX_SPECIES + 1 when empty).
+void AddToDex(const Save& save, std::vector<DexMark>& dex);
+std::string SpeciesNameOf(int species);  // "BULBASAUR"
+int GenerationOfSpecies(int species);    // 1 to 7
 
 // What would happen if the Pokémon at from's box/slot went to `to`.
 Check CanMove(const Save& from, int box, int slot, const Save& to);

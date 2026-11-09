@@ -211,6 +211,8 @@ namespace pksm
         virtual void dex(const PKX& pk)                                       = 0;
         [[nodiscard]] virtual int dexSeen(void) const                         = 0;
         [[nodiscard]] virtual int dexCaught(void) const                       = 0;
+        // (Fulldex: one species' Pokédex entry, 0 not seen, 1 seen, 2 caught; 0 where not known.)
+        [[nodiscard]] virtual int dexState(Species) const { return 0; }
         [[nodiscard]] virtual int currentGiftAmount(void) const               = 0;
         [[nodiscard]] virtual std::unique_ptr<WCX> mysteryGift(int pos) const = 0;
         virtual void mysteryGift(const WCX& wc, int& pos)                     = 0;

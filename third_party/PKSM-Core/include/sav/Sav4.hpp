@@ -148,6 +148,7 @@ namespace pksm
         void dex(const PKX& pk) override;
         [[nodiscard]] int dexSeen(void) const override;
         [[nodiscard]] int dexCaught(void) const override;
+        [[nodiscard]] int dexState(Species s) const override;
         [[nodiscard]] int currentGiftAmount(void) const override;
         [[nodiscard]] bool giftsMenuActivated(void) const;
         void giftsMenuActivated(bool v);

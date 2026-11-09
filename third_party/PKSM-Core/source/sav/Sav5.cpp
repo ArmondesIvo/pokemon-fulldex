@@ -415,6 +415,18 @@ namespace pksm
         return ret;
     }
 
+    int Sav5::dexState(Species spec) const
+    {
+        // (As dexCaught and dexSeen: the caught flags, then the four seen ones, gender and shiny.)
+        const int i = u16(spec);
+        if (i < 1) return 0;
+        const int bitIndex = (i - 1) & 7;
+        if ((data[PokeDex + 0x8 + ((i - 1) >> 3)] >> bitIndex & 1) != 0) return 2;
+        for (int j = 0; j < 4; j++)
+            if ((data[PokeDex + (0x5C + (j * 0x54)) + ((i - 1) >> 3)] >> bitIndex & 1) != 0) return 1;
+        return 0;
+    }
+
     int Sav5::dexCaught(void) const
     {
         int ret = 0;

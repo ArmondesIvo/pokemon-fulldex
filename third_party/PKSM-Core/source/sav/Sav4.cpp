@@ -756,6 +756,16 @@ namespace pksm
         return ret;
     }
 
+    int Sav4::dexState(Species spec) const
+    {
+        // (As dexCaught and dexSeen above: caught flags, then the seen ones 0x40 on.)
+        const int bit = u16(spec) - 1, ofs = PokeDex + 0x4;
+        if (bit < 0) return 0;
+        if ((1 << (bit & 7)) & data[ofs + (bit >> 3)]) return 2;
+        if ((1 << (bit & 7)) & data[ofs + (bit >> 3) + 0x40]) return 1;
+        return 0;
+    }
+
     bool Sav4::checkInsertForm(SmallVector<u8, 0x20>& forms, u8 formNum)
     {
         SmallVector<u8, 0x20> dummy;
