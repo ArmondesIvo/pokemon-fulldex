@@ -309,13 +309,27 @@ inline void TradesSendJob(std::vector<std::tuple<std::string, int, int>> chosen,
         tm.place = TradeB64(std::get<0>(c) + "|" + std::to_string(std::get<1>(c)) + "|" + std::to_string(std::get<2>(c)));
         out.push_back(tm);
     }
-    // (Out of the saves, a save at a time, each backed up by Commit.)
+    // (Out of the saves, a save at a time, each backed up by Commit. Within a box, from its last
+    // place to its first: a Game Boy game's box is a list, the ones after a place taken move up
+    // one, so taken from the front the places still to take would point at others. Each is
+    // checked to be the one packed before it goes, and nothing is lost if one is not.)
+    std::vector<size_t> order(chosen.size());
+    for (size_t i = 0; i < order.size(); i++) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t x, size_t y) {
+        if (std::get<0>(chosen[x]) != std::get<0>(chosen[y])) return std::get<0>(chosen[x]) < std::get<0>(chosen[y]);
+        if (std::get<1>(chosen[x]) != std::get<1>(chosen[y])) return std::get<1>(chosen[x]) < std::get<1>(chosen[y]);
+        return std::get<2>(chosen[x]) > std::get<2>(chosen[y]);
+    });
     std::vector<size_t> taken;
     auto putBack = [&]() { std::string e; for (size_t i : taken) TradeStore(out[i], false, e); ImportedSaves()++; };
-    for (size_t i = 0; i < chosen.size(); i++)
+    for (size_t i : order)
     {
         std::unique_ptr<PokemonHub::Save> s = TradeOpen(std::get<0>(chosen[i]), err);
-        if (!s || !PokemonHub::Remove(*s, std::get<1>(chosen[i]), std::get<2>(chosen[i]), err) || !PokemonHub::Commit(*s, err)) { putBack(); say("Could not take it out of its save: " + err); return; }
+        PokemonHub::Packed here;
+        std::string e2;
+        if (!s || !PokemonHub::Pack(*s, std::get<1>(chosen[i]), std::get<2>(chosen[i]), here, e2) || here.data != out[i].p.data)
+        { putBack(); say("That Pok\xC3\xA9mon is not where it was any more: nothing was sent."); return; }
+        if (!PokemonHub::Remove(*s, std::get<1>(chosen[i]), std::get<2>(chosen[i]), err) || !PokemonHub::Commit(*s, err)) { putBack(); say("Could not take it out of its save: " + err); return; }
         taken.push_back(i);
     }
     std::string body = counterId.empty() ? "to\t" + to + "\n" : "pick\t" + std::to_string(want) + "\n";
