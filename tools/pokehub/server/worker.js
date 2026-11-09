@@ -7,6 +7,9 @@
 //   GET  /auth/callback?code=...&state=...             <- Google, -> a page that opens the app
 //   POST /auth/signout   (Authorization: Bearer <token>)  ends that session
 //   GET  /me             (Authorization: Bearer <token>)  {"email","name"}
+//   GET|PUT|DELETE /saves/<name>        a save of the signed-in player's (the app's cloud saves,
+//   GET|PUT|DELETE /saves/<name>.json   frontend/cloud_saves.cpp: the WebDAV way, by GET and PUT)
+//                  kept in the private R2 bucket SAVES, under users/<their Google id>/<name>.
 //
 // Settings: GOOGLE_CLIENT_ID (a variable) and GOOGLE_CLIENT_SECRET (a secret), a Google OAuth
 // client of the "Web application" kind whose redirect address is <this worker>/auth/callback.
@@ -22,6 +25,7 @@ export default {
       if (url.pathname === "/auth/callback" && request.method === "GET") return await callback(request, url, env);
       if (url.pathname === "/auth/signout" && request.method === "POST") return await signout(request, env);
       if (url.pathname === "/me" && request.method === "GET") return await me(request, env);
+      if (url.pathname.startsWith("/saves/")) return await saves(request, url, env);
       if (url.pathname === "/") return info("PokeHub", HOME);
       if (url.pathname === "/privacy") return info("PokeHub: Privacidade", PRIVACY);
       return text("Not found", 404);
@@ -182,4 +186,34 @@ async function me(request, env) {
   const s = await session(request, env);
   if (!s) return json({ error: "not signed in" }, 401);
   return json({ email: s.email, name: s.name });
+}
+
+// The cloud saves: only the signed-in player's own, by name (a save file, and its description).
+const SAVE_MAX = 8 << 20; // (the largest save of a DS game is 512 KB; room for any, and no more)
+async function saves(request, url, env) {
+  const s = await session(request, env);
+  if (!s) return json({ error: "not signed in" }, 401);
+  let name;
+  try { name = decodeURIComponent(url.pathname.slice("/saves/".length)); } catch { return json({ error: "bad name" }, 400); }
+  // (A plain file name: never a path, so one player's key can never reach another's.)
+  if (!/^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,150}$/.test(name) || name.includes("..")) return json({ error: "bad name" }, 400);
+  const key = `users/${s.id}/${name}`;
+  if (request.method === "GET") {
+    const obj = await env.SAVES.get(key);
+    if (!obj) return json({ error: "no such save" }, 404);
+    return new Response(obj.body, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store" } });
+  }
+  if (request.method === "PUT") {
+    const len = Number(request.headers.get("content-length") || "0");
+    if (len > SAVE_MAX) return json({ error: "too large" }, 413);
+    const data = await request.arrayBuffer();
+    if (data.byteLength > SAVE_MAX) return json({ error: "too large" }, 413);
+    await env.SAVES.put(key, data);
+    return json({ ok: true }, 201);
+  }
+  if (request.method === "DELETE") {
+    await env.SAVES.delete(key);
+    return json({ ok: true });
+  }
+  return json({ error: "method" }, 405);
 }

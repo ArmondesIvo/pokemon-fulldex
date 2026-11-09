@@ -46,11 +46,17 @@ workers_dev = true
 [vars]
 GOOGLE_CLIENT_ID = "$GOOGLE_ID"
 
+[[r2_buckets]]
+binding = "SAVES"
+bucket_name = "pokehub-saves"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "pokehub"
 database_id = "$DB_ID"
 EOF
+# The saves' bucket: private (no public address, unlike the updates' one), made the first time.
+"${W[@]}" r2 bucket list 2>/dev/null | grep -q "name: *pokehub-saves$" || { echo "Making the bucket pokehub-saves..."; "${W[@]}" r2 bucket create pokehub-saves >/dev/null; }
 echo "Tables (made if missing)..."
 (cd "$WORK" && "${W[@]}" d1 execute pokehub --remote --file "$HERE/schema.sql" >/dev/null)
 echo "Deploying..."
