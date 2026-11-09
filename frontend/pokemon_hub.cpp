@@ -924,11 +924,42 @@ bool Swap(Save& a, int boxA, int slotA, Save& b, int boxB, int slotB, bool evolv
     return true;
 }
 
+namespace
+{
+// The game a Pokémon came from, by its origin (as a Gen 3 on game keeps it); "" when it has none.
+std::string OriginName(const pksm::PKX& pk)
+{
+    if (GenNumber(pk.generation()) <= 2) return "";
+    const int v = (int)(u8)pk.version();
+    static const std::pair<int, const char*> names[] = {
+        { 1, "Sapphire" }, { 2, "Ruby" }, { 3, "Emerald" }, { 4, "FireRed" }, { 5, "LeafGreen" }, { 15, "Colosseum / XD" },
+        { 10, "Diamond" }, { 11, "Pearl" }, { 12, "Platinum" }, { 7, "HeartGold" }, { 8, "SoulSilver" },
+        { 20, "White" }, { 21, "Black" }, { 22, "White 2" }, { 23, "Black 2" },
+        { 24, "X" }, { 25, "Y" }, { 26, "Alpha Sapphire" }, { 27, "Omega Ruby" },
+        { 30, "Sun" }, { 31, "Moon" }, { 32, "Ultra Sun" }, { 33, "Ultra Moon" }, { 34, "GO" },
+        { 35, "Red" }, { 36, "Green" }, { 37, "Blue" }, { 38, "Yellow" }, { 39, "Gold" }, { 40, "Silver" }, { 41, "Crystal" } };
+    for (const auto& n : names) if (n.first == v) return n.second;
+    return "";
+}
+void DetailOf(const pksm::PKX& source, int box, int slot, MonDetail& out);
+}
+
 bool Detail(const Save& save, int box, int slot, MonDetail& out)
 {
     auto pk = save.d->At(box, slot);
     if (!pk) return false;
+    DetailOf(*pk, box, slot, out);
+    return true;
+}
+
+namespace
+{
+void DetailOf(const pksm::PKX& source, int box, int slot, MonDetail& out)
+{
+    auto copy = source.clone(); // (its stats worked out on a copy: the original stays as it is)
+    pksm::PKX* pk = copy.get();
     out = MonDetail();
+    out.origin = OriginName(source);
     out.mon = MonOf(*pk, box, slot);
     const int g = GenNumber(pk->generation());
     auto type = [](pksm::Type t) { return Upper(i18n::type(pksm::Language::ENG, t)); };
@@ -958,7 +989,7 @@ bool Detail(const Save& save, int box, int slot, MonDetail& out)
         out.ivs[i] = pk->iv(st[i]);
         out.evs[i] = pk->ev(st[i]);
     }
-    return true;
+}
 }
 
 bool SetEvs(Save& save, int box, int slot, const int evs[6], std::string& error)
@@ -1101,6 +1132,27 @@ bool Receive(Save& to, const Packed& p, bool evolve, int tradedFor, std::string&
         if (const TradeEvo* e = EvolutionFor(*pk, *to.d->sav, tradedFor)) Evolve(*pk, *e, to.Generation());
     pk->refreshChecksum();
     Put(to, *pk, toBox, toSlot);
+    return true;
+}
+
+bool PackedFrom(int generation, const std::vector<uint8_t>& data, Packed& out)
+{
+    Packed p;
+    p.generation = generation;
+    p.data = data;
+    auto pk = Unpack(p);
+    if (!pk || (int)pk->species() == 0) return false;
+    p.mon = MonOf(*pk, -1, -1);
+    p.game = OriginName(*pk);
+    out = std::move(p);
+    return true;
+}
+bool PackedDetail(const Packed& p, MonDetail& out)
+{
+    auto pk = Unpack(p);
+    if (!pk) return false;
+    DetailOf(*pk, -1, -1, out);
+    if (out.origin.empty() && p.game != "Bank") out.origin = p.game;
     return true;
 }
 

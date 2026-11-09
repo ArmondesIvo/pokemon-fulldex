@@ -4357,6 +4357,53 @@ Open Android's Page	Abrir A Tela Do Android
 Android needs your permission, once, for PokeHub to install its updates. On the next page turn on Allow From This Source, then come back and choose Update again.	O Android precisa da sua permissão, uma vez só, para o PokeHub instalar as atualizações. Na próxima tela ligue Permitir Desta Fonte, volte e escolha Atualizar de novo.
 Synced. {} sent up.	Sincronizado. {} enviados.
 Synced. Everything was already up to date.	Sincronizado. Tudo já estava em dia.
+Trades	Trocas
++ New Trade	+ Nova Troca
+New Trade	Nova Troca
+Who do you want to trade with?	Com quem você quer trocar?
+No one else uses PokeHub yet.	Ninguém mais usa o PokeHub ainda.
+Looking...	Procurando...
+No trades yet. Start one with New Trade.	Nenhuma troca ainda. Comece uma em Nova Troca.
+Trade your Pokémon with other PokeHub players: choose up to 6 to offer, they choose one and offer as many of theirs, you take one.	Troque seus Pokémon com outros jogadores do PokeHub: escolha até 6 para oferecer, a pessoa escolhe um e oferece a mesma quantidade dos dela, e você fica com um.
+Trade with	Troca com
+Your turn:	Sua vez:
+offers	oferece
+Your turn: choose one of theirs	Sua vez: escolha um dos dela
+Waiting for	Esperando
+to choose	escolher
+Finishing...	Finalizando...
+You offer	Você oferece
+They want	Ele quer
+Taken	Escolhido
+Tap a Pokémon to see it.	Toque num Pokémon para ver.
+I Want This One	Quero Este
+Decline	Recusar
+Trade	Trocar
+Cancel Trade	Cancelar Troca
+Origin	Origem
+Send	Enviar
+Cancel	Cancelar
+Chosen	Escolhidos
+Choose up to 6 to offer	Escolha até 6 para oferecer
+Choose	Escolha
+for	para
+Put it in a box first: one in the party cannot go on a trade.	Coloque numa caixa primeiro: Pokémon da equipe não vai para troca.
+An egg cannot go on a trade.	Ovo não vai para troca.
+That is {#} already: tap one to take it off first.	Já são {}: toque num para tirar antes.
+Sending...	Enviando...
+Sending	Enviando
+Trading...	Trocando...
+Calling it off...	Cancelando...
+Sent. You will see here when they answer.	Enviado. Você vê aqui quando a pessoa responder.
+Sent. Now they choose one of yours.	Enviado. Agora a pessoa escolhe um dos seus.
+Trade called off. Your Pokémon are back.	Troca cancelada. Seus Pokémon voltaram.
+Trade complete!	Troca concluída!
+went to	foi para
+You got	Você recebeu
+It is in your Bank.	Ele está no seu Banco.
+Sign in first (the figure at the top).	Entre primeiro (o bonequinho no topo).
+Save or Undo All in My PC first.	Salve ou desfaça tudo no My PC antes.
+No connection to PokeHub's server.	Sem conexão com o servidor do PokeHub.
 )FDXLANG";
 inline const char* LauncherLangData(const char* code)
 {

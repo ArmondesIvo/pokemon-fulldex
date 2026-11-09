@@ -3,6 +3,12 @@
 
 ## Unreleased
 
+- **Online trades.** A bell beside the account figure (a red dot when one waits on you). Choose up to 6
+  of yours in My PC and a player; they choose the one they want and put as many of theirs on the
+  table; you take one. Either can call it off. Each Pokémon is shown with its origin, level, nature,
+  stats, IVs and EVs and moves. What is on the table leaves its save meanwhile, so nothing is ever in
+  two places; at the end the one you got is in the Bank, your others back where they were, with a
+  trade scene (for the other player, at their next start).
 - **The update's download in PokeHub's look,** with how far it has got, and Android's permission to
   install asked there too. **The account window shows the cloud saves** (on or off) and turns them on
   or off.

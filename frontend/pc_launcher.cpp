@@ -1365,6 +1365,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (onTabs && F.onSort && F.tool == 1 && !Launcher::TabHidden().empty()) { Launcher::OpenPlusMenu(); return; } // (+: new, or one hidden shown)
 #ifdef __ANDROID__
             if (onTabs && F.onSort && F.tool == 3) { Launcher::OpenAccountAsk(); return; } // (PokeHub: the account, in Sort's place)
+            if (onTabs && F.onSort && F.tool == 2) { Launcher::OpenTrades(); return; } // (the bell: online trades)
 #endif
             if (onTabs && F.onSort && F.tool != 3)
             {
@@ -1786,6 +1787,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             if (pick == "#update") { JavaVoid("updateInstall"); UpdateWatch() = true; Launcher::OpenUpdateAsk("DOWNLOADING"); return; } // (PokeHub Update: yes, and its download shown)
             if (pick == "#updperm") JavaVoid("updatePermission");
             if (pick == "#cloudon" || pick == "#cloudoff") { Launcher::HubCloudSwitch(pick == "#cloudon"); Launcher::OpenAccountAsk(); return; }
+            if (pick.rfind("#tradeto:", 0) == 0) { Launcher::TradesStartNew(pick.substr(9)); return; } // (New Trade: the player chosen)
             if (pick == "#signin")
             {
                 // (Your Account: to Google, in the browser; not yet when this build has no server.)
@@ -1952,8 +1954,9 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 appBackgrounded = false;
 #ifdef __ANDROID__
                 // (Back to the list from the background, as a phone's apps mostly are: PokeHub's
-                // updates looked for again, each time.)
+                // updates looked for again, each time; and the trades.)
                 JavaVoid("checkUpdatesQuiet");
+                Launcher::TradesFetch();
 #endif
             }
             if (e.type == SDL_RENDER_DEVICE_RESET || e.type == SDL_RENDER_TARGETS_RESET || e.type == SDL_APP_DIDENTERFOREGROUND)
@@ -2430,6 +2433,23 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     }
                     else if (e.type == SDL_MOUSEBUTTONUP && dOn) { dOn = false; if (dDrag) { dDrag = false; dragging = pressed = false; break; } }
                 }
+                // A done trade's scene: a tap closes it.
+                if (Launcher::Glassy(canvas) && Launcher::TradeAnimOn() && (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION))
+                {
+                    if (e.type == SDL_MOUSEBUTTONUP) Launcher::TradeAnimClose();
+                    dragging = pressed = false;
+                    break;
+                }
+#ifdef SSR_POKEMON_HUB
+                // TRADES: its own taps.
+                if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_HUB && Launcher::HubMode() == 8 && !Launcher::Mover().open && Launcher::Focus().dialog == 0
+                    && (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONUP) && !(e.type == SDL_MOUSEBUTTONUP && Launcher::BackAt(mx, my)))
+                {
+                    if (e.type == SDL_MOUSEBUTTONUP) Launcher::TradesPointer(2, mx, my);
+                    dragging = pressed = false;
+                    break;
+                }
+#endif
                 // MY PC: its own taps and drags (a Pokémon carried to a free place); the back arrow still Esc.
                 if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_HUB && Launcher::HubMode() == 6 && Launcher::Focus().dialog == 0
                     && (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONUP) && !(e.type == SDL_MOUSEBUTTONUP && Launcher::BackAt(mx, my)))
@@ -2739,7 +2759,11 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             {
                 lastOffer = SDL_GetTicks();
                 // (Who is signed in, as the Java side has it: after the browser brings a sign-in back.)
+                const bool wasIn = Launcher::Account().signedIn;
                 Launcher::AccountFrom(JavaString("accountInfo"));
+                // (Online trades looked at now and then, and as soon as the player signs in.)
+                static Uint32 lastTrades = 0;
+                if (Launcher::Account().signedIn && (!wasIn || lastTrades == 0 || SDL_GetTicks() - lastTrades > 30000)) { lastTrades = SDL_GetTicks(); Launcher::TradesFetch(); }
                 { const std::string sess = JavaString("accountSession"); std::lock_guard<std::mutex> l(PokeHubSessionLock()); PokeHubSessionNow() = sess; }
                 const std::string offer = JavaString("updateOffer");
                 if (!offer.empty()) { Launcher::OpenUpdateAsk(offer); fprintf(stderr, "[launcher] update offer: %s\n", offer.substr(0, 40).c_str()); }

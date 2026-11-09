@@ -120,6 +120,7 @@ struct MonDetail
 {
     Mon mon;
     std::string type1, type2, nature, ability, item, ball, ot, gender; // gender "M", "F" or ""
+    std::string origin;                  // the game it came from ("FireRed"), "" when not kept
     int tid = 0, metLevel = 0;
     std::string moves[4];
     int stats[6] = {}, ivs[6] = {}, evs[6] = {}; // HP, Attack, Defense, Speed, Sp. Atk, Sp. Def
@@ -190,5 +191,8 @@ bool Receive(Save& to, const Packed& p, bool evolve, int tradedFor, std::string&
 // Takes it out (once the other side has it). Not the last Pokémon of the party.
 Check CanRemove(const Save& save, int box, int slot);
 bool Remove(Save& save, int box, int slot, std::string& error);
+// A Pokémon from its bytes as Pack made them (an online trade's): what it is, and its details.
+bool PackedFrom(int generation, const std::vector<uint8_t>& data, Packed& out);
+bool PackedDetail(const Packed& p, MonDetail& out);
 
 }
