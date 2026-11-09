@@ -3,6 +3,8 @@
 
 ## Unreleased
 
+- **The Hub is back, with three things only:** Cloud Saves, Trade and Themes (Theme Editor, My Themes,
+  Theme Gallery, and the font in the editor). The Discord link is gone.
 - **PokeHub's own updates.** At each start the app reads a small file of PokeHub's own (built in with
   SSR_UPDATE_URL) and, when a newer version is there, asks to update; Android installs it after a yes,
   keeping saves and settings. `tools/pokehub/publish_update.sh` puts a new build online. Import Saves

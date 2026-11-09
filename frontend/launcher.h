@@ -1961,10 +1961,17 @@ inline void ThemesRefresh()
         return x < y;
     });
 }
+// (The Launcher page opened by the Hub's Themes: only the theme rows, back goes to the Hub.)
+inline bool& LauncherThemesOnly() { static bool b = false; return b; }
 #ifdef __ANDROID__
-// (PokeHub: no themes for now, so Layout, Music Player and Camera Cutout.)
+// (PokeHub: the Launcher page has Layout, Music Player and Camera Cutout; the themes are the Hub's.)
 static const int kLauncherMenuRows = 3;
-inline int LauncherMenuItem(int row) { static const int items[3] = { 0, 4, 5 }; return row >= 0 && row < 3 ? items[row] : 0; }
+inline int LauncherMenuItem(int row)
+{
+    static const int look[3] = { 0, 4, 5 }, themes[3] = { 1, 2, 3 };
+    return row >= 0 && row < 3 ? (LauncherThemesOnly() ? themes : look)[row] : 0;
+}
+inline int LauncherMenuRowOf(int item) { for (int r = 0; r < 3; r++) if (LauncherMenuItem(r) == item) return r; return 0; }
 #elif defined(__SWITCH__)
 static const int kLauncherMenuRows = 4; // (No Music Player on a Switch: there is nothing to play from.)
 #else
@@ -1973,6 +1980,7 @@ static const int kLauncherMenuRows = 5;
 #ifndef __ANDROID__
 // (The menu's rows as they are shown: all of them.)
 inline int LauncherMenuItem(int row) { return row; }
+inline int LauncherMenuRowOf(int item) { return item; }
 #endif
 inline int LauncherRows() { return LauncherMode() == 5 ? GalleryCards() : LauncherMode() == 4 ? kLauncherFontCount : LauncherMode() == 1 ? 11 : LauncherMode() == 3 ? std::max(1, (int)Themes().list.size()) : LauncherMode() == 2 ? 4 : kLauncherMenuRows; }
 // A on a theme: Apply, Show In Folder (a PC), Delete.
@@ -3670,11 +3678,26 @@ inline bool SavesBack();
 inline bool SavesMove(int dir);
 inline int SavesSlotAt(int x, int y);
 inline std::string SavesTitle();
+// PokeHub's Hub: Cloud Saves, Trade and Themes (items 0, 2 and 6; the others went: My PC and the
+// Pokédex have tabs of their own, and the Discord link is gone).
+inline bool OpenSide(int side);
+inline int HubItem(int row) { static const int items[3] = { 0, 2, 6 }; return row >= 0 && row < 3 ? items[row] : 0; }
+inline int HubRowOf(int item) { return item == 2 ? 1 : item == 6 ? 2 : 0; }
 inline bool HubEnter(int row)
 {
     if (HubMode() == 3 && !Mover().open) return SavesEnter(row);
     if (Mover().open || HubMode() != 0) return false;
     GlassFocus& F = Focus();
+    row = HubItem(row);
+    if (row == 6)
+    {
+        // (Themes: the Launcher page with only its theme rows.)
+        OpenSide(SIDE_LAUNCHER);
+        LauncherThemesOnly() = true;
+        F.prow = 0; F.pact = -1; F.rScroll = 0;
+        Hub().version++;
+        return true;
+    }
     if (row == 0) { HubMode() = 1; F.prow = 0; }
     else if (row == 2) { HubMode() = 2; F.prow = 2; }
     else if (row == 3) return false; // (Discord: a link, nothing to open here)
@@ -4761,7 +4784,7 @@ inline int ThemePick(const std::string& pick)
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
 static const char* const kReleasesUrl = "https://github.com/mamesj/pokemon-fulldex/releases";
-inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 6 : HubMode() == 6 || HubMode() == 4 ? 1 : HubMode() == 5 ? ImportRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
+inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 3 : HubMode() == 6 || HubMode() == 4 ? 1 : HubMode() == 5 ? ImportRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
     if (Mover().open) return MoverActions(row);
@@ -5028,7 +5051,7 @@ inline std::string AboutUrl(int row)
 // The page a row of a page opens (none: "").
 inline std::string PageUrl(int page, int row)
 {
-    if (page == SIDE_HUB) return HubTop() && row == 3 ? kDiscordUrl : "";
+    if (page == SIDE_HUB) return ""; // (PokeHub: no Discord link)
     return page == SIDE_ABOUT ? AboutUrl(row) : "";
 }
 inline const char* PlatformLabel()
@@ -5122,20 +5145,21 @@ inline bool PageBack()
     if (F.page < 0) return false;
     if (F.page == SIDE_LAUNCHER && Look().edit >= 0) { Look().edit = -1; LookSave(); Hub().version++; return true; } // (the colour wheel closed)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 4) { LauncherMode() = 1; F.prow = 8; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the fonts: back to the Theme Editor)
-    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 5) { LauncherMode() = 0; F.prow = 3; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Gallery: back to its menu)
+    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 5) { LauncherMode() = 0; F.prow = LauncherMenuRowOf(3); F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Gallery: back to its menu)
     if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 3) { LauncherMode() = 2; F.prow = 2; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (the Library: back to My Themes)
-    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMode() == 1 ? 1 : 2; LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
+    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() != 0) { F.prow = LauncherMenuRowOf(LauncherMode() == 1 ? 1 : 2); LauncherMode() = 0; F.rScroll = 0; Themes().msg.clear(); Hub().version++; return true; } // (back to its menu)
     if (F.page == SIDE_HUB && F.side < 0 && HubMode() == 3 && !Mover().open) return SavesBack(); // (Manage Saves: off a slot, then the games)
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().swapping) { Mover().swapping = false; Mover().put = -1; Mover().msg.clear(); Hub().version++; return true; }
     if (F.page == SIDE_HUB && HubMode() == 6) { if (PcBack()) return true; HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open && Mover().fromTab) { MoverShow(false); Mover().fromTab = false; F.page = -1; F.side = -1; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && Mover().open) { MoverShow(false); HubMode() = 0; F.prow = 1; F.rScroll = 0; return true; }
-    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = 2; F.rScroll = 0; Hub().version++; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 2) { HubLink::Leave(); HubMode() = 0; F.prow = HubRowOf(2); F.rScroll = 0; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 5 && Import().fromPc) { Import().fromPc = false; HubMode() = 6; F.prow = 0; F.rScroll = 0; PcReopen(); return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() == 4 && Dex().fromTab) { Dex().fromTab = false; HubMode() = 0; F.page = -1; F.side = -1; Hub().version++; return true; }
-    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && (HubMode() == 4 || HubMode() == 5)) { F.prow = HubMode(); HubMode() = 0; F.rScroll = 0; Hub().version++; return true; }
+    if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && (HubMode() == 4 || HubMode() == 5)) { F.prow = 0; HubMode() = 0; F.rScroll = 0; Hub().version++; return true; }
     if (F.page == SIDE_HUB && F.side < 0 && F.pact < 0 && HubMode() != 0) { HubMode() = 0; F.prow = 0; F.rScroll = 0; Hub().version++; return true; }
     if ((F.page == SIDE_ROMS || F.page == SIDE_HUB) && F.side < 0 && F.pact >= 0) { F.pact = -1; return true; }
+    if (F.page == SIDE_LAUNCHER && F.side < 0 && LauncherMode() == 0 && LauncherThemesOnly()) { LauncherThemesOnly() = false; OpenSide(SIDE_HUB); F.prow = HubRowOf(6); return true; } // (Themes: back to the Hub)
     if (TilesOn()) { const int pg = F.page; F.page = -1; F.side = pg; return true; } // (the window closed: back on the tile that opened it)
     if (!SideShown(F.page)) { F.page = -1; F.side = -1; return true; } // (Hub, ROMs, Launcher: opened from Settings)
     if (F.side < 0) F.side = F.page;
@@ -5145,6 +5169,7 @@ inline bool PageBack()
 // A on a section of the sidebar: Home back to the games, About its page. (False: not made yet.)
 inline bool OpenSide(int side)
 {
+    if (side == SIDE_LAUNCHER) LauncherThemesOnly() = false; // (from the Settings: the whole page; the Hub's Themes sets it after)
     GlassFocus& F = Focus();
     if (side == SIDE_HOME) { F.page = -1; F.side = -1; return true; }
     if (side == SIDE_HUB) { HubMode() = 0; Mover().open = false; Hub().version++; }
@@ -6564,7 +6589,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     const int barH = portP ? (int)(44 * u) : sp.tabsY * 2 + sp.tabsH;
     const int L = sp.bannerX, R = sp.bannerX + sp.bannerW, top = sp.pageTop > 0 ? sp.pageTop : barH + (int)((portP ? 10 : 18) * u), bottom = sp.pageBottom > 0 ? sp.pageBottom : PhoneLook() && c.h > c.w && sp.navY > 0 ? sp.navY - (int)(12 * u) : c.h - (int)((ShortNow() ? 14 : 64) * u); // (a phone sideways: the panels run to the foot of the screen, the back button is in the bar)
     const float titleY = sp.pageTitleY > 0 ? (float)sp.pageTitleY : barH * 0.5f;
-    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 5 ? std::string("Import Saves") : HubMode() == 6 ? std::string("My PC") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : "Launcher") : "About", 26 * u, text, true);
+    GT(c, sp.tabsX + (int)(6 * u), titleY, F.page == SIDE_ROMS ? "ROMs" : F.page == SIDE_HUB ? (Mover().open ? "Move Pok\xC3\xA9mon" : HubMode() == 1 ? "Cloud Saves" : HubMode() == 2 ? "Trade" : HubMode() == 4 ? std::string("Pok\xC3\xA9" "dex") : HubMode() == 5 ? std::string("Import Saves") : HubMode() == 6 ? std::string("My PC") : HubMode() == 3 ? SavesTitle() : std::string("Hub")) : F.page == SIDE_SETTINGS ? (F.pageTitle.empty() ? std::string("Settings") : F.pageTitle) : F.page == SIDE_LAUNCHER ? (LauncherMode() == 1 ? "Theme Editor" : LauncherMode() == 2 ? "My Themes" : LauncherMode() == 3 ? "Theme Library" : LauncherMode() == 5 ? "Theme Gallery" : LauncherMode() == 4 ? "Font" : LauncherThemesOnly() ? "Themes" : "Launcher") : "About", 26 * u, text, true);
     const std::string where = std::string("PokeHub   \xC2\xB7   ") + PlatformLabel();
     if (!ShortNow() && !portP) GT(c, R - GW(where, 16 * u, true), titleY, where, 16 * u, hint, true);
     if (F.page == SIDE_ROMS)
@@ -7183,8 +7208,8 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             if (LauncherMode() == 0)
             {
                 const std::string count = std::to_string(ts.list.size()) + (ts.list.size() == 1 ? " Theme" : " Themes");
-                row(0, Glass::I_LAYOUT, "Layout", "How the home screen is set out: the sidebar with a grid, or tiles with a game carousel", TilesOn() ? "Tiles" : PanelOn() ? "Panel" : "Sidebar");
 #ifndef __ANDROID__
+                row(0, Glass::I_LAYOUT, "Layout", "How the home screen is set out: the sidebar with a grid, or tiles with a game carousel", TilesOn() ? "Tiles" : PanelOn() ? "Panel" : "Sidebar");
                 row(1, Glass::I_SPARKLE, "Theme Editor", "Colours, pictures, blur and the rest of the launcher's look", "");
                 row(2, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
                 row(3, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Online");
@@ -7192,12 +7217,22 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 (void)count;
 #endif
 #if defined(__ANDROID__)
+                if (LauncherThemesOnly())
+                {
+                    row(0, Glass::I_SPARKLE, "Theme Editor", "Colours, pictures, blur and the rest of the launcher's look", "");
+                    row(1, Glass::I_LAYERS, "My Themes", "Save this look, switch between your looks, share them as files", count);
+                    row(2, Glass::I_GLOBE, "Theme Gallery", "Themes other players have shared, ready to try", "Online");
+                }
+                else
+                {
+                row(0, Glass::I_LAYOUT, "Layout", "How the home screen is set out: the sidebar with a grid, or tiles with a game carousel", TilesOn() ? "Tiles" : PanelOn() ? "Panel" : "Sidebar");
                 row(1, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: full size, a small pill of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact Top" : Look().music == "compactb" ? "Compact Bottom" : Look().music == "off" ? "Off" : "Bottom Left");
 #elif !defined(__SWITCH__)
                 row(4, Glass::I_NOTE, "Music Player", "Where the Now Playing player sits: full size, a small pill of buttons, or off", Look().music == "top" ? "Top" : Look().music == "compact" ? "Compact Top" : Look().music == "compactb" ? "Compact Bottom" : Look().music == "off" ? "Off" : "Bottom Left");
 #endif
 #ifdef __ANDROID__
                 row(2, Glass::I_FULLSCREEN, "Camera Cutout", "Keep every launcher screen clear of the camera hole, or fill the whole screen", Look().avoidCutout ? "Avoid" : "Fill");
+                }
 #endif
             }
             else
@@ -7661,7 +7696,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
         lk.unlock();
         const int moverGames = (int)MoverGames().size();
         const bool stkP = PhoneLook() && c.h > c.w; const int rw = stkP ? R - L : (int)(400 * u), gap = (int)(18 * u), lw2 = stkP ? R - L : R - L - rw - gap, lhP = stkP ? (int)((bottom - top) * 0.55f) : bottom - top, dTopP = stkP ? top + lhP + gap : top, dHP = stkP ? bottom - dTopP : bottom - top, pad = (int)(14 * u);
-        const int n = 6, rg = (int)(8 * u), rowH = std::min((int)(72 * u), std::max((int)(46 * u), (lhP - 2 * pad - (n - 1) * rg) / n));
+        const int n = 3, rg = (int)(8 * u), rowH = std::min((int)(72 * u), std::max((int)(46 * u), (lhP - 2 * pad - (n - 1) * rg) / n));
         const HubLink::Status link = HubLink::Snapshot();
         Menu::FrostBox(c, solid, L, top, lw2, lhP, 18 * u);
         F.prow = std::max(0, std::min(F.prow, n - 1));
@@ -7680,7 +7715,14 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             else Glass::Round(c, rx, ry, rww, rowH, 14 * u, SettingsArt::Row, 0x3DFFFFFF, 1.0f * u);
             std::string name, sub, st;
             uint32_t col = 0xFFAEB7C4u;
-            if (i == 0)
+            const int it = HubItem(i);
+            if (it == 6)
+            {
+                name = "Themes";
+                sub = "The launcher's look: colours, pictures, fonts, and themes to share";
+                st = std::to_string(Themes().list.size()) + (Themes().list.size() == 1 ? " Theme" : " Themes");
+            }
+            else if (it == 0)
             {
                 name = "Cloud Saves";
                 sub = on ? std::string(HubProvider(prov)) + "   \xC2\xB7   " + std::to_string(synced) + " of " + std::to_string(games.size()) + " up to date"
@@ -7690,26 +7732,26 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 else if (on) { st = "On"; col = 0xFF8FE3A2u; }
                 else st = "Off";
             }
-            else if (i == 2)
+            else if (it == 2)
             {
                 name = "Trade";
                 sub = "With a friend online or on the same Wi-Fi, or to another of your devices";
                 st = link.state == HubLink::State::Linked ? "Linked" : link.state == HubLink::State::Online ? "Online" : link.state == HubLink::State::Hosting ? "Room Open" : link.state == HubLink::State::Browsing ? "Looking" : "Same Wi-Fi";
                 if (link.state != HubLink::State::Off) col = 0xFF8CC8FFu;
             }
-            else if (i == 5)
+            else if (it == 5)
             {
                 name = "Import Saves";
                 sub = "Bring in your saves from My Boy or My OldBoy";
                 st = "My Boy";
             }
-            else if (i == 4)
+            else if (it == 4)
             {
                 name = "Pok\xC3\xA9" "dex";
                 sub = "Every species across your games and the Bank: caught, missing, shiny";
                 st = std::to_string(moverGames) + (moverGames == 1 ? " Save" : " Saves");
             }
-            else if (i == 3)
+            else if (it == 3)
             {
                 name = "Fulldex Discord";
                 sub = "Find people to trade with, get help and hear what's coming";
@@ -7722,7 +7764,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 sub = "Between your own games and the Bank, as a trade would";
                 st = std::to_string(moverGames) + (moverGames == 1 ? " Save" : " Saves");
             }
-            Glass::DrawIcon(c, i == 0 ? Glass::I_GLOBE : i == 2 ? Glass::I_PEOPLE : i == 3 ? Glass::I_CHAT : i == 4 ? Glass::I_GRID : i == 5 ? Glass::I_LOAD : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
+            Glass::DrawIcon(c, it == 0 ? Glass::I_GLOBE : it == 2 ? Glass::I_PEOPLE : it == 6 ? Glass::I_SPARKLE : it == 4 ? Glass::I_GRID : it == 5 ? Glass::I_LOAD : Glass::I_POKEBALL, rx + 30 * u, mid, 12 * u, text);
             GT(c, rx + (int)(60 * u), mid - 11 * u, name, 18 * u, text, true);
             const int chipW = GW(st, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(46 * u) - chipW;
             GTFit(c, rx + (int)(60 * u), mid + 13 * u, sub, 13 * u, chipX - (rx + (int)(60 * u)) - (int)(12 * u), hint, false);
@@ -7747,9 +7789,10 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             GT(c, cx, cy + 28 * u, v, 15 * u, text, true);
             (void)cw;
         };
-        GT(c, ix, y + 14 * u, F.prow == 0 ? "Cloud Saves" : F.prow == 2 ? "Trade" : F.prow == 3 ? "Fulldex Discord" : F.prow == 4 ? "Pok\xC3\xA9" "dex" : F.prow == 5 ? "Import Saves" : "Move Pok\xC3\xA9mon", 22 * u, text, true);
+        const int hubItem = HubItem(F.prow);
+        GT(c, ix, y + 14 * u, hubItem == 0 ? "Cloud Saves" : hubItem == 2 ? "Trade" : "Themes", 22 * u, text, true);
         y += (int)(44 * u);
-        if (F.prow == 0)
+        if (hubItem == 0)
         {
             if (on)
             {
@@ -7767,12 +7810,17 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
             }
             if (!msg.empty()) para(msg, busy ? 0xFF8CC8FFu : hint, 13 * u);
         }
-        else if (F.prow == 2)
+        else if (hubItem == 6)
+        {
+            para("Change the launcher's look: the accent, the panels, the bars, the buttons, the background and the font. Keep a look as a theme, switch between your themes, or try one someone shared.", text, 14 * u);
+            para("Open it for the Theme Editor, My Themes and the Theme Gallery.", hint, 13 * u);
+        }
+        else if (hubItem == 2)
         {
             para("Trade with a friend, online or on the same Wi-Fi, or send Pok\xC3\xA9mon to another of your own devices: a PC and a Switch, say.", text, 14 * u);
             para("Trades follow the real games' rules: one each way, both say yes, and those that evolve by trading evolve, Karrablast and Shelmet too. Each save is backed up before it is written.", hint, 13 * u);
         }
-        else if (F.prow == 3)
+        else if (hubItem == 3)
         {
             para("Join the Fulldex Discord: find someone to trade with, get help with a game, report a bug and see what's coming next.", text, 14 * u);
             GT(c, ix, y + 10 * u, "discord.gg/pnGeMYyJR", 16 * u, 0xFF8CC8FFu, true);
@@ -7796,12 +7844,12 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                  , hint, 13 * u);
 #endif
         }
-        else if (F.prow == 5)
+        else if (hubItem == 5)
         {
             para("Bring the saves you have in My Boy (GBA) or My OldBoy (Game Boy) into Fulldex: each goes to its game, and the save already there is backed up first.", text, 14 * u);
             para("Fulldex looks in their folders by itself. Since Android 11 no app may read another app's own folder; with Shizuku running Fulldex can, else copy the saves to a folder first (by USB from a PC, or with a file manager) and choose it.", hint, 13 * u);
         }
-        else if (F.prow == 4)
+        else if (hubItem == 4)
         {
             para("One Pok\xC3\xA9" "dex for all your games and the Bank: which species you have caught in any of them, which are still missing, how many you have now and where, and your shinies.", text, 14 * u);
             para("Open it to go through every species, or only those caught, missing, with you now, or shiny.", hint, 13 * u);
@@ -9720,6 +9768,7 @@ struct SettingsPage
             items.push_back({ sg.key, sg.name, { { "", ">" } }, "", groupText[g].c_str() });
         }
         // (This fork: the pages that were in the sidebar, opened from here.)
+        items.push_back({ "!open_hub", "HUB", { { "", ">" } }, "", "CLOUD SAVES / TRADE / THEMES." });
         items.push_back({ "!open_roms", "ROMS", { { "", ">" } }, "", "YOUR GAMES' FILES: RENAME, HIDE OR DELETE THEM." });
         items.push_back({ "!open_launcher", "LAUNCHER", { { "", ">" } }, "", "THE LOOK OF THE LIST: LAYOUT, MUSIC PLAYER, CAMERA CUTOUT." });
         selected = row;

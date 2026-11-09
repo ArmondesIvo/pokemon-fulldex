@@ -4314,6 +4314,13 @@ Import All	Importar Todos
 Search Again	Procurar De Novo
 Yes, Replace It	Sim, Substituir
 No, Keep Mine	Não, Manter O Meu
+CLOUD SAVES / TRADE / THEMES.	SAVES NA NUVEM / TROCA / TEMAS.
+HUB	HUB
+Themes	Temas
+The launcher's look: colours, pictures, fonts, and themes to share	O visual do launcher: cores, imagens, fontes e temas para compartilhar
+Change the launcher's look: the accent, the panels, the bars, the buttons, the background and the font. Keep a look as a theme, switch between your themes, or try one someone shared.	Mude o visual do launcher: o destaque, os painéis, as barras, os botões, o fundo e a fonte. Guarde um visual como tema, troque entre seus temas, ou teste um que alguém compartilhou.
+Open it for the Theme Editor, My Themes and the Theme Gallery.	Abra para o Editor De Tema, Meus Temas e a Galeria De Temas.
+Hub	Hub
 )FDXLANG";
 inline const char* LauncherLangData(const char* code)
 {
