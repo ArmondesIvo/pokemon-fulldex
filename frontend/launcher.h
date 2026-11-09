@@ -3237,6 +3237,12 @@ struct DexState
 #endif
     std::vector<int> list;
     bool fromTab = false; // (opened by the POKEDEX tab: back goes to the games)
+    // (The page as PKVault lays it out, DrawDexPage: the species chosen, how far the grid is
+    // scrolled, its height, and a finger on it.)
+    int sel = 0, scroll = 0, scrollMax = 0;
+    bool down = false, drag = false;
+    int downX = 0, downY = 0, downScroll = 0;
+    float u = 1;
 };
 inline DexState& Dex() { static DexState d; return d; }
 inline const char* DexFilterName(int f) { return f == 1 ? "Caught" : f == 2 ? "Missing" : f == 3 ? "Have Now" : f == 4 ? "Shiny" : "All"; }
@@ -3635,7 +3641,7 @@ inline bool HubEnter(int row)
     if (row == 0) { HubMode() = 1; F.prow = 0; }
     else if (row == 2) { HubMode() = 2; F.prow = 2; }
     else if (row == 3) return false; // (Discord: a link, nothing to open here)
-    else if (row == 4) { DexShow(); Dex().fromTab = false; F.prow = DEX_FIRST; }
+    else if (row == 4) { DexShow(); Dex().fromTab = false; F.prow = 0; }
     else if (row == 5) { ImportShow(); F.prow = 1; }
     else { MoverShow(true); F.prow = MOVER_FIRST; }
     F.pact = -1; F.rScroll = 0;
@@ -4717,12 +4723,12 @@ inline int ThemePick(const std::string& pick)
 // (The Fulldex Discord: people to trade with, help, news. The Hub's last row.)
 static const char* const kDiscordUrl = "https://discord.gg/pnGeMYyJR";
 static const char* const kReleasesUrl = "https://github.com/mamesj/pokemon-fulldex/releases";
-inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 6 : HubMode() == 6 ? 1 : HubMode() == 4 ? DexRows() : HubMode() == 5 ? ImportRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
+inline int HubRows() { return Mover().open ? MoverRows() : HubMode() == 0 ? 6 : HubMode() == 6 || HubMode() == 4 ? 1 : HubMode() == 5 ? ImportRows() : HubMode() == 2 ? TradeRows() : HubMode() == 3 ? SavesRows() : HUB_FIRST + (int)HubGames().size(); }
 inline std::vector<std::string> HubActions(int row)
 {
     if (Mover().open) return MoverActions(row);
     if (HubMode() == 2) return TradeActions(row);
-    if (HubMode() == 4) return DexActions(row);
+    if (HubMode() == 4) return {};
     if (HubMode() == 6) return {};
     if (HubMode() == 5) return ImportActions(row);
     if (HubMode() == 3) return SavesDs() ? std::vector<std::string>(10, "Slot") : std::vector<std::string>(); // (Manage Saves: its slots)
@@ -5126,7 +5132,7 @@ inline void OpenDexTab()
     OpenSide(SIDE_HUB);
     DexShow();
     Dex().fromTab = true;
-    F.prow = DEX_FIRST; F.pact = -1; F.rScroll = 0;
+    F.prow = 0; F.pact = -1; F.rScroll = 0;
 }
 // IMPORT SAVES, from the settings or My PC's foot (back goes to My PC when it came from there).
 inline void OpenImport(bool fromPc)
@@ -5465,7 +5471,8 @@ inline const std::vector<uint32_t>* PcSprite(int species, bool shiny, int& w, in
 #endif
 }
 // A sprite drawn whole in a box (centred, its pixels square), or the DS icon, or a Poké Ball.
-inline void PcDrawMon(Canvas& c, int species, bool shiny, bool egg, int x, int y, int bw, int bh)
+// (shade: not 0, every pixel of it that colour: a silhouette, as the Pokédex shows those not seen.)
+inline void PcDrawMon(Canvas& c, int species, bool shiny, bool egg, int x, int y, int bw, int bh, uint32_t shade = 0)
 {
     int w = 0, h = 0, bb[4] = { 0, 0, 0, 0 };
     const std::vector<uint32_t>* px = egg ? nullptr : PcSprite(species, shiny, w, h, bb);
@@ -5488,7 +5495,7 @@ inline void PcDrawMon(Canvas& c, int species, bool shiny, bool egg, int x, int y
                 const int xx = ox + i;
                 if (xx < 0 || xx >= c.w) continue;
                 const uint32_t p = (*px)[(size_t)sy * w + cx0 + std::min(cw - 1, (int)(i / sc))];
-                if ((p >> 24) >= 128) c.px[(size_t)yy * c.w + xx] = p | 0xFF000000u;
+                if ((p >> 24) >= 128) c.px[(size_t)yy * c.w + xx] = shade ? shade : p | 0xFF000000u;
             }
         }
         return;
@@ -5991,6 +5998,261 @@ inline bool PcBack()
     }
     return false;
 }
+
+// ---------------------------------------------------------------------------------------------
+// POKEDEX (the tab after My PC, and the Hub's fifth row; HubMode 4) as PKVault lays it out: the
+// filters and the counts along the top, then every species as a card, a generation at a time under
+// a heading with its region and counts; the chosen one's card on the right. A card: its number,
+// its picture (a silhouette when it was never seen), a Poké Ball when caught, a box when one is
+// in a game or the Bank now, a sparkle for a shiny. Touch only: a tap chooses, a drag scrolls.
+enum { DEX_FILTER = 1, DEX_CARD };
+inline std::vector<PcHit>& DexHits() { static std::vector<PcHit> h; return h; }
+inline const char* DexRegion(int g) { static const char* r[] = { "", "Kanto", "Johto", "Hoenn", "Sinnoh", "Unova", "Kalos", "Alola" }; return g >= 1 && g <= 7 ? r[g] : ""; }
+inline const char* DexRoman(int g) { static const char* r[] = { "", "I", "II", "III", "IV", "V", "VI", "VII" }; return g >= 1 && g <= 7 ? r[g] : ""; }
+namespace DexCol { constexpr uint32_t Caught = 0xFFE03131u, Seen = 0xFF6F86A6u; }
+// A small badge: an icon (or none) and a number, as PKVault's counts.
+inline int DexBadge(Canvas& c, int x, int cy, int icon, uint32_t iconCol, const std::string& label, float u)
+{
+    const float px = 12.5f * u;
+    const int h = (int)(24 * u), iw = icon >= 0 ? (int)(18 * u) : 0, w = (int)(16 * u) + iw + GW(label, px, true);
+    Glass::Round(c, x, cy - h / 2, w, h, 6 * u, PcPal::Btn, PcPal::Line, 1.0f * u);
+    if (icon >= 0) Glass::DrawIcon(c, icon, x + 8 * u + 7 * u, (float)cy, 6.5f * u, iconCol);
+    GT(c, x + (int)(8 * u) + iw, (float)cy, label, px, PcPal::Ink, true);
+    return w;
+}
+// The species listed, by generation (the filter applied), and each generation's counts.
+struct DexGenCount { int seen = 0, caught = 0, have = 0, shiny = 0, total = 0; };
+inline void DexCounts(int g, DexGenCount& k)
+{
+    k = DexGenCount();
+#ifdef SSR_POKEMON_HUB
+    const DexState& d = Dex();
+    for (int n = 1; n < (int)d.marks.size(); n++)
+    {
+        if (PokemonHub::GenerationOfSpecies(n) != g) continue;
+        const PokemonHub::DexMark& m = d.marks[(size_t)n];
+        k.total++; k.seen += m.state >= 1; k.caught += m.state == 2; k.have += m.owned > 0; k.shiny += m.shiny;
+    }
+#else
+    (void)g;
+#endif
+}
+inline void DrawDexPage(Canvas& c, float u, int L, int R, int top, int bottom)
+{
+    DexState& d = Dex();
+    DexLoad();
+    d.u = u;
+    std::vector<PcHit>& hits = DexHits();
+    hits.clear();
+    GlassFocus& F = Focus();
+    F.rVis = 0; F.pdY = c.h; F.prow = 0; F.pact = -1;
+    const uint32_t text = PcPal::Ink, hint = PcPal::Hint;
+    Glass::Round(c, L, top, R - L, bottom - top, 12 * u, PcPal::Body, PcPal::Primary, 4 * u);
+    { const int in = (int)(10 * u); L += in; R -= in; top += in; bottom -= in; }
+    const int gap = (int)(10 * u), barH = (int)(40 * u);
+    // The top: the filters, and the counts of all of them.
+    PcCard(c, L, top, R - L, barH, 10 * u, u);
+    int x = L + (int)(8 * u);
+    for (int f = 0; f <= 4; f++)
+    {
+        const std::string label = DexFilterName(f);
+        const int bw = GW(label, 13 * u, true) + (int)(24 * u), bh = barH - (int)(12 * u);
+        PcButton(c, x, top + (int)(6 * u), bw, bh, 6 * u, d.filter == f, u);
+        GT(c, x + (int)(12 * u), top + barH * 0.5f, label, 13 * u, d.filter == f ? PcPal::OnPrimary : text, true);
+        hits.push_back({ x, top + (int)(6 * u), bw, bh, DEX_FILTER, 0, f });
+        x += bw + (int)(6 * u);
+    }
+    {
+        DexGenCount all;
+        for (int g = 1; g <= 7; g++) { DexGenCount k; DexCounts(g, k); if (g > 5 && !k.seen) continue; all.seen += k.seen; all.caught += k.caught; all.have += k.have; all.shiny += k.shiny; all.total += k.total; }
+        const std::pair<int, std::pair<uint32_t, std::string>> b[] = {
+            { -1, { 0, "Seen " + std::to_string(all.seen) } }, { Glass::I_POKEBALL, { DexCol::Caught, std::to_string(all.caught) } },
+            { Glass::I_LAYERS, { PcPal::Primary, std::to_string(all.have) } }, { Glass::I_SPARKLE, { PcPal::Shiny, std::to_string(all.shiny) } },
+            { -1, { 0, "of " + std::to_string(all.total) } } };
+        int w = 0;
+        for (const auto& e : b) w += (int)(16 * u) + (e.first >= 0 ? (int)(18 * u) : 0) + GW(e.second.second, 12.5f * u, true) + (int)(5 * u);
+        int bx = R - (int)(8 * u) - w;
+        if (bx > x + (int)(10 * u))
+            for (const auto& e : b) bx += DexBadge(c, bx, top + barH / 2, e.first, e.second.first, e.second.second, u) + (int)(5 * u);
+    }
+    // The chosen one's card, on the right.
+    const int gy = top + barH + gap, gh = bottom - gy;
+    const int dw = std::min((int)(270 * u), (R - L) / 3), gw = R - L - dw - gap;
+#ifdef SSR_POKEMON_HUB
+    if (d.sel <= 0 || d.sel >= (int)d.marks.size() || std::find(d.list.begin(), d.list.end(), d.sel) == d.list.end()) d.sel = d.list.empty() ? 0 : d.list.front();
+#endif
+    {
+        const int dx = R - dw;
+        PcCard(c, dx, gy, dw, gh, 10 * u, u);
+        const int pad = (int)(12 * u);
+#ifdef SSR_POKEMON_HUB
+        if (d.sel > 0)
+        {
+            const PokemonHub::DexMark& m = d.marks[(size_t)d.sel];
+            char num[8]; snprintf(num, sizeof num, "#%03d", d.sel);
+            int ty = gy + pad + (int)(10 * u);
+            GT(c, dx + pad, (float)ty, num, 17 * u, text, true);
+            GTFit(c, dx + pad + GW(num, 17 * u, true) + (int)(8 * u), (float)ty, MonName(PokemonHub::SpeciesNameOf(d.sel)), 16 * u, dw - 2 * pad - GW(num, 17 * u, true) - (int)(34 * u), text, false);
+            if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, dx + dw - pad - 8 * u, (float)ty, 8 * u, PcPal::Shiny);
+            ty += (int)(22 * u);
+            // Its types.
+            std::string t1, t2;
+            PokemonHub::SpeciesTypes(d.sel, t1, t2);
+            int tx = dx + pad;
+            for (const std::string& t : { t1, t2 })
+            {
+                if (t.empty()) continue;
+                const std::string tl = MonName(t);
+                const int w = GW(tl, 11.5f * u, true) + (int)(18 * u), h = (int)(22 * u);
+                Glass::Round(c, tx, ty, w, h, 11 * u, PcTypeColour(t));
+                GT(c, tx + (int)(9 * u), ty + h * 0.5f, tl, 11.5f * u, 0xFFFFFFFFu, true);
+                tx += w + (int)(6 * u);
+            }
+            ty += (int)(30 * u);
+            // Its picture.
+            const int ps = std::min(dw - 2 * pad, (int)(gh * 0.36f));
+            Glass::Round(c, dx + pad, ty, dw - 2 * pad, ps, 10 * u, PcPal::Slot, PcPal::Line, 1.0f * u);
+            PcDrawMon(c, d.sel, m.shiny, false, dx + pad + (int)(8 * u), ty + (int)(8 * u), dw - 2 * pad - (int)(16 * u), ps - (int)(16 * u), m.state ? 0 : 0xFFB9AEA2u);
+            ty += ps + (int)(14 * u);
+            // How the player stands with it.
+            auto line = [&](int icon, uint32_t ic, const std::string& s, uint32_t col) {
+                if (icon >= 0) Glass::DrawIcon(c, icon, dx + pad + 8 * u, ty + 9 * u, 7 * u, ic);
+                const int ind = icon >= 0 ? (int)(22 * u) : 0;
+                GTFit(c, dx + pad + ind, ty + 9 * u, s, 13 * u, dw - 2 * pad - ind, col, icon >= 0);
+                ty += (int)(24 * u);
+            };
+            if (!m.state) line(-1, 0, "Not seen in any of your games yet.", hint);
+            else
+            {
+                line(m.state == 2 ? Glass::I_POKEBALL : -1, DexCol::Caught, m.state == 2 ? "Caught" : "Seen, not caught yet", m.state == 2 ? text : hint);
+                if (m.owned > 0) line(Glass::I_LAYERS, PcPal::Primary, "You have " + std::to_string(m.owned) + " now", text);
+                if (m.shiny) line(Glass::I_SPARKLE, PcPal::Shiny, "You have a shiny one", text);
+            }
+            if (!m.where.empty())
+            {
+                ty += (int)(4 * u);
+                GT(c, dx + pad, ty + 8 * u, "Where", 12 * u, hint, true);
+                ty += (int)(20 * u);
+                for (const std::string& w : m.where)
+                {
+                    if (ty + (int)(26 * u) > gy + gh - pad) break;
+                    const std::string wl = PcShortName(w);
+                    const int ww = std::min(dw - 2 * pad, GW(wl, 12 * u, false) + (int)(20 * u)), h = (int)(24 * u);
+                    Glass::Round(c, dx + pad, ty, ww, h, 6 * u, PcPal::Btn, PcPal::Line, 1.0f * u);
+                    GTFit(c, dx + pad + (int)(10 * u), ty + h * 0.5f, wl, 12 * u, ww - (int)(20 * u), text, false);
+                    ty += h + (int)(5 * u);
+                }
+            }
+        }
+        else
+#endif
+            GTFit(c, dx + pad, gy + pad + 10 * u, "Nothing to show here.", 13 * u, dw - 2 * pad, hint, false);
+    }
+    // The cards, a generation at a time, scrolled inside their panel.
+    PcCard(c, L, gy, gw, gh, 10 * u, u);
+    const int pad = (int)(10 * u), cg = (int)(8 * u);
+    const int innerW = gw - 2 * pad;
+    const int cols = std::max(1, (innerW + cg) / ((int)(84 * u) + cg));
+    const int cw = (innerW - (cols - 1) * cg) / cols, ch = (int)(cw * 0.86f);
+    const int headH = (int)(38 * u);
+    const int clipT = gy + (int)(3 * u), clipB = gy + gh - (int)(3 * u);
+    // (Drawn into a copy of the panel's pixels only, so nothing spills over its edges.)
+    std::vector<uint32_t> keepA(c.px.begin(), c.px.begin() + (size_t)clipT * c.w), keepB(c.px.begin() + (size_t)clipB * c.w, c.px.end());
+    int y = gy + pad - d.scroll, content = 0;
+#ifdef SSR_POKEMON_HUB
+    size_t i = 0;
+    while (i < d.list.size())
+    {
+        const int g = PokemonHub::GenerationOfSpecies(d.list[i]);
+        size_t j = i;
+        while (j < d.list.size() && PokemonHub::GenerationOfSpecies(d.list[j]) == g) j++;
+        // The heading: the generation, its region, its counts.
+        if (y + headH > clipT && y < clipB)
+        {
+            const float hy = y + headH * 0.5f;
+            const std::string gname = std::string("Generation ") + DexRoman(g);
+            GT(c, L + pad + (int)(4 * u), hy, gname, 15 * u, text, true);
+            int hx = L + pad + (int)(4 * u) + GW(gname, 15 * u, true) + (int)(10 * u);
+            hx += DexBadge(c, hx, (int)hy, -1, 0, DexRegion(g), u);
+            DexGenCount k; DexCounts(g, k);
+            const std::pair<int, std::pair<uint32_t, std::string>> b[] = {
+                { Glass::I_POKEBALL, { DexCol::Caught, std::to_string(k.caught) } }, { Glass::I_LAYERS, { PcPal::Primary, std::to_string(k.have) } },
+                { Glass::I_SPARKLE, { PcPal::Shiny, std::to_string(k.shiny) } }, { -1, { 0, "of " + std::to_string(k.total) } } };
+            int w = 0;
+            for (const auto& e : b) w += (int)(16 * u) + (e.first >= 0 ? (int)(18 * u) : 0) + GW(e.second.second, 12.5f * u, true) + (int)(5 * u);
+            int bx = L + gw - pad - w;
+            if (bx > hx + (int)(8 * u))
+                for (const auto& e : b) bx += DexBadge(c, bx, (int)hy, e.first, e.second.first, e.second.second, u) + (int)(5 * u);
+            Glass::Round(c, L + pad, y + headH - (int)(2 * u), innerW, std::max(1, (int)(1.2f * u)), 0, PcPal::Line);
+        }
+        y += headH + (int)(6 * u);
+        for (size_t k = i; k < j; k++)
+        {
+            const int col = (int)((k - i) % cols), row = (int)((k - i) / cols);
+            const int cx = L + pad + col * (cw + cg), cy = y + row * (ch + cg);
+            if (cy + ch <= clipT || cy >= clipB) continue;
+            const int sp = d.list[k];
+            const PokemonHub::DexMark& m = d.marks[(size_t)sp];
+            const bool on = sp == d.sel;
+            Glass::Round(c, cx, cy, cw, ch, 8 * u, on ? PcPal::Body : PcPal::Btn, on ? PcPal::Primary : PcPal::Line, on ? 3.0f * u : 1.0f * u);
+            PcDrawMon(c, sp, false, false, cx + (int)(8 * u), cy + (int)(16 * u), cw - (int)(16 * u), ch - (int)(22 * u), m.state ? 0 : 0xFFB9AEA2u);
+            // (Its number, in the corner, as PKVault's.)
+            char num[8]; snprintf(num, sizeof num, "#%d", sp);
+            const int nw = GW(num, 11 * u, true) + (int)(12 * u), nh = (int)(19 * u);
+            Glass::Round(c, cx + (int)(1 * u), cy + (int)(1 * u), nw, nh, 6 * u, PcPal::Slot);
+            GT(c, cx + (int)(7 * u), cy + (int)(1 * u) + nh * 0.5f, num, 11 * u, text, true);
+            float ix = cx + cw - 10 * u;
+            if (m.state == 2) { Glass::DrawIcon(c, Glass::I_POKEBALL, ix, cy + 10 * u, 5.5f * u, DexCol::Caught); ix -= 14 * u; }
+            if (m.owned > 0) Glass::DrawIcon(c, Glass::I_LAYERS, ix, cy + 10 * u, 5.5f * u, PcPal::Primary);
+            if (m.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, cx + cw - 10 * u, cy + ch - 10 * u, 6 * u, PcPal::Shiny);
+            hits.push_back({ cx, std::max(cy, clipT), cw, std::min(cy + ch, clipB) - std::max(cy, clipT), DEX_CARD, 0, sp });
+        }
+        const int rows = (int)((j - i + cols - 1) / cols);
+        y += rows * (ch + cg) + (int)(8 * u);
+        i = j;
+    }
+    if (d.list.empty()) GT(c, L + pad + (int)(4 * u), gy + pad + 14 * u, "None of these yet.", 14 * u, hint, false);
+#endif
+    content = y + d.scroll - (gy + pad);
+    d.scrollMax = std::max(0, content - (gh - 2 * pad));
+    d.scroll = std::max(0, std::min(d.scroll, d.scrollMax));
+    std::copy(keepA.begin(), keepA.end(), c.px.begin());
+    std::copy(keepB.begin(), keepB.end(), c.px.begin() + (size_t)clipB * c.w);
+    // (A scroll bar, thin, on the panel's right edge.)
+    if (d.scrollMax > 0)
+    {
+        const int trackH = gh - 2 * pad, barH2 = std::max((int)(30 * u), trackH * (gh - 2 * pad) / std::max(1, content));
+        const int by = gy + pad + (trackH - barH2) * d.scroll / std::max(1, d.scrollMax);
+        Glass::Round(c, L + gw - (int)(7 * u), by, (int)(4 * u), barH2, 2 * u, PcPal::Line);
+    }
+    (void)hint;
+}
+inline void DexPointer(int phase, int x, int y)
+{
+    DexState& d = Dex();
+    if (phase == 0) { d.down = true; d.drag = false; d.downX = x; d.downY = y; d.downScroll = d.scroll; return; }
+    if (phase == 1)
+    {
+        if (!d.down) return;
+        if (!d.drag && std::abs(y - d.downY) > (int)(10 * d.u)) d.drag = true;
+        if (d.drag) { d.scroll = std::max(0, std::min(d.scrollMax, d.downScroll - (y - d.downY))); Hub().version++; }
+        return;
+    }
+    const bool was = d.drag;
+    d.down = d.drag = false;
+    if (was) return;
+    const std::vector<PcHit>& hs = DexHits();
+    for (size_t i = hs.size(); i-- > 0;)
+    {
+        const PcHit& h = hs[i];
+        if (x < h.x || x >= h.x + h.w || y < h.y || y >= h.y + h.h) continue;
+        if (h.kind == DEX_FILTER) { d.filter = h.value; DexLoad(true); d.scroll = 0; }
+        else if (h.kind == DEX_CARD) d.sel = h.value;
+        Hub().version++;
+        return;
+    }
+}
+inline void DexWheel(int by) { DexState& d = Dex(); d.scroll = std::max(0, std::min(d.scrollMax, d.scroll - by * (int)(60 * d.u))); Hub().version++; }
 
 struct ClipGuard
 {
@@ -6982,6 +7244,7 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
     }
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 3) { DrawSavesPage(c, solid, u, L, R, top, bottom); return; } // (Manage Saves)
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 6) { DrawPcPage(c, solid, u, L, R, top, bottom); return; } // (My PC)
+    if (F.page == SIDE_HUB && !Mover().open && HubMode() == 4) { DrawDexPage(c, u, L, R, top, bottom); return; } // (Pokédex)
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 5)
     {
         // Import Saves: the emulator, where to look, import all, then the saves found.
@@ -7083,131 +7346,6 @@ inline void DrawPage(Canvas& c, const GlassSpots& sp, bool solid, float u)
                 else para(std::filesystem::exists(f.target, ec) ? "That game has a save already: it is backed up first, then replaced by this one." : "That game has no save yet.", hint, 13 * u);
             }
         }
-        return;
-    }
-    if (F.page == SIDE_HUB && !Mover().open && HubMode() == 4)
-    {
-        // The Pokédex: the filter, then a row a species; the chosen one's standing beside them.
-        DexState& d = Dex();
-        DexLoad();
-        const std::vector<std::string> acts = HubActions(F.prow);
-        const uint32_t okCol = 0xFF8FE3A2u, seenCol = 0xFF8CC8FFu, noCol = 0xFFAEB7C4u, shinyCol = 0xFFF2C46Bu;
-        const int n = DexRows();
-        const bool stkP = PhoneLook() && c.h > c.w; const int rw = stkP ? R - L : (int)(360 * u), gap = (int)(18 * u), lw2 = stkP ? R - L : R - L - rw - gap, lhP = stkP ? (int)((bottom - top) * 0.55f) : bottom - top, dTopP = stkP ? top + lhP + gap : top, dHP = stkP ? bottom - dTopP : bottom - top, pad = (int)(12 * u);
-        const int rowH = (int)(46 * u), rg = (int)(6 * u);
-        Menu::FrostBox(c, solid, L, top, lw2, lhP, 18 * u);
-        const int vis = std::max(1, (lhP - 2 * pad + rg) / (rowH + rg));
-        F.prow = std::max(0, std::min(F.prow, n - 1));
-        if (F.pact >= (int)acts.size()) F.pact = acts.empty() ? -1 : (int)acts.size() - 1;
-        if (!F.freeScroll) { if (F.prow < F.rScroll) F.rScroll = F.prow; if (F.prow >= F.rScroll + vis) F.rScroll = F.prow - vis + 1; }
-        F.rScroll = std::max(0, std::min(F.rScroll, std::max(0, n - vis)));
-        F.pX = L + pad; F.pY = top + pad; F.pW = lw2 - 2 * pad; F.pRow = rowH + rg; F.rVis = vis;
-        int caught = 0, seen = 0, have = 0, shinies = 0;
-#ifdef SSR_POKEMON_HUB
-        for (size_t k = 1; k < d.marks.size() && k <= 649; k++) { caught += d.marks[k].state == 2; seen += d.marks[k].state >= 1; have += d.marks[k].owned > 0; shinies += d.marks[k].shiny; }
-#endif
-        auto numText = [](int sp) { char b[8]; snprintf(b, sizeof b, "#%03d", sp); return std::string(b); };
-        for (int i = F.rScroll; i < n && i < F.rScroll + vis; i++)
-        {
-            const int rx = L + pad, ry = top + pad + (i - F.rScroll) * (rowH + rg), rww = lw2 - 2 * pad, mid = ry + rowH / 2;
-            if (i == F.prow)
-            {
-                if (F.side < 0 && F.pact < 0) Glass::Glow(c, rx, ry, rww, rowH, 12 * u, u);
-                Glass::Round(c, rx, ry, rww, rowH, 12 * u, Menu::FrostChosen, Glass::ChosenEdge(), 1.5f * u);
-            }
-            std::string k, v, chip;
-            uint32_t chipCol = hint;
-            if (i == 0)
-            {
-                Glass::DrawIcon(c, Glass::I_GRID, rx + 18 * u, mid, 9 * u, text);
-                k = "Show";
-                v = DexFilterName(d.filter);
-                chip = std::to_string(caught) + " of 649 Caught";
-                chipCol = okCol;
-            }
-#ifdef SSR_POKEMON_HUB
-            else
-            {
-                const int sp = d.list[(size_t)(i - DEX_FIRST)];
-                const PokemonHub::DexMark& mk = d.marks[(size_t)sp];
-                std::vector<uint32_t> ic;
-                if (mk.state && MonIcon(sp, false, ic)) DrawMonIcon(c, ic, rx + (int)(2 * u), mid - (int)(21 * u), (int)(40 * u));
-                else Glass::Round(c, rx + (int)(14 * u), mid - (int)(4 * u), (int)(8 * u), (int)(8 * u), 4 * u, noCol);
-                if (mk.shiny) Glass::DrawIcon(c, Glass::I_SPARKLE, rx + 38 * u, mid - 12 * u, 6 * u, shinyCol);
-                k = numText(sp);
-                v = mk.state ? MonName(PokemonHub::SpeciesNameOf(sp)) : std::string("???");
-                chip = mk.owned > 0 ? "Have " + std::to_string(mk.owned) : mk.state == 2 ? "Caught" : mk.state == 1 ? "Seen" : "Missing";
-                chipCol = mk.owned > 0 || mk.state == 2 ? okCol : mk.state == 1 ? seenCol : noCol;
-            }
-#endif
-            if (!chip.empty())
-            {
-                const int chipW = GW(chip, 12 * u, true) + (int)(20 * u), chipX = rx + rww - (int)(10 * u) - chipW;
-                Glass::Round(c, chipX, mid - (int)(11 * u), chipW, (int)(22 * u), 11 * u, 0x24FFFFFFu);
-                GT(c, chipX + (int)(10 * u), mid, chip, 12 * u, chipCol, true);
-            }
-            GT(c, rx + (int)(48 * u), mid, k, 13 * u, hint, true);
-            GT(c, rx + (int)(108 * u), mid, v, 16 * u, text, true);
-        }
-        if (n > vis)
-        {
-            const int tx = L + lw2 - (int)(7 * u), ty = top + (int)(16 * u), th = lhP - (int)(32 * u);
-            Glass::Round(c, tx, ty, (int)(3 * u), th, 1.5f * u, 0x26FFFFFFu);
-            const int thumbH = std::max((int)(24 * u), th * vis / n), thumbY = ty + (th - thumbH) * F.rScroll / std::max(1, n - vis);
-            Glass::Round(c, tx, thumbY, (int)(3 * u), thumbH, 1.5f * u, 0xCCFFFFFFu);
-        }
-        // The chosen row.
-        const int dx = stkP ? L : R - rw, ix = dx + (int)(20 * u), iw = rw - (int)(40 * u);
-        Menu::FrostBox(c, solid, dx, dTopP, rw, dHP, 18 * u);
-        static int dKey = -1; { const int nk = F.page * 100000 + F.prow * 100 + LauncherMode() * 10 + HubMode() + (Look().edit + 1) * 10000000; if (nk != dKey) { dKey = nk; F.dScroll = 0; } }
-        F.dScroll = std::min(F.dScroll, F.dMax); TextLow() = 0; F.pdY = stkP ? dTopP : 0;
-        const int dTopC = dTopP - (stkP ? F.dScroll : 0);
-        ClipGuard clipG(c, F, stkP ? dTopP : 0, stkP ? bottom : c.h, (int)(16 * u));
-        int y = dTopC + (int)(20 * u);
-        auto para = [&](const std::string& s2, uint32_t col, float px) {
-            for (const std::string& line : WrapLines(s2, px, iw)) { GT(c, ix, y + px * 0.6f, line, px, col, false); y += (int)(px * 1.45f); }
-            y += (int)(8 * u);
-        };
-        auto cell = [&](int cx, int cy, const std::string& k2, const std::string& v2, uint32_t col) {
-            GT(c, cx, cy + 8 * u, k2, 12 * u, hint, true);
-            GT(c, cx, cy + 28 * u, v2, 15 * u, col, true);
-        };
-        if (F.prow == 0)
-        {
-            GT(c, ix, y + 14 * u, "Your Pok\xC3\xA9" "dex", 22 * u, text, true);
-            y += (int)(48 * u);
-            cell(ix, y, "Caught", std::to_string(caught) + " of 649", okCol);
-            cell(ix + iw / 2, y, "Seen", std::to_string(seen), seenCol);
-            y += (int)(56 * u);
-            cell(ix, y, "With You Now", std::to_string(have) + " Species", text);
-            cell(ix + iw / 2, y, "Shiny", std::to_string(shinies), shinyCol);
-            y += (int)(60 * u);
-            para("From " + std::to_string(d.games) + (d.games == 1 ? " game" : " games") + " and the Bank. Caught: in any game's Pok\xC3\xA9" "dex, or one you have. Choose what to show: All, Caught, Missing, Have Now or Shiny.", hint, 13 * u);
-        }
-#ifdef SSR_POKEMON_HUB
-        else if (F.prow - DEX_FIRST < (int)d.list.size())
-        {
-            const int sp = d.list[(size_t)(F.prow - DEX_FIRST)];
-            const PokemonHub::DexMark& mk = d.marks[(size_t)sp];
-            std::vector<uint32_t> big;
-            const int bs = (int)(96 * u);
-            if (mk.state && MonIcon(sp, false, big)) DrawMonIcon(c, big, ix + iw - bs, y - (int)(18 * u), bs);
-            GT(c, ix, y + 14 * u, mk.state ? MonName(PokemonHub::SpeciesNameOf(sp)) : std::string("???"), 22 * u, text, true);
-            GT(c, ix, y + 42 * u, numText(sp) + "   \xC2\xB7   Generation " + std::to_string(PokemonHub::GenerationOfSpecies(sp)), 14 * u, hint, true);
-            y += (int)(72 * u);
-            cell(ix, y, "Pok\xC3\xA9" "dex", mk.state == 2 ? "Caught" : mk.state == 1 ? "Seen" : "Not Seen", mk.state == 2 ? okCol : mk.state == 1 ? seenCol : noCol);
-            cell(ix + iw / 2, y, "You Have", std::to_string(mk.owned) + (mk.shiny ? "  (Shiny)" : ""), mk.shiny ? shinyCol : text);
-            y += (int)(60 * u);
-            if (!mk.where.empty())
-            {
-                std::string w;
-                for (const std::string& g : mk.where) w += (w.empty() ? "" : ", ") + g;
-                para("In " + w + ".", text, 14 * u);
-            }
-            else if (mk.state < 2) para("Not caught in any of your games yet.", hint, 13 * u);
-            else para("Caught in a game's Pok\xC3\xA9" "dex, but none is in your boxes, parties or the Bank now.", hint, 13 * u);
-        }
-#endif
         return;
     }
     if (F.page == SIDE_HUB && !Mover().open && HubMode() == 0)

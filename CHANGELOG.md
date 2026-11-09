@@ -3,9 +3,11 @@
 
 ## Unreleased
 
-- **A Pokédex tab.** Beside My PC, a tab opens the Pokédex straight from the game list (every species,
-  and which you have caught, have now or have shiny, across all your games and the Bank). Back
-  returns to the games. Tabs of your own keep their places.
+- **A Pokédex tab, laid out as PKVault's.** Beside My PC, a tab opens the Pokédex straight from the
+  game list: every species as a card (a silhouette until seen; a ball when caught, a box when you have
+  one now, a sparkle for a shiny), a generation at a time with its region and counts, and the chosen
+  one's types, picture and where it is on the right. Tap to choose, drag to scroll. Tabs of your own
+  keep their places.
 - **My PC: Gen 1 and 2 Pokémon go to the Game Boy Advance games and on.** Red, Blue, Yellow, Gold,
   Silver and Crystal Pokémon can now be moved to Ruby, Sapphire, Emerald, FireRed and LeafGreen (and
   from there to Gen 4 to 6), keeping their level, moves, nickname, trainer, shininess and gender; their

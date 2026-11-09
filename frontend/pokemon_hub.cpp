@@ -4,6 +4,7 @@
 #include "pkx/PK2.hpp"
 #include "pkx/PK3.hpp"
 #include "pkx/PKX.hpp"
+#include "personal/personal.hpp"
 #include "sav/Sav.hpp"
 #include "utils/i18n.hpp"
 
@@ -995,6 +996,16 @@ std::string SpeciesNameOf(int species) { return species > 0 ? SpeciesName(specie
 int GenerationOfSpecies(int n)
 {
     return n <= 151 ? 1 : n <= 251 ? 2 : n <= 386 ? 3 : n <= 493 ? 4 : n <= 649 ? 5 : n <= 721 ? 6 : 7;
+}
+
+void SpeciesTypes(int species, std::string& type1, std::string& type2)
+{
+    type1.clear(); type2.clear();
+    if (species <= 0 || species > DEX_SPECIES) return;
+    // (Its types as Sun and Moon have them, as PKVault shows: Clefairy is a Fairy.)
+    const pksm::Type a = pksm::PersonalSMUSUM::type1((u16)species), b = pksm::PersonalSMUSUM::type2((u16)species);
+    type1 = Upper(i18n::type(pksm::Language::ENG, a));
+    if (b != a) type2 = Upper(i18n::type(pksm::Language::ENG, b));
 }
 
 void AddToDex(const Save& save, std::vector<DexMark>& dex)

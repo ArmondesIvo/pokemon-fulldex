@@ -2404,6 +2404,14 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                     dragging = pressed = false;
                     break;
                 }
+                // POKEDEX: its own taps (a filter, a card) and drags (the cards scrolled).
+                if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_HUB && Launcher::HubMode() == 4 && !Launcher::Mover().open && Launcher::Focus().dialog == 0
+                    && (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONUP) && !(e.type == SDL_MOUSEBUTTONUP && Launcher::BackAt(mx, my)))
+                {
+                    if (e.type != SDL_MOUSEMOTION || Launcher::Dex().down) Launcher::DexPointer(e.type == SDL_MOUSEBUTTONDOWN ? 0 : e.type == SDL_MOUSEMOTION ? 1 : 2, mx, my);
+                    dragging = pressed = false;
+                    break;
+                }
                 // The ROMs, Hub and Launcher lists: a finger dragged up or down scrolls them (the chosen row stays where the list was put).
                 if (Launcher::Glassy(canvas) && !guide && (Launcher::Focus().page == Launcher::SIDE_ROMS || Launcher::Focus().page == Launcher::SIDE_HUB || Launcher::Focus().page == Launcher::SIDE_LAUNCHER || Launcher::Focus().page == Launcher::SIDE_ABOUT) && Launcher::Focus().rVis > 0)
                 {
@@ -2663,6 +2671,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
             }
             case SDL_MOUSEWHEEL:
                 if (Launcher::Glassy(canvas) && !guide && Launcher::NotesScroll(e.wheel.y > 0 ? -2 : 2)) break; // (What's New)
+                if (Launcher::Glassy(canvas) && !guide && Launcher::Focus().page == Launcher::SIDE_HUB && Launcher::HubMode() == 4 && !Launcher::Mover().open) { Launcher::DexWheel(e.wheel.y); break; } // (Pokédex)
                 move(e.wheel.y > 0 ? 3 : 4);
                 break;
             default:
