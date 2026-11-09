@@ -98,7 +98,7 @@ inline const std::vector<Region>& Regions()
     return r;
 }
 // RED, on Mt. Silver as in HeartGold and SoulSilver: open with Johto's eight badges.
-inline const Trainer& Red() { static const Trainer r = { "Red", "red", -1, { 25, 196, 143, 3, 6, 9 } }; return r; }
+inline const Trainer& Red() { static const Trainer r = { "Red", "red", -1, { 25, 131, 143, 3, 6, 9 } }; return r; }
 constexpr int RED_LEVEL = 50, RED_PRIZE = 10000;
 // The way through, as the games go: a region's gyms open once the one before's Elite Four is beaten
 // (Kanto's from the start), its Elite Four with all its eight badges.

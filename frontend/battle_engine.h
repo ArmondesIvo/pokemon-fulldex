@@ -95,6 +95,7 @@ struct Fighter
     float atkT = 0, atkDur = 0.45f, hurtT = 0; // attacking (time left of it), hurt (time left)
     int castType = 0;
     bool fainted = false;
+    float boomT = 0;                         // Self-Destruct, Explosion: when it faints
 };
 struct Proj { int owner = 0, move = 0, type = 0; float x = 0, y = 0, vx = 0, vy = 0, life = 0, r = 16, scale = 1; bool ult = false; };
 struct Beam { int owner = 0, move = 0, type = 0; float x0 = 0, y0 = 0, dx = 1, dy = 0, len = 1500, width = 90, t = 0, windup = 0.5f, dur = 0.3f, scale = 1; bool hit = false; };
@@ -115,6 +116,8 @@ inline bool Ground(int id) { return In(id, { 89, 222, 523, 414, 90 }); } // Eart
 inline bool Drain(int id) { return In(id, { 71, 72, 202, 141, 409, 532, 577, 138, 570, 613 }); }
 inline bool Recoil(int id) { return In(id, { 36, 38, 66, 344, 394, 413, 452, 457, 528, 543, 617 }); }
 inline bool Priority(int id) { return In(id, { 98, 245, 183, 453, 418, 420, 425, 389, 410, 709, 252, 183 }); }
+inline bool Boom(int id) { return In(id, { 120, 153 }); }             // Self-Destruct, Explosion: it faints after
+inline bool Recharge(int id) { return In(id, { 63, 416, 307, 308, 338, 439, 459 }); } // Hyper Beam, Giga Impact, Blast Burn...: a rest after
 inline bool Heal(int id) { return In(id, { 105, 135, 208, 303, 355, 235, 236, 234, 456, 273, 461, 666 }); }
 }
 
@@ -440,12 +443,15 @@ private:
         F.castT = 0.3f; F.castType = mi.type;
         const float scale = k == S_ATQ ? 0.24f : ult ? 1.3f : 0.48f;
         if (k != S_ATQ) Say(F.x, F.y - 90, mi.name, 0xFFFFFFFFu, 0.85f, 0.9f);
+        if (M::Boom(sk.move)) F.boomT = 0.45f;
+        const float rest = M::Recharge(sk.move) ? 1.0f : 0.0f;
+        if (rest > 0) Say(F.x, F.y - 110, "Recarregando...", 0xFFDDDDDDu, 0.75f, 1.2f);
         if (mi.cat == 2) { StatusMove(s, sk.move); F.busy = 0.35f; return true; }
         if (mi.cat == 0 && M::Ground(sk.move))
         {
             Ring r; r.owner = s; r.move = sk.move; r.type = mi.type; r.x = F.x; r.y = F.y; r.rmax = ult ? 420.0f : 240.0f; r.scale = scale;
             rings.push_back(r);
-            F.busy = 0.35f; shake = std::max(shake, ult ? 1.0f : 0.5f);
+            F.busy = 0.35f + rest; shake = std::max(shake, ult ? 1.0f : 0.5f);
             return true;
         }
         if (mi.cat == 0)
@@ -456,21 +462,21 @@ private:
             const float dur = ult ? 0.3f : M::Priority(sk.move) ? 0.08f : 0.16f;
             F.lungeX = dx * go / dur; F.lungeY = dy * go / dur; F.lungeT = dur;
             F.lungeMove = sk.move; F.lungeScale = scale; F.lungeHit = false; F.lungeUlt = ult;
-            F.busy = dur + (k == S_ATQ ? 0.12f : 0.25f);
+            F.busy = dur + (k == S_ATQ ? 0.12f : 0.25f) + rest;
             return true;
         }
         if (ult)
         {
             Beam b; b.owner = s; b.move = sk.move; b.type = mi.type; b.x0 = F.x; b.y0 = F.y; b.dx = dx; b.dy = dy; b.scale = scale;
             beams.push_back(b);
-            F.busy = b.windup + b.dur;
+            F.busy = b.windup + b.dur + rest;
             return true;
         }
         Proj p; p.owner = s; p.move = sk.move; p.type = mi.type; p.x = F.x + dx * 30; p.y = F.y + dy * 30;
         const float v = k == S_ATQ ? 900.0f : 760.0f;
         p.vx = dx * v; p.vy = dy * v; p.life = 1300.0f / v; p.r = k == S_ATQ ? 16.0f : 28.0f; p.scale = scale;
         projs.push_back(p);
-        F.busy = k == S_ATQ ? 0.22f : 0.35f;
+        F.busy = (k == S_ATQ ? 0.22f : 0.35f) + rest;
         return true;
     }
     void Stage(int s, int which, int by)
@@ -672,6 +678,7 @@ private:
     {
         Fighter& F = f[s];
         if (F.fainted) return;
+        if (F.boomT > 0 && (F.boomT -= dt) <= 0) { Burst(F.x, F.y, 0xFFFFE0A0u, 40, 420, 12, 0.8f); shake = 1; Hurt(s, F.hp); return; }
         F.confT = std::max(0.0f, F.confT - dt);
         F.focusT = std::max(0.0f, F.focusT - dt);
         if (F.status != NONE)

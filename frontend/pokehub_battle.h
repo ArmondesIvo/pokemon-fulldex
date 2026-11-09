@@ -268,6 +268,26 @@ inline std::vector<Arena::MonSpec> BattleTeamOf(const int* species, int n, int l
     return t;
 }
 inline int TeamSize(const Arena::Trainer& t) { int n = 0; while (n < 6 && t.team[n]) n++; return n; }
+// A famous trainer's team: as the games have it, its moves too, when that is known
+// (battle_trainer_teams.h); else its species with moves chosen by type. All at level 50.
+inline std::vector<Arena::MonSpec> TrainerTeam(int region, const Arena::Trainer& t, std::mt19937& rng)
+{
+    const Arena::RealTeam* real = Arena::FindRealTeam(region, t.sprite);
+    if (!real) return BattleTeamOf(t.team, TeamSize(t), 50, rng);
+    std::vector<Arena::MonSpec> out;
+    for (int i = 0; i < real->count; i++)
+    {
+        const Arena::RealMon& rm = real->mons[i];
+        int base[6], types[2];
+        if (rm.species <= 0 || Arena::NoPicture(rm.species) || !PokemonHub::SpeciesBase(rm.species, base, types)) continue;
+        Arena::MonSpec m = Arena::BotMon(rm.species, base, types, MonName(PokemonHub::SpeciesNameOf(rm.species)), rng, 50);
+        bool any = false;
+        for (int k = 0; k < 4; k++) any |= rm.moves[k] > 0;
+        if (any) for (int k = 0; k < 4; k++) m.moves[k] = rm.moves[k];
+        out.push_back(m);
+    }
+    return out.empty() ? BattleTeamOf(t.team, TeamSize(t), 50, rng) : out;
+}
 // The gym to fight now in a region: the first without its badge (-1: all eight won).
 inline int NextGym(int region) { for (int i = 0; i < 8; i++) if (!(Bat().badges[region] >> i & 1)) return i; return -1; }
 // (The way through: gyms open after the region before's Elite Four; an Elite Four with all eight
@@ -326,27 +346,27 @@ inline void BattleSetOpp(bool reroll = false)
         B.gymSel = std::max(0, std::min(B.gymSel, red ? 8 : 7));
         const Arena::Trainer& t = B.gymSel == 8 ? Arena::Red() : R.gyms[B.gymSel];
         B.opp = { t.name, t.sprite, B.gymSel == 8 ? 3 : 1, B.gymSel, 50 };
-        B.bot = BattleTeamOf(t.team, TeamSize(t), 50, rng);
+        B.bot = TrainerTeam(B.gymSel == 8 ? 1 : B.region, t, rng);
     }
     else if (B.mode == 2)
     {
         const Arena::Trainer& t = R.elite[0];
         B.opp = { t.name, t.sprite, 2, 0, 50 };
-        B.bot = BattleTeamOf(t.team, TeamSize(t), 50, rng);
+        B.bot = TrainerTeam(B.region, t, rng);
     }
     else if (reroll || B.opp.kind != 0 || B.bot.empty())
     {
         // (Three in ten a famous one already beaten, with their team; else an everyday trainer with
         // six at random.)
-        std::vector<const Arena::Trainer*> famous;
+        std::vector<std::pair<int, const Arena::Trainer*>> famous;
         for (int r = 0; r < (int)regs.size(); r++)
-            for (int k = 0; k < 13; k++) if (Beaten(r, k)) famous.push_back(k < 8 ? &regs[r].gyms[k] : &regs[r].elite[k - 8]);
-        if (B.redBeaten) famous.push_back(&Arena::Red());
+            for (int k = 0; k < 13; k++) if (Beaten(r, k)) famous.push_back({ r, k < 8 ? &regs[r].gyms[k] : &regs[r].elite[k - 8] });
+        if (B.redBeaten) famous.push_back({ 1, &Arena::Red() });
         if (!famous.empty() && rng() % 10 < 3)
         {
-            const Arena::Trainer& t = *famous[rng() % famous.size()];
-            B.opp = { t.name, t.sprite, 0, 0, 50 };
-            B.bot = BattleTeamOf(t.team, TeamSize(t), 50, rng);
+            const auto& f = famous[rng() % famous.size()];
+            B.opp = { f.second->name, f.second->sprite, 0, 0, 50 };
+            B.bot = TrainerTeam(f.first, *f.second, rng);
         }
         else
         {
@@ -546,7 +566,7 @@ inline void BattleStartRun(int kind)
         }
         BattleState::Step st;
         st.opp = { L.name, L.sprite, 1, B.gymSel, 50 };
-        st.team = BattleTeamOf(L.team, TeamSize(L), 50, rng);
+        st.team = TrainerTeam(B.region, L, rng);
         st.prize = Arena::GymPrize(B.gymSel);
         B.steps.push_back(st);
     }
@@ -556,7 +576,7 @@ inline void BattleStartRun(int kind)
             const Arena::Trainer& t = R.elite[e];
             BattleState::Step st;
             st.opp = { t.name, t.sprite, 2, e, 50 };
-            st.team = BattleTeamOf(t.team, TeamSize(t), 50, rng);
+            st.team = TrainerTeam(B.region, t, rng);
             st.prize = Arena::ElitePrize(e);
             B.steps.push_back(st);
         }
@@ -2163,7 +2183,7 @@ inline void BattlePagePointer(int phase, int x, int y)
             const Arena::Trainer& t = k == 99 ? Arena::Red() : k < 8 ? Arena::Regions()[r].gyms[k] : Arena::Regions()[r].elite[k - 8];
             std::mt19937 rng((unsigned)std::chrono::steady_clock::now().time_since_epoch().count());
             B.opp = { t.name, t.sprite, 0, 0, 50 };
-            B.bot = BattleTeamOf(t.team, TeamSize(t), 50, rng);
+            B.bot = TrainerTeam(k == 99 ? 1 : r, t, rng);
             B.botSel = -1; B.oppPick = false;
             PmdWantTeams();
             break;

@@ -37,6 +37,7 @@
 #include "optional_features.h"
 #include "battle_engine.h" // (the arena's fight: outside namespace Launcher, as it has std headers)
 #include "battle_trainers.h" // (the arena's gym leaders, Elite Four and shop)
+#include "battle_trainer_teams.h" // (their teams with the games' moves: tools/battle/gen_trainer_teams.py)
 #include "cloud_saves.h"
 #include "net_http.h"
 #include <fstream>
