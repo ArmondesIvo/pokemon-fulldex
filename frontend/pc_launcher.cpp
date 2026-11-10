@@ -55,6 +55,11 @@
 #include "ssr_os.h"
 #ifdef SSR_IOS
 #include "ios_orient.h"
+// (PokeHub's account on iOS: frontend/ios_account.mm; declared here, outside any namespace, as it is defined.)
+void IosAccountSignIn(const char* server);
+std::string IosAccountInfo();
+std::string IosAccountSession(const char* server);
+void IosAccountSignOut(const char* server);
 #endif
 #if !defined(SSR_PHONE) && !defined(__SWITCH__)
 #include "shortcuts.h"
@@ -346,10 +351,6 @@ void ExtractFuncs(const Folders& fo)
 #ifdef SSR_IOS
 // PokeHub's account on iOS (frontend/ios_account.mm): iOS's sign-in sheet, the session kept in the
 // app's preferences; read on the launcher's thread as Android's is, used by any thread.
-void IosAccountSignIn(const char* server);
-std::string IosAccountInfo();
-std::string IosAccountSession(const char* server);
-void IosAccountSignOut(const char* server);
 #ifndef SSR_ACCOUNT_URL
 #define SSR_ACCOUNT_URL ""
 #endif
