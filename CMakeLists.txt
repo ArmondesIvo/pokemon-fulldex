@@ -463,6 +463,10 @@ elseif(APPLE)
         target_sources(ssrecomp PRIVATE frontend/ios_orient.mm)
         set_source_files_properties(frontend/ios_orient.mm PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
         target_link_libraries(ssrecomp PRIVATE "-framework UIKit")
+        # PokeHub's account (frontend/ios_account.mm): iOS's sign-in sheet.
+        target_sources(ssrecomp PRIVATE frontend/ios_account.mm)
+        set_source_files_properties(frontend/ios_account.mm PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
+        target_link_libraries(ssrecomp PRIVATE "-framework AuthenticationServices" "-framework Security")
     endif()
 elseif(SSR_SWITCH)
     # (devkitPro's libcurl, with its TLS library, from the portlibs.)
@@ -526,6 +530,13 @@ endif()
 # Trades over Wi-Fi (frontend/hub_link.cpp): Windows' sockets.
 if(WIN32)
     target_link_libraries(ssrecomp PRIVATE ws2_32)
+endif()
+
+# PokeHub's server (tools/pokehub/server): its address, built in where the C++ signs in (iOS;
+# Android's Java has it from BuildInfo).
+set(SSR_ACCOUNT_URL "" CACHE STRING "PokeHub's server, e.g. https://pokehub-api.example.workers.dev")
+if(SSR_ACCOUNT_URL)
+    target_compile_definitions(ssrecomp PRIVATE "SSR_ACCOUNT_URL=\"${SSR_ACCOUNT_URL}\"")
 endif()
 
 # Online trades' meeting point (tools/relay, a Cloudflare Worker): its address, built in.

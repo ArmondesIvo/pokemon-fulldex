@@ -1,0 +1,53 @@
+# PokeHub for iPhone and iPad: builds the unsigned .ipa (tools/ios/build_all.sh) on one of
+# GitHub's Macs, for sideloading with SideStore or AltStore (each player's own Apple ID).
+# Started by hand (Actions tab > PokeHub iOS > Run workflow); the .ipa is the run's artifact.
+#
+# Its inputs come from a draft (unpublished) release of this fork, pokehub-ios-inputs
+# (pokehub-ios-inputs.tar.gz): SoulSilver and HeartGold's tables (addresses only, made by
+# tools/soulsilver/tables_only.py), the game list's pictures (DS and GBA), the icon, and My PC's
+# box sprites. No ROM, save or game code is ever given to this workflow.
+name: PokeHub iOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install "cmake==3.31.10" ninja Pillow
+      - name: The inputs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p inputs
+          gh release download pokehub-ios-inputs -R "${{ github.repository }}" -p pokehub-ios-inputs.tar.gz -D inputs
+          tar -xzf inputs/pokehub-ios-inputs.tar.gz -C inputs
+          # (The GBA player's sources are this repository's gba/; its game pictures come with the inputs.)
+          cp -R gba inputs/gba
+          mkdir -p inputs/gba/art && cp inputs/gba-art/* inputs/gba/art/
+          ls inputs
+      - name: GBA games (mGBA and the widescreen patches)
+        run: bash tools/apple/fetch_gba.sh inputs
+      - run: tools/ios/build_all.sh inputs/build-gen-tables inputs/box-art inputs/icon.png
+        env:
+          SSR_IOS_TARGET: device
+          SSR_IOS_ARCH: arm64
+          SSR_POKEMON_HUB: 'ON'
+          SSR_ACCOUNT_URL: https://pokehub-api.armondeseuro.workers.dev
+          SSR_BOX_SPRITES: inputs/sprites
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pokehub-ios-ipa
+          path: |
+            build-ios-dist/pokemon-ds-wide-ios.ipa
+            build-ios-dist/SHA256SUMS.txt
+          if-no-files-found: error

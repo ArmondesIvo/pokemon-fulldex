@@ -97,6 +97,9 @@ ONLINE=()
 [ "${SSR_POKEMON_HUB:-}" = ON ] && ONLINE+=(-DSSR_POKEMON_HUB=ON)
 [ -n "${FULLDEX_RELAY_URL:-}" ] && ONLINE+=(-DFULLDEX_RELAY_URL="$FULLDEX_RELAY_URL")
 [ -n "${FULLDEX_GOOGLE_CLIENT_FILE:-}" ] && ONLINE+=(-DFULLDEX_GOOGLE_CLIENT_FILE="$FULLDEX_GOOGLE_CLIENT_FILE")
+# PokeHub: its server (sign-in, trades, cloud saves) and My PC's box sprites, when given.
+[ -n "${SSR_ACCOUNT_URL:-}" ] && ONLINE+=(-DSSR_ACCOUNT_URL="$SSR_ACCOUNT_URL")
+[ -n "${SSR_BOX_SPRITES:-}" ] && ONLINE+=(-DSSR_BOX_SPRITES="$(cd "$SSR_BOX_SPRITES" && pwd)")
 OPTS+=(${ONLINE[@]+"${ONLINE[@]}"})
 [ -n "$ART" ] && OPTS+=(-DSSR_PC_ART="$ART")
 if [ -n "${SSR_GBA_DIR:-}" ]; then
@@ -152,8 +155,8 @@ cat > "$APP/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-<key>CFBundleName</key><string>Pokemon Fulldex</string>
-<key>CFBundleDisplayName</key><string>Pokémon Fulldex</string>
+<key>CFBundleName</key><string>PokeHub</string>
+<key>CFBundleDisplayName</key><string>PokeHub</string>
 <key>CFBundleIdentifier</key><string>io.github.mamesj.pokemonds</string>
 <key>CFBundleExecutable</key><string>pokemon-ds-wide</string>
 <key>CFBundlePackageType</key><string>APPL</string>
@@ -163,7 +166,7 @@ cat > "$APP/Info.plist" <<PLIST
 <key>MinimumOSVersion</key><string>$MIN_IOS</string>
 <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
 <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
-<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 <key>UIApplicationSceneManifest</key><dict>
 <key>UIApplicationSupportsMultipleScenes</key><false/>

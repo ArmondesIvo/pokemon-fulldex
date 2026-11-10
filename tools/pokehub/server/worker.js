@@ -99,12 +99,15 @@ function start(url, env) {
   const appState = url.searchParams.get("state") || "";
   if (!/^[0-9a-f]{32,96}$/.test(appState)) return text("Open the sign-in from the PokeHub app.", 400);
   const nonce = randomHex(16);
+  // (An iPhone's app asks with platform=ios: its way back is a plain pokehub:// link, which iOS's
+  // sign-in sheet catches; Android's, an intent:// link. Carried through Google in the state.)
+  const ios = url.searchParams.get("platform") === "ios";
   const google = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   google.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
   google.searchParams.set("redirect_uri", new URL("/auth/callback", url).toString());
   google.searchParams.set("response_type", "code");
   google.searchParams.set("scope", "openid email profile");
-  google.searchParams.set("state", appState + "." + nonce);
+  google.searchParams.set("state", appState + "." + nonce + (ios ? ".i" : ""));
   google.searchParams.set("prompt", "select_account");
   return new Response(null, {
     status: 302,
@@ -119,7 +122,7 @@ function start(url, env) {
 async function callback(request, url, env) {
   if (url.searchParams.get("error")) return page("Sign-in cancelled", "You can go back to PokeHub.", null);
   const code = url.searchParams.get("code") || "";
-  const [appState, nonce] = (url.searchParams.get("state") || "").split(".");
+  const [appState, nonce, platform] = (url.searchParams.get("state") || "").split(".");
   const cookie = (request.headers.get("cookie") || "").match(/(?:^|;\s*)pokehub_nonce=([0-9a-f]+)/);
   if (!code || !appState || !nonce || !cookie || cookie[1] !== nonce) return page("Sign-in did not work", "Start it again from PokeHub.", null);
 
@@ -155,6 +158,7 @@ async function callback(request, url, env) {
     .bind(await sha256Hex(token), claims.sub, now, now + SESSION_DAYS * 86400).run();
 
   const back = new URLSearchParams({ token, state: appState, email: claims.email, name: claims.name || "" });
+  if (platform === "i") return new Response(null, { status: 302, headers: { location: `pokehub://signin?${back}`, "cache-control": "no-store", "referrer-policy": "no-referrer" } });
   const intent = `intent://signin?${back}#Intent;scheme=pokehub;package=${APP_PACKAGE};end`;
   return page("Signed in", `Signed in as ${claims.email}. Going back to PokeHub...`, intent);
 }

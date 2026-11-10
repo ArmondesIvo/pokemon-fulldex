@@ -343,6 +343,24 @@ void ExtractFuncs(const Folders& fo)
     }
 }
 #endif
+#ifdef SSR_IOS
+// PokeHub's account on iOS (frontend/ios_account.mm): iOS's sign-in sheet, the session kept in the
+// app's preferences; read on the launcher's thread as Android's is, used by any thread.
+void IosAccountSignIn(const char* server);
+std::string IosAccountInfo();
+std::string IosAccountSession(const char* server);
+void IosAccountSignOut(const char* server);
+#ifndef SSR_ACCOUNT_URL
+#define SSR_ACCOUNT_URL ""
+#endif
+std::mutex& PokeHubSessionLock() { static std::mutex m; return m; }
+std::string& PokeHubSessionNow() { static std::string s; return s; }
+void SetIosAccount()
+{
+    CloudSaves::PokeHubSession() = [] { std::lock_guard<std::mutex> l(PokeHubSessionLock()); return PokeHubSessionNow(); };
+    Launcher::AccountSignInHook() = [] { IosAccountSignIn(SSR_ACCOUNT_URL); };
+}
+#endif
 
 // Whether this program plays a game: SoulSilver and HeartGold need the program's own tables,
 // the others their function table in data/funcs.
@@ -787,6 +805,7 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
 #elif defined(SSR_IOS)
     // Upright, on an iPhone or an iPad. The plist allows sideways too; a game asks for that.
     IosOrientLauncher();
+    SetIosAccount();
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1"); // (taps come as clicks here; the game takes fingers one by one)
     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
     SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
@@ -1800,6 +1819,15 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 JavaVoid("accountSignIn");
             }
             if (pick == "#signout") { JavaVoid("accountSignOut"); Launcher::AccountFrom(""); }
+#elif defined(SSR_IOS)
+            if (pick == "#cloudon" || pick == "#cloudoff") { Launcher::HubCloudSwitch(pick == "#cloudon"); Launcher::OpenAccountAsk(); return; }
+            if (pick.rfind("#tradeto:", 0) == 0) { Launcher::TradesStartNew(pick.substr(9)); return; } // (New Trade: the player chosen)
+            if (pick == "#signin")
+            {
+                if (!*SSR_ACCOUNT_URL) { dialogClose(); Launcher::Focus().dialog = 12; Launcher::Focus().drow = 0; Launcher::Focus().dTitle = "Your Account"; Launcher::Focus().dMsg = "Signing in is not ready yet in this version."; Launcher::Focus().dItems = { "OK" }; Launcher::Focus().dPaths = { "#close" }; return; }
+                IosAccountSignIn(SSR_ACCOUNT_URL);
+            }
+            if (pick == "#signout") { IosAccountSignOut(SSR_ACCOUNT_URL); Launcher::AccountFrom(""); }
 #endif
             return;
         }
@@ -2839,6 +2867,20 @@ int PickGame(Folders& fo, std::vector<Launcher::Game>& games, int selected, bool
                 { const std::string sess = JavaString("accountSession"); std::lock_guard<std::mutex> l(PokeHubSessionLock()); PokeHubSessionNow() = sess; }
                 const std::string offer = JavaString("updateOffer");
                 if (!offer.empty()) { Launcher::OpenUpdateAsk(offer); fprintf(stderr, "[launcher] update offer: %s\n", offer.substr(0, 40).c_str()); }
+            }
+        }
+#endif
+#ifdef SSR_IOS
+        {
+            // (Who is signed in, as iOS's sign-in sheet left it; the trades looked at now and then.)
+            static Uint32 lastAcc = 0, lastTrades = 0;
+            if (Launcher::Focus().dialog == 0 && SDL_GetTicks() - lastAcc > 500)
+            {
+                lastAcc = SDL_GetTicks();
+                const bool wasIn = Launcher::Account().signedIn;
+                Launcher::AccountFrom(IosAccountInfo());
+                if (Launcher::Account().signedIn && (!wasIn || lastTrades == 0 || SDL_GetTicks() - lastTrades > 30000)) { lastTrades = SDL_GetTicks(); Launcher::TradesFetch(); }
+                { const std::string sess = IosAccountSession(SSR_ACCOUNT_URL); std::lock_guard<std::mutex> l(PokeHubSessionLock()); PokeHubSessionNow() = sess; }
             }
         }
 #endif

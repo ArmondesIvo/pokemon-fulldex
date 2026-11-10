@@ -89,5 +89,6 @@ static void Set(bool landscape)
     }
 }
 
-void IosOrientLauncher() { Set(false); }
+// PokeHub: the list sideways too, as the games (the player's choice, 10/11/2026).
+void IosOrientLauncher() { Set(true); }
 void IosOrientGame() { Set(true); }
