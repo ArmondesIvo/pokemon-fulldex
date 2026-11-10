@@ -11,8 +11,9 @@ name: PokeHub iOS
 on:
   workflow_dispatch:
 
+# (write: a draft release is seen only by those who may write; the build writes nothing.)
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
